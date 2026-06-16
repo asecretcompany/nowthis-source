@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.asecretcompany.nowthis</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nowthis</string>
+			</array>
+		</dict>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>NowThis uses calendar access to show your tasks alongside your schedule and sync task due dates as calendar events.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>NowThis uses your location to remind you about tasks when you arrive at or leave a place.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>NowThis uses background location to notify you about tasks when you arrive at or leave a place, even when the app is closed.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.asecretcompany.nowthis.sync.refresh</string>
+	</array>
+</dict>
+</plist>
+
