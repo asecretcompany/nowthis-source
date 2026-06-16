@@ -1,0 +1,52 @@
+# === Xcode / XcodeGen ===
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# === Build artifacts ===
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# === Swift Package Manager ===
+.build/
+.swiftpm/
+Package.resolved
+
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# === Local configuration ===
+Local.xcconfig
+
+# === AI coding tools ===
+.gemini/
+.claude/
+.cursor/
+.aider*
+.copilot/
+GEMINI.md
+CLAUDE.md
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.orig
+*.bak
+
+# === Secrets & env ===
+*.p8
+*.p12
+*.key
+*.pem
+.env
+.env.*

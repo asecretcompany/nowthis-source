@@ -1,0 +1,4 @@
+theme: jekyll-theme-cayman
+title: NowThis
+description: Privacy-first, self-hosted CalDAV task manager for iOS.
+show_downloads: true
