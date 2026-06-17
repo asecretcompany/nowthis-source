@@ -12,6 +12,8 @@ title: NowThis Documentation
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-black.svg?logo=github)](https://github.com/asecretcompany/nowthis-source)
 
+[![Join the Beta on TestFlight](https://img.shields.io/badge/Join_the_Beta-TestFlight-0D96F6.svg?style=for-the-badge&logo=apple&logoColor=white)](https://testflight.apple.com/join/WEVC7CCZ)
+
 </div>
 
 ---
