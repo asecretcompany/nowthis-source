@@ -3,7 +3,7 @@ layout: default
 title: NowThis Documentation
 ---
 
-<div align="center">
+<div align="center" markdown="1">
 
 # NowThis Developer Docs
 
