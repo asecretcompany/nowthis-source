@@ -23,15 +23,17 @@ NowThis is a powerful, local-first iOS task manager that seamlessly syncs with a
 ## Feature Highlights
 
 * 🔒 **Local & Synced Modes:** Use Vault Mode for a purely offline experience, or connect to a CalDAV server (Nextcloud, etc.) to sync across devices.
+* 🗣️ **Siri Voice Quick-Add:** Dictate one sentence — *"buy milk tomorrow at 5pm"* — and NowThis parses the title and due date/time. The same natural-language parser powers typed Quick Add.
+* ⚡ **Fast Task Entry:** Single-tap to add on any list, an inline quick-add field everywhere, and smart new-task defaults (app-wide and per-list default due date and time).
 * 📍 **Geofence Reminders:** Location-based task notifications (e.g., "Remind me when I get home").
-* 🔄 **Reliable CalDAV Sync:** Robust background sync with ETag-based conflict detection to prevent silent overwrites.
+* 🔄 **Reliable CalDAV Sync:** Robust background sync with ETag-based inbound change detection; server-side edits and reorders reach your device and widget, and manual ordering round-trips with Nextcloud.
 * 📝 **Journal Links:** Attach journal entries to tasks for extended context.
 * ⚡ **Native Performance:** Built from the ground up with SwiftUI and SwiftData for lightning-fast responsiveness.
 
 ## Installation
 
 ### For Users
-The easiest way to get NowThis is through the [App Store](#) (coming soon!). 
+The easiest way to get NowThis is on the [App Store](https://apps.apple.com/us/app/nowthis-tasks-for-nextcloud/id6772790227) — a one-time $5.99 purchase, no subscriptions. Current release: **1.0.4**.
 
 ### For Developers
 

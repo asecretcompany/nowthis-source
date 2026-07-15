@@ -22,12 +22,24 @@ Welcome to the open-source documentation for **NowThis**.
 
 This site provides technical guidance for developers looking to build, fork, or contribute to the NowThis iOS client.
 
+## What's New in 1.0.4
+
+The 1.0.4 release focuses on faster task entry, rock-solid Nextcloud sync, and smarter due dates.
+
+- **Add tasks by voice** — Natural-language quick-add via Siri: dictate one sentence (*"buy milk tomorrow at 5pm"*) and NowThis parses the title and due date/time. The same parser powers typed Quick Add.
+- **Faster task entry** — Single-tap to add on any list, an inline quick-add field on every list, and smart new-task defaults (app-wide and per-list default due date and time).
+- **Reliable two-way Nextcloud sync** — Server-side creates, edits, completions, and reorders now reach the device and widget automatically; manual ordering round-trips via `X-APPLE-SORT-ORDER`; subtasks sort and reorder under their parent; fresh installs sync the last 3 months of completed tasks by default.
+- **Smarter due dates** — Every due date shows a time slot (all-day tasks read "· All day"), all-day (date-only) due dates now show the correct day, and an All Day toggle flips a task between all-day and a specific time.
+- **Clearer sync errors** — Plain-language banners for sign-in, connection, permission, and temporary server problems.
+- **Stability** — The Kanban board no longer crashes when a task is deleted during sync.
+
 ## Core Architecture
 
 NowThis is written in **Swift 6** using **SwiftUI** for the user interface and **SwiftData** for local persistence.
 
 Key technical pillars include:
-- **CalDAV Sync Engine:** A custom-built, actor-isolated sync engine (`CalDAVClient`) that supports background fetching and ETag-based conflict resolution.
+- **CalDAV Sync Engine:** A custom-built, actor-isolated sync engine (`CalDAVClient`) that supports background fetching and ETag-based inbound change detection with conflict resolution.
+- **Natural-Language Parsing:** A shared `NaturalLanguageParser` turns free-text and Siri dictation into structured title + due date/time, powering both Quick Add and App Intents.
 - **Local Vault:** A completely offline mode that bypasses the network layer, storing everything securely on-device.
 - **Geofencing:** Location-based task reminders driven by CoreLocation and UserNotifications.
 - **App Groups:** Shared state between the main app and widgets using iOS App Groups.
