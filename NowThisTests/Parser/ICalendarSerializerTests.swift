@@ -210,4 +210,39 @@ struct ICalendarSerializerTests {
         #expect(parsed?.categories == ["Test"])
         #expect(parsed?.location == "Office")
     }
+
+    // MARK: - Manual Sort Order (X-APPLE-SORT-ORDER)
+
+    @Test("Serializes manualSortOrder as X-APPLE-SORT-ORDER")
+    func serializeSortOrder() {
+        let ics = ICalendarSerializer.serialize(
+            uid: "sort-uid",
+            summary: "Ordered",
+            manualSortOrder: 7
+        )
+
+        #expect(ics.contains("X-APPLE-SORT-ORDER:7"))
+    }
+
+    @Test("Nil manualSortOrder omits X-APPLE-SORT-ORDER")
+    func nilSortOrderOmitted() {
+        let ics = ICalendarSerializer.serialize(
+            uid: "no-sort-uid",
+            summary: "Unordered"
+        )
+
+        #expect(!ics.contains("X-APPLE-SORT-ORDER"))
+    }
+
+    @Test("manualSortOrder round-trips through serialize and parse")
+    func sortOrderRoundTrip() throws {
+        let ics = ICalendarSerializer.serialize(
+            uid: "roundtrip-sort",
+            summary: "Roundtrip",
+            manualSortOrder: 123
+        )
+
+        let parsed = try ICalendarParser.parseSingleVTODO(from: ics)
+        #expect(parsed?.manualSortOrder == 123)
+    }
 }

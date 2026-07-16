@@ -37,7 +37,6 @@
 	<string>NowThis uses background location to notify you about tasks when you arrive at or leave a place, even when the app is closed.</string>
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>location</string>
 		<string>fetch</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>

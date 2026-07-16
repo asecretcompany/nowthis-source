@@ -36,6 +36,44 @@ enum DueDateHelper {
         return Date() >= effectiveDeadline(for: dueDate, isDateOnly: isDateOnly)
     }
 
+    /// Builds a date-only (all-day) due value for the local calendar date of `date`.
+    ///
+    /// Date-only values are stored as midnight UTC carrying the intended calendar
+    /// date's year/month/day — the inverse of `effectiveDeadline`'s extraction —
+    /// so a "due today" all-day task round-trips to `DUE;VALUE=DATE` correctly
+    /// regardless of the user's timezone.
+    static func dateOnlyValue(for date: Date, calendar: Calendar = .current) -> Date {
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        return utcCalendar.date(from: comps) ?? date
+    }
+
+    /// Builds a timed (date+time) due value on `date`'s local calendar day at
+    /// `minutesSinceMidnight` minutes past local midnight.
+    ///
+    /// Used to bake a concrete due time onto quick due-date selections and to
+    /// convert an all-day task to a timed one — the result is an exact `Date`, so
+    /// it round-trips to a `DUE` datetime (not `DUE;VALUE=DATE`) and its row shows
+    /// a clock time rather than "All day".
+    static func timedValue(for date: Date, minutesSinceMidnight: Int, calendar: Calendar = .current) -> Date {
+        let start = calendar.startOfDay(for: date)
+        return calendar.date(byAdding: .minute, value: minutesSinceMidnight, to: start) ?? start
+    }
+
+    /// The local start-of-day for a task's due date.
+    ///
+    /// For date-only values, resolves the calendar date carried by the midnight-UTC
+    /// value into the user's timezone; for date+time values, the local start of the
+    /// due day. Used as the anchor for all-day reminder fire times.
+    static func localStartOfDay(for dueDate: Date, isDateOnly: Bool) -> Date {
+        guard isDateOnly else { return Calendar.current.startOfDay(for: dueDate) }
+
+        let comps = utcCalendar.dateComponents([.year, .month, .day], from: dueDate)
+        var localCalendar = Calendar.current
+        localCalendar.timeZone = .current
+        guard let localDay = localCalendar.date(from: comps) else { return dueDate }
+        return localCalendar.startOfDay(for: localDay)
+    }
+
     /// Whether the due date falls on the given calendar day (local timezone).
     ///
     /// For date-only tasks, compares the date components extracted in UTC

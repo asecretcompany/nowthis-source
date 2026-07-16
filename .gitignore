@@ -25,6 +25,9 @@ Package.resolved
 # === Local configuration ===
 Local.xcconfig
 
+# === Internal / product docs (keep strategy, roadmaps, pricing out of the public repo) ===
+docs/
+
 # === AI coding tools ===
 .gemini/
 .claude/

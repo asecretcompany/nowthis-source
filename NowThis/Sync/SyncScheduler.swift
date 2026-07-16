@@ -23,6 +23,21 @@ final class SyncScheduler: ObservableObject {
     @Published var lastSyncDate: Date?
     @Published var lastError: String?
 
+    /// The most recent sync failure, classified into a user-facing category
+    /// with actionable guidance. Drives the in-app `SyncFailureBanner` and the
+    /// Settings status line. `nil` when the last sync succeeded (or was
+    /// cancelled — cancellation is not a failure).
+    @Published var lastSyncFailure: SyncFailure?
+
+    /// Bumped (to a fresh value) only when a sync's inbound pull actually created
+    /// or updated local tasks. Task-list views key their content `.id` off this
+    /// (see `refreshOnInboundSync()`) to force a fresh `@Query` fetch, because a
+    /// `@Query` bound to the main context does not re-emit when the sync engine's
+    /// background context commits new rows to the shared store. Gating on real
+    /// inbound changes keeps routine/push-only syncs from needlessly rebuilding
+    /// the list (which would reset scroll, expansion, and selection).
+    @Published private(set) var dataRefreshToken = UUID()
+
     // MARK: - Dependencies
 
     /// The shared sync engine. Exposed so `BackgroundSyncManager` can share
@@ -77,16 +92,20 @@ final class SyncScheduler: ObservableObject {
 
         isSyncing = true
         lastError = nil
+        lastSyncFailure = nil
 
         do {
             let accounts = try modelContext.fetch(FetchDescriptor<ServerAccount>())
             let nextcloudAccounts = accounts.filter { $0.mode == .nextcloud }
 
+            var inboundChanged = false
+
             for account in nextcloudAccounts {
                 try Task.checkCancellation()
 
                 guard let password = try await keychainManager.retrieve(for: account.id) else {
-                    lastError = String(localized: "Missing credentials for \(account.displayName)")
+                    recordAuthFailure(
+                        message: String(localized: "Can't sign in to \(account.displayName) — sign in again in Settings."))
                     continue
                 }
 
@@ -95,7 +114,8 @@ final class SyncScheduler: ObservableObject {
                 // brute-force protection and locks the user out. The gate
                 // auto-clears once the stored password changes (re-auth).
                 if authGate.shouldSkip(accountID: account.id, currentPassword: password) {
-                    lastError = String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you sign in again.")
+                    recordAuthFailure(
+                        message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."))
                     continue
                 }
 
@@ -106,26 +126,36 @@ final class SyncScheduler: ObservableObject {
                     password: password
                 )
 
-                let syncWindowMonths = UserDefaults.standard.integer(forKey: "syncWindowMonths")
+                let syncWindowMonths = SyncPreferences.windowMonths()
 
                 do {
-                    try await syncEngine.performFullSync(
+                    if try await syncEngine.performFullSync(
                         accountID: account.id,
                         serverBaseURL: account.serverBaseURL,
                         credentials: credentials,
                         modelContainer: modelContext.container,
                         syncWindowMonths: syncWindowMonths
-                    )
+                    ) {
+                        inboundChanged = true
+                    }
                 } catch CalDAVError.unauthorized {
                     // Pause this account so we don't keep hammering the server with
                     // a credential it has already rejected.
                     authGate.recordFailure(accountID: account.id, password: password)
-                    lastError = String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you sign in again.")
+                    recordAuthFailure(
+                        message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."))
                     logger.error("Auth rejected (401) — pausing sync for account until re-auth")
                 }
             }
 
             lastSyncDate = Date()
+
+            // Only force the task-list views to re-query when the pull actually
+            // brought in new/changed tasks — otherwise the visible list would
+            // rebuild (and lose scroll/expansion/selection) on every routine sync.
+            if inboundChanged {
+                dataRefreshToken = UUID()
+            }
 
             // Sync succeeded — refresh widgets so server-side changes appear.
             onWidgetReload()
@@ -133,10 +163,21 @@ final class SyncScheduler: ObservableObject {
         } catch is CancellationError {
             logger.info("Sync cancelled")
         } catch {
-            lastError = error.localizedDescription
+            if let failure = SyncFailure.from(error) {
+                lastSyncFailure = failure
+                lastError = failure.message
+            }
         }
 
         isSyncing = false
+    }
+
+    /// Records an authentication failure for an account so it surfaces in the
+    /// banner (tappable → Settings) and the Settings status line with the same
+    /// account-specific, actionable wording.
+    private func recordAuthFailure(message: String) {
+        lastSyncFailure = SyncFailure(category: .authentication, message: message)
+        lastError = message
     }
 
     // MARK: - Change-Triggered Sync (Debounced)

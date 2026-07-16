@@ -51,7 +51,8 @@ struct ICalendarSerializer {
         recurrenceRule: String? = nil,
         alarmTriggerSeconds: Int? = nil,
         isDueDateOnly: Bool = false,
-        isStartDateOnly: Bool = false
+        isStartDateOnly: Bool = false,
+        manualSortOrder: Int? = nil
     ) -> String {
         var lines: [String] = []
 
@@ -130,6 +131,13 @@ struct ICalendarSerializer {
 
         if let rrule = recurrenceRule, !rrule.isEmpty {
             lines.append("RRULE:\(rrule)")
+        }
+
+        // X-APPLE-SORT-ORDER mirrors Nextcloud Tasks' manual ordering so
+        // drag-reordering round-trips. Only emitted when a value is known,
+        // to avoid overwriting the server's order on tasks we never reordered.
+        if let manualSortOrder = manualSortOrder {
+            lines.append("X-APPLE-SORT-ORDER:\(manualSortOrder)")
         }
 
         if let alarm = alarmTriggerSeconds {

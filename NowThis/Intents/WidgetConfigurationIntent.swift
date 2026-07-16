@@ -15,17 +15,24 @@ struct SelectListsIntent: WidgetConfigurationIntent {
     @Parameter(title: "Lists", default: [])
     var selectedLists: [WidgetListEntity]
 
-    /// Fetches tasks filtered by the selected list IDs.
+    /// Whether to include overdue tasks alongside today's tasks.
+    @Parameter(title: "Show Overdue", default: false)
+    var showOverdue: Bool
+
+    /// Fetches tasks filtered by the selected list IDs, scoped to today
+    /// (and optionally overdue tasks).
     ///
     /// - Parameters:
     ///   - listIDs: IDs of lists to include. Empty means all lists.
     ///   - maxTasks: Maximum number of tasks to return.
+    ///   - showOverdue: When true, include overdue tasks alongside today's.
     ///   - container: The SwiftData container to query.
     /// - Returns: Filtered tasks and a display name for the widget header.
     @MainActor
     static func fetchFilteredTasks(
         listIDs: [String],
         maxTasks: Int,
+        showOverdue: Bool = false,
         container: ModelContainer
     ) throws -> (tasks: [WidgetFilteredTask], displayName: String) {
         let context = ModelContext(container)
@@ -51,6 +58,19 @@ struct SelectListsIntent: WidgetConfigurationIntent {
                 guard let listID = task.taskList?.id else { return false }
                 return filterIDs.contains(listID)
             }
+        }
+
+        // Scope to today's tasks (and optionally overdue)
+        let now = Date()
+        tasks = tasks.filter { task in
+            guard let dueDate = task.dueDate else { return false }
+            if DueDateHelper.isOnDay(dueDate, isDateOnly: task.isDueDateOnly, sameAs: now) {
+                return true
+            }
+            if showOverdue && DueDateHelper.isOverdue(dueDate: dueDate, isDateOnly: task.isDueDateOnly) {
+                return true
+            }
+            return false
         }
 
         // Sort: tasks with due dates first (soonest first), then no-due-date tasks

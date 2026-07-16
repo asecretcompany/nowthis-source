@@ -32,7 +32,7 @@ final class GeofenceManager: NSObject, ObservableObject {
         authorizationStatus = locationManager.authorizationStatus
     }
 
-    // MARK: - Permission Handling
+    // MARK: - Permission Handling (P13-6)
 
     /// Requests location permission with graceful escalation.
     ///
@@ -56,7 +56,7 @@ final class GeofenceManager: NSObject, ObservableObject {
         return authorized && CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self)
     }
 
-    // MARK: - Region Management
+    // MARK: - Region Management (P13-1, P13-3, P13-5)
 
     /// Registers a geofence for a task with location coordinates.
     ///
@@ -154,7 +154,7 @@ final class GeofenceManager: NSObject, ObservableObject {
         logger.info("Refreshed geofences: \(toMonitor.count) of \(activeCandidates.count) candidates")
     }
 
-    // MARK: - Notification
+    // MARK: - Notification (P13-4)
 
     /// Requests notification permission for geofence alerts.
     func requestNotificationPermission() {

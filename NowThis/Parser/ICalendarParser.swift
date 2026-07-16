@@ -9,7 +9,7 @@ import Foundation
 /// **Supported VTODO properties:**
 /// UID, SUMMARY, DESCRIPTION, STATUS, PRIORITY, PERCENT-COMPLETE,
 /// DUE, DTSTART, COMPLETED, CREATED, LAST-MODIFIED, CATEGORIES,
-/// LOCATION, GEO, URL, RELATED-TO, RRULE
+/// LOCATION, GEO, URL, RELATED-TO, RRULE, X-APPLE-SORT-ORDER
 struct ICalendarParser {
 
     // MARK: - Data Structures
@@ -37,6 +37,9 @@ struct ICalendarParser {
         var alarmTriggerSeconds: Int?
         var isDueDateOnly: Bool = false
         var isStartDateOnly: Bool = false
+        /// X-APPLE-SORT-ORDER — manual sort position. Nil when the property
+        /// is absent, so round-trips can avoid clobbering the server's order.
+        var manualSortOrder: Int?
     }
 
     // MARK: - Public API
@@ -258,6 +261,8 @@ struct ICalendarParser {
             }
         case "RRULE":
             todo.recurrenceRule = value
+        case "X-APPLE-SORT-ORDER":
+            todo.manualSortOrder = Int(value.trimmingCharacters(in: .whitespaces))
         default:
             break // Ignore unknown properties
         }

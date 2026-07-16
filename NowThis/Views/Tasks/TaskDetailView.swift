@@ -4,7 +4,7 @@ import SwiftData
 /// Full-featured task editor with all VTODO fields.
 ///
 /// Decomposed into focused sub-views per section to keep each body
-/// Decomposed into focused sub-views to keep each body concise.
+/// under 50 lines as required by GEMINI.md.
 struct TaskDetailView: View {
 
     @Bindable var task: TaskItem
@@ -145,12 +145,14 @@ private struct DatesSection: View {
     @Bindable var task: TaskItem
     @State private var hasStartDate: Bool
     @State private var hasDueDate: Bool
+    @State private var isAllDay: Bool
     @State private var showingRecurrenceSheet = false
 
     init(task: TaskItem) {
         self.task = task
         self._hasStartDate = State(initialValue: task.startDate != nil)
         self._hasDueDate = State(initialValue: task.dueDate != nil)
+        self._isAllDay = State(initialValue: task.isDueDateOnly)
     }
 
     var body: some View {
@@ -178,8 +180,21 @@ private struct DatesSection: View {
                 Label("Due Date", systemImage: "calendar.badge.clock")
             }
             .onChange(of: hasDueDate) { _, newValue in
-                task.dueDate = newValue ? (task.dueDate ?? Date()) : nil
-                if !newValue {
+                if newValue {
+                    // Newly enabled due dates are timed at the default due time so
+                    // the row shows a clock time; users can flip to All Day below.
+                    if task.dueDate == nil {
+                        task.dueDate = DueDateHelper.timedValue(
+                            for: Date(),
+                            minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
+                        )
+                    }
+                    task.isDueDateOnly = false
+                    isAllDay = false
+                } else {
+                    task.dueDate = nil
+                    task.isDueDateOnly = false
+                    isAllDay = false
                     if task.reminderOffset != nil {
                         ReminderScheduler.cancelReminder(for: task.id)
                     }
@@ -189,13 +204,30 @@ private struct DatesSection: View {
             }
 
             if hasDueDate {
+                Toggle(isOn: Binding(
+                    get: { isAllDay },
+                    set: { setAllDay($0) }
+                )) {
+                    Label("All Day", systemImage: "clock")
+                }
+                .accessibilityHint("When on, the task is due on the whole day with no specific time and its row shows \"All day\"")
+
                 DatePicker(
                     "Due",
                     selection: Binding(
-                        get: { task.dueDate ?? Date() },
-                        set: { task.dueDate = $0 }
+                        get: {
+                            guard let due = task.dueDate else { return Date() }
+                            return isAllDay
+                                ? DueDateHelper.localStartOfDay(for: due, isDateOnly: true)
+                                : due
+                        },
+                        set: { newValue in
+                            task.dueDate = isAllDay
+                                ? DueDateHelper.dateOnlyValue(for: newValue)
+                                : newValue
+                        }
                     ),
-                    displayedComponents: [.date, .hourAndMinute]
+                    displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
                 )
                 .datePickerStyle(.compact)
                 .onChange(of: task.dueDate) { _, _ in
@@ -227,23 +259,46 @@ private struct DatesSection: View {
                     Label("Reminder", systemImage: "bell")
                 }
 
-                // Recurrence
-                Button {
-                    showingRecurrenceSheet = true
-                } label: {
-                    HStack {
-                        Label("Repeat", systemImage: "repeat")
-                        Spacer()
-                        Text(recurrenceDisplayText)
-                            .foregroundStyle(.secondary)
+                // Hourly nag — visible when a reminder is set
+                if task.reminderOffset != nil {
+                    Toggle(isOn: Binding(
+                        get: { task.isNaggingReminder },
+                        set: { newValue in
+                            task.isNaggingReminder = newValue
+                            ReminderScheduler.scheduleReminder(for: task)
+                        }
+                    )) {
+                        Label("Repeat Hourly Until Done", systemImage: "bell.and.waves.left.and.right")
                     }
+                    .tint(.orange)
                 }
-                .sheet(isPresented: $showingRecurrenceSheet) {
-                    RecurrencePickerSheet(recurrenceRule: $task.recurrenceRule)
+            }
+
+            // Recurrence — always visible; auto-enables due date if needed
+            Button {
+                if !hasDueDate {
+                    hasDueDate = true
+                    task.dueDate = Date()
                 }
-                .onChange(of: task.recurrenceRule) { _, _ in
-                    task.lastModifiedDate = Date()
-                    task.isDirty = true
+                showingRecurrenceSheet = true
+            } label: {
+                HStack {
+                    Label("Repeat", systemImage: "repeat")
+                    Spacer()
+                    Text(recurrenceDisplayText)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .sheet(isPresented: $showingRecurrenceSheet) {
+                RecurrencePickerSheet(recurrenceRule: $task.recurrenceRule)
+            }
+            .onChange(of: task.recurrenceRule) { _, newValue in
+                task.lastModifiedDate = Date()
+                task.isDirty = true
+                // Auto-enable due date when recurrence is set
+                if newValue != nil && !hasDueDate {
+                    hasDueDate = true
+                    task.dueDate = Date()
                 }
             }
         }
@@ -255,6 +310,28 @@ private struct DatesSection: View {
             return "Never"
         }
         return rule.displayText
+    }
+
+    /// Switches the due date between all-day (date-only) and timed, converting the
+    /// stored value so the calendar day is preserved. Timed values gain the default
+    /// due time; all-day values drop the time and round-trip to `DUE;VALUE=DATE`.
+    private func setAllDay(_ allDay: Bool) {
+        guard allDay != isAllDay else { return }
+        isAllDay = allDay
+        task.isDueDateOnly = allDay
+        let current = task.dueDate ?? Date()
+        if allDay {
+            task.dueDate = DueDateHelper.dateOnlyValue(for: current)
+        } else {
+            let localDay = DueDateHelper.localStartOfDay(for: current, isDateOnly: true)
+            task.dueDate = DueDateHelper.timedValue(
+                for: localDay,
+                minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
+            )
+        }
+        if task.reminderOffset != nil {
+            ReminderScheduler.scheduleReminder(for: task)
+        }
     }
 }
 
@@ -627,6 +704,8 @@ private struct AddSubtaskSheet: View {
 
 // MARK: - TaskStatus Extension
 
+// MARK: - TaskStatus Extension
+
 extension TaskStatus {
     var displayLabel: String {
         switch self {
@@ -640,7 +719,7 @@ extension TaskStatus {
 
 // MARK: - Linked Journals Section
 
-/// Shows journal entries linked to this task.
+/// Shows journal entries linked to this task (P12-4).
 private struct LinkedJournalsSection: View {
     let task: TaskItem
 

@@ -235,4 +235,37 @@ struct ICalendarParserTests {
             #expect(todo?.status == status)
         }
     }
+
+    // MARK: - Manual Sort Order (X-APPLE-SORT-ORDER)
+
+    @Test("Parses X-APPLE-SORT-ORDER into manualSortOrder")
+    func parsesAppleSortOrder() throws {
+        let ics = """
+        BEGIN:VCALENDAR
+        BEGIN:VTODO
+        UID:sort-order-1
+        SUMMARY:Ordered task
+        X-APPLE-SORT-ORDER:42
+        END:VTODO
+        END:VCALENDAR
+        """
+
+        let todo = try ICalendarParser.parseSingleVTODO(from: ics)
+        #expect(todo?.manualSortOrder == 42)
+    }
+
+    @Test("Absent X-APPLE-SORT-ORDER leaves manualSortOrder nil")
+    func absentSortOrderIsNil() throws {
+        let ics = """
+        BEGIN:VCALENDAR
+        BEGIN:VTODO
+        UID:sort-order-2
+        SUMMARY:Unordered task
+        END:VTODO
+        END:VCALENDAR
+        """
+
+        let todo = try ICalendarParser.parseSingleVTODO(from: ics)
+        #expect(todo?.manualSortOrder == nil)
+    }
 }

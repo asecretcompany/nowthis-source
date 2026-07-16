@@ -86,6 +86,7 @@ struct TaskIntentTimelineProvider: AppIntentTimelineProvider {
             let result = try SelectListsIntent.fetchFilteredTasks(
                 listIDs: listIDs,
                 maxTasks: maxTasks,
+                showOverdue: configuration.showOverdue,
                 container: container
             )
 
@@ -127,7 +128,7 @@ struct NowThisTaskWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("NowThis Tasks")
-        .description("View your upcoming tasks at a glance.")
+        .description("View your tasks due today at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

@@ -319,7 +319,7 @@ actor CalDAVClient {
         request.setValue("text/calendar; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.httpBody = icsData.data(using: .utf8)
 
-        // ETag-based conflict detection — prevents silent overwrites
+        // ETag-based conflict detection (CRITICAL per GEMINI.md)
         if let existingEtag = etag {
             request.setValue("\"\(existingEtag)\"", forHTTPHeaderField: "If-Match")
         } else {
@@ -503,19 +503,27 @@ actor CalDAVClient {
 
     // MARK: - Private Helpers
 
-    /// Sends a WebDAV request with the given method, body, and depth.
-    private func sendDAVRequest(
+    /// Builds a WebDAV read request (PROPFIND / REPORT / etc.).
+    ///
+    /// Pinned to `.reloadIgnoringLocalCacheData`: CalDAV collection properties —
+    /// notably `getctag` — are context-dependent and (RFC 4918 §9) must never be
+    /// served from a cache. A stale cached `getctag` makes the `SyncEngine` delta
+    /// check believe nothing changed and silently skip the inbound pull, so
+    /// server-created tasks and manual-order changes never reach the device.
+    ///
+    /// Extracted as a non-isolated seam so the request's caching behavior can be
+    /// unit-tested without the network. Returns `nil` for an unparseable URL.
+    static func makeDAVRequest(
         method: String,
         url: String,
         body: String?,
         credentials: Credentials,
         depth: String?
-    ) async throws -> (Data, URLResponse) {
-        guard let requestURL = URL(string: url) else {
-            throw CalDAVError.invalidURL
-        }
+    ) -> URLRequest? {
+        guard let requestURL = URL(string: url) else { return nil }
 
         var request = URLRequest(url: requestURL)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpMethod = method
         request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
         request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
@@ -526,6 +534,65 @@ actor CalDAVClient {
 
         if let body = body {
             request.httpBody = body.data(using: .utf8)
+        }
+
+        return request
+    }
+
+    /// Rebuilds the request URLSession proposes for a 301/302 redirect so it
+    /// keeps the original CalDAV request's method, body, same-origin credentials,
+    /// and headers (URLSession otherwise downgrades the method to GET and drops
+    /// these). Extracted as a non-isolated seam so the redirect behavior — most
+    /// importantly that it preserves the cache policy — is unit-testable.
+    static func makeRedirectRequest(
+        from originalRequest: URLRequest,
+        proposed request: URLRequest
+    ) -> URLRequest {
+        var redirectRequest = request
+        redirectRequest.httpMethod = originalRequest.httpMethod
+        redirectRequest.httpBody = originalRequest.httpBody
+        // Preserve the no-cache policy across redirects, or a redirected
+        // PROPFIND/REPORT would revert to the default cache and could serve a
+        // stale `getctag` — reintroducing the skipped-pull bug.
+        redirectRequest.cachePolicy = originalRequest.cachePolicy
+
+        // Only forward credentials to same-origin redirects to prevent leaking
+        let sameOrigin = originalRequest.url?.host == request.url?.host
+            && originalRequest.url?.scheme == request.url?.scheme
+            && originalRequest.url?.port == request.url?.port
+
+        if sameOrigin {
+            if let auth = originalRequest.value(forHTTPHeaderField: "Authorization") {
+                redirectRequest.setValue(auth, forHTTPHeaderField: "Authorization")
+            }
+        }
+
+        // Non-sensitive headers — always preserve for CalDAV compatibility
+        for header in ["Content-Type", "Depth"] {
+            if let value = originalRequest.value(forHTTPHeaderField: header) {
+                redirectRequest.setValue(value, forHTTPHeaderField: header)
+            }
+        }
+
+        return redirectRequest
+    }
+
+    /// Sends a WebDAV request with the given method, body, and depth.
+    private func sendDAVRequest(
+        method: String,
+        url: String,
+        body: String?,
+        credentials: Credentials,
+        depth: String?
+    ) async throws -> (Data, URLResponse) {
+        guard let request = Self.makeDAVRequest(
+            method: method,
+            url: url,
+            body: body,
+            credentials: credentials,
+            depth: depth
+        ) else {
+            throw CalDAVError.invalidURL
         }
 
         do {
@@ -627,28 +694,8 @@ private final class CalDAVClientRedirectDelegate: NSObject, URLSessionTaskDelega
             return
         }
 
-        var redirectRequest = request
-        redirectRequest.httpMethod = originalRequest.httpMethod
-        redirectRequest.httpBody = originalRequest.httpBody
-
-        // Only forward credentials to same-origin redirects to prevent leaking
-        let sameOrigin = originalRequest.url?.host == request.url?.host
-            && originalRequest.url?.scheme == request.url?.scheme
-            && originalRequest.url?.port == request.url?.port
-
-        if sameOrigin {
-            if let auth = originalRequest.value(forHTTPHeaderField: "Authorization") {
-                redirectRequest.setValue(auth, forHTTPHeaderField: "Authorization")
-            }
-        }
-
-        // Non-sensitive headers — always preserve for CalDAV compatibility
-        for header in ["Content-Type", "Depth"] {
-            if let value = originalRequest.value(forHTTPHeaderField: header) {
-                redirectRequest.setValue(value, forHTTPHeaderField: header)
-            }
-        }
-
-        completionHandler(redirectRequest)
+        completionHandler(
+            CalDAVClient.makeRedirectRequest(from: originalRequest, proposed: request)
+        )
     }
 }

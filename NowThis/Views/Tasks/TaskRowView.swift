@@ -114,7 +114,7 @@ struct TaskRowView: View {
             parts.append("Completed")
         }
         if let due = task.dueDate {
-            parts.append("Due \(due.formatted(date: .abbreviated, time: .shortened))")
+            parts.append("Due \(DueDateFormatter.accessibilityLabel(due, isDateOnly: task.isDueDateOnly))")
         }
         if task.priority != TaskPriority.none {
             parts.append("Priority \(task.priority.displayName)")
@@ -234,7 +234,11 @@ private struct MetadataBadges: View {
             }
 
             if let due = task.dueDate {
-                DueDateBadge(date: due, isOverdue: DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly))
+                DueDateBadge(
+                    date: due,
+                    isDateOnly: task.isDueDateOnly,
+                    isOverdue: DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly)
+                )
             }
 
             if task.priority == .high {
@@ -273,10 +277,11 @@ private struct SubtaskBadge: View {
 
 private struct DueDateBadge: View {
     let date: Date
+    var isDateOnly: Bool = false
     let isOverdue: Bool
 
     var body: some View {
-        Text(DueDateFormatter.format(date))
+        Text(DueDateFormatter.format(date, isDateOnly: isDateOnly))
             .font(.caption2)
             .fontWeight(.medium)
             .padding(.horizontal, 6)

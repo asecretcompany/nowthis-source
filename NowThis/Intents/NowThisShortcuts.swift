@@ -3,21 +3,40 @@ import AppIntents
 /// Registers NowThis shortcuts with the system for Siri and Spotlight suggestions.
 ///
 /// This provider enables voice commands like:
+/// - "Hey Siri, quick add to NowThis" — then dictate "buy milk tomorrow at 5pm"
 /// - "Hey Siri, add a task to NowThis"
 /// - "Hey Siri, what's due today in NowThis"
 /// - "Hey Siri, how many tasks do I have in NowThis"
 ///
 /// The system surfaces these phrases in Siri Suggestions and the Shortcuts app.
-/// Maximum 10 AppShortcut entries allowed — using 7 of 10 slots.
+/// Maximum 10 AppShortcut entries allowed — using 8 of 10 slots.
 struct NowThisShortcuts: AppShortcutsProvider {
 
     static var appShortcuts: [AppShortcut] {
+        // Natural-language capture. iOS only permits AppEnum/AppEntity parameters
+        // inside spoken phrases, so the free-text task can't be embedded in the
+        // phrase itself. The phrase triggers the intent and Siri then asks
+        // "What's the task?" (QuickAddTaskIntent's requestValueDialog); the
+        // dictated sentence is parsed for title + due date/time.
+        AppShortcut(
+            intent: QuickAddTaskIntent(),
+            phrases: [
+                "Quick add to \(.applicationName)",
+                "Quick add a task in \(.applicationName)",
+                "Quick capture in \(.applicationName)"
+            ],
+            shortTitle: "Quick Add",
+            systemImageName: "text.badge.plus"
+        )
+
         AppShortcut(
             intent: CreateTaskIntent(),
             phrases: [
                 "Add a task to \(.applicationName)",
                 "Create a task in \(.applicationName)",
-                "New task in \(.applicationName)"
+                "New task in \(.applicationName)",
+                "Add a reminder in \(.applicationName)",
+                "Remind me in \(.applicationName)"
             ],
             shortTitle: "Add Task",
             systemImageName: "plus.circle"

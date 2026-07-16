@@ -115,7 +115,10 @@ final class TaskItem {
     /// URL associated with this task (VTODO URL property).
     var url: String?
 
-    /// User-defined sort order for manual sorting. Lower values sort first.
+    /// VTODO X-APPLE-SORT-ORDER — manual sort position. Lower values sort first.
+    /// Kept on Nextcloud's scale (seconds since the 2001 reference epoch) so
+    /// manual ordering round-trips with Nextcloud Tasks. `0` marks an "unseeded"
+    /// legacy row; see `effectiveSortOrder`.
     var manualSortOrder: Int = 0
 
     // MARK: - Sync Metadata
@@ -148,6 +151,10 @@ final class TaskItem {
     /// Nil = no reminder. Only meaningful when dueDate is non-nil.
     var reminderOffset: Int?
 
+    /// When true, the reminder repeats hourly until the task is completed or deleted.
+    /// Uses a single `UNTimeIntervalNotificationTrigger(repeats: true)` slot.
+    var isNaggingReminder: Bool = false
+
     // MARK: - Sync Aliases (Computed)
 
     /// Alias for `descriptionText` used by the SyncEngine.
@@ -174,6 +181,15 @@ final class TaskItem {
         set { isDeletedLocally = newValue }
     }
 
+    /// The `X-APPLE-SORT-ORDER` value to serialize for this task. Falls back to
+    /// the value Nextcloud Tasks itself computes for an unordered task — the
+    /// number of seconds between creation and the 2001 reference epoch — when no
+    /// explicit manual order has been assigned (legacy rows stored as `0`), so a
+    /// push never overwrites the server's order with a meaningless `0`.
+    var effectiveSortOrder: Int {
+        manualSortOrder != 0 ? manualSortOrder : Int(createdDate.timeIntervalSinceReferenceDate)
+    }
+
     /// Raw integer priority (0-9) for iCalendar serialization.
     var priorityRaw: Int {
         get { priority.rawValue }
@@ -194,8 +210,13 @@ final class TaskItem {
         self.uid = uid
         self.title = title
         self.descriptionText = descriptionText
-        self.createdDate = Date()
+        let createdDate = Date()
+        self.createdDate = createdDate
         self.lastModifiedDate = Date()
+        // Seed manual sort order on Nextcloud's X-APPLE-SORT-ORDER scale
+        // (seconds since the 2001 reference epoch) so app order round-trips with
+        // Nextcloud Tasks instead of being clobbered by tiny 0/1/2 integers.
+        self.manualSortOrder = Int(createdDate.timeIntervalSinceReferenceDate)
         self.priority = priority
         self.status = status
         self.percentComplete = 0

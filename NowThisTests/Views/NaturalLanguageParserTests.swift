@@ -112,6 +112,97 @@ final class NaturalLanguageParserTests: XCTestCase {
         XCTAssertNil(result.dueDate)
     }
 
+    // MARK: - Time-of-Day Parsing
+
+    func testTomorrowAtTimeStripsTimeFromTitle() {
+        // The whole "tomorrow at 5pm" phrase should be removed from the title.
+        let result = NaturalLanguageParser.parse("Call dentist tomorrow at 5pm")
+        XCTAssertEqual(result.cleanTitle, "Call dentist")
+    }
+
+    func testTomorrowAtTimeSetsClockTime() throws {
+        let result = NaturalLanguageParser.parse("Call dentist tomorrow at 5pm")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 17)
+        XCTAssertEqual(comps.minute, 0)
+
+        let tomorrow = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        )
+        XCTAssertEqual(Calendar.current.startOfDay(for: due), tomorrow)
+    }
+
+    func testDueHasTimeTrueWhenTimeSpecified() {
+        let result = NaturalLanguageParser.parse("Call dentist tomorrow at 5pm")
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testDueHasTimeFalseForBareKeywordDate() {
+        let result = NaturalLanguageParser.parse("Call dentist tomorrow")
+        XCTAssertNotNil(result.dueDate)
+        XCTAssertFalse(result.dueHasTime)
+    }
+
+    func testParseTimeWithColonAndMinutes() throws {
+        let result = NaturalLanguageParser.parse("Meeting tomorrow at 5:30pm")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 17)
+        XCTAssertEqual(comps.minute, 30)
+        XCTAssertEqual(result.cleanTitle, "Meeting")
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testParseMorningTimeToday() throws {
+        let result = NaturalLanguageParser.parse("Standup today at 9am")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 9)
+        XCTAssertEqual(comps.minute, 0)
+        XCTAssertEqual(result.cleanTitle, "Standup")
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testParseNoon() throws {
+        let result = NaturalLanguageParser.parse("Lunch tomorrow at noon")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 12)
+        XCTAssertEqual(comps.minute, 0)
+        XCTAssertEqual(result.cleanTitle, "Lunch")
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testParse24HourTime() throws {
+        let result = NaturalLanguageParser.parse("Deploy tomorrow at 17:00")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 17)
+        XCTAssertEqual(comps.minute, 0)
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testTimeOnlyDefaultsToToday() throws {
+        let result = NaturalLanguageParser.parse("Standup at 9am")
+        let due = try XCTUnwrap(result.dueDate)
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: due)
+        XCTAssertEqual(comps.hour, 9)
+        XCTAssertEqual(comps.minute, 0)
+        XCTAssertEqual(Calendar.current.startOfDay(for: due),
+                       Calendar.current.startOfDay(for: Date()))
+        XCTAssertEqual(result.cleanTitle, "Standup")
+        XCTAssertTrue(result.dueHasTime)
+    }
+
+    func testBareNumberNotParsedAsTime() {
+        // "at 5" without am/pm or a colon is too ambiguous — leave it in the title.
+        let result = NaturalLanguageParser.parse("Order 5 boxes")
+        XCTAssertFalse(result.dueHasTime)
+        XCTAssertNil(result.dueDate)
+        XCTAssertEqual(result.cleanTitle, "Order 5 boxes")
+    }
+
     // MARK: - Combined Parsing
 
     func testParseAllTokensCombined() {

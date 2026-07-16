@@ -29,6 +29,13 @@ struct KanbanBoardView: View {
     @EnvironmentObject private var syncScheduler: SyncScheduler
     @State private var selectedListID: String?
     @State private var draggedTaskID: String?
+    @State private var boardMode: BoardMode = .statusBoard
+
+    /// Board display modes.
+    enum BoardMode: String, CaseIterable {
+        case statusBoard = "Status"
+        case listSwipe = "Lists"
+    }
 
     /// The visible columns (exclude Cancelled by default).
     private let visibleStatuses: [TaskStatus] = [
@@ -40,6 +47,8 @@ struct KanbanBoardView: View {
             Group {
                 if taskLists.isEmpty {
                     emptyState
+                } else if boardMode == .listSwipe {
+                    KanbanListSwipeView(taskLists: taskLists, allTasks: allTasks)
                 } else {
                     boardContent
                 }
@@ -100,34 +109,44 @@ struct KanbanBoardView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            if taskLists.count > 1 {
-                Menu {
-                    ForEach(taskLists) { list in
-                        Button {
-                            selectedListID = list.id
-                        } label: {
-                            HStack {
-                                Text(list.name)
-                                if list.id == selectedListID {
-                                    Image(systemName: "checkmark")
+            Picker("Mode", selection: $boardMode) {
+                ForEach(BoardMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 160)
+            .accessibilityLabel("Board mode")
+        }
+
+        if boardMode == .statusBoard {
+            ToolbarItem(placement: .topBarTrailing) {
+                if taskLists.count > 1 {
+                    Menu {
+                        ForEach(taskLists) { list in
+                            Button {
+                                selectedListID = list.id
+                            } label: {
+                                HStack {
+                                    Text(list.name)
+                                    if list.id == selectedListID {
+                                        Image(systemName: "checkmark")
+                                    }
                                 }
                             }
                         }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(selectedList?.name ?? "List")
+                                .font(.subheadline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(selectedList?.name ?? "Board")
-                            .font(.headline)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    .accessibilityLabel("Select task list")
+                    .accessibilityHint("Double tap to choose a different list")
                 }
-                .accessibilityLabel("Select task list")
-                .accessibilityHint("Double tap to choose a different list")
-            } else {
-                Text(selectedList?.name ?? "Board")
-                    .font(.headline)
             }
         }
     }

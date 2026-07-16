@@ -20,15 +20,21 @@ struct KanbanColumnView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 10) {
                     ForEach(tasks) { task in
-                        NavigationLink(value: task) {
-                            KanbanCardView(task: task)
-                        }
-                        .buttonStyle(.plain)
-                        .draggable(task.id) {
-                            // Drag preview
-                            KanbanCardView(task: task)
-                                .frame(width: 240)
-                                .opacity(0.85)
+                        // Snapshot to a value here, while `task` is a live model
+                        // delivered by the parent's @Query. The card never holds
+                        // the model, so a later deferred re-layout can't
+                        // dereference a row a background sync has deleted.
+                        if let data = KanbanCardData(task: task) {
+                            NavigationLink(value: task) {
+                                KanbanCardView(data: data)
+                            }
+                            .buttonStyle(.plain)
+                            .draggable(task.id) {
+                                // Drag preview
+                                KanbanCardView(data: data)
+                                    .frame(width: 240)
+                                    .opacity(0.85)
+                            }
                         }
                     }
 

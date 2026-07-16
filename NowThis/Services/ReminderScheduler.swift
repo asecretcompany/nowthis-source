@@ -16,6 +16,7 @@ struct ReminderScheduler {
     private static let maxReminders = 60
     private static let identifierPrefix = "reminder-"
     private static let overdueIdentifierPrefix = "overdue-"
+    private static let nagIdentifierPrefix = "nag-"
 
     // MARK: - Permission
 
@@ -50,7 +51,12 @@ struct ReminderScheduler {
         guard let dueDate = task.dueDate,
               let offset = task.reminderOffset else { return }
 
-        let fireDate = computeFireDate(dueDate: dueDate, isDueDateOnly: task.isDueDateOnly, reminderOffset: offset)
+        let fireDate = computeFireDate(
+            dueDate: dueDate,
+            isDueDateOnly: task.isDueDateOnly,
+            reminderOffset: offset,
+            allDayReminderMinutes: TaskDefaultsPreferences.allDayReminderMinutes
+        )
 
         guard fireDate > Date() else {
             logger.debug("Skipping past reminder for task \(task.id)")
@@ -84,6 +90,51 @@ struct ReminderScheduler {
                 Self.logger.error("Failed to schedule reminder: \(error.localizedDescription)")
             }
         }
+
+        // Schedule hourly repeating nag if enabled
+        if task.isNaggingReminder {
+            scheduleNagReminder(for: task, badge: badge)
+        } else {
+            // Cancel any existing nag if it was previously enabled
+            cancelNagReminder(for: task.id)
+        }
+    }
+
+    /// Schedules an hourly repeating notification for a task.
+    ///
+    /// Uses `UNTimeIntervalNotificationTrigger(repeats: true)` which consumes
+    /// only 1 notification slot. Auto-cancelled when the task is completed or deleted.
+    private static func scheduleNagReminder(for task: TaskItem, badge: Int?) {
+        let content = UNMutableNotificationContent()
+        content.title = "🔔 \(task.title)"
+        content.body = "Hourly reminder — still pending"
+        content.sound = .default
+        content.userInfo = ["taskID": task.id]
+        if let badge { content.badge = NSNumber(value: badge) }
+
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: 3600,
+            repeats: true
+        )
+
+        let request = UNNotificationRequest(
+            identifier: "\(nagIdentifierPrefix)\(task.id)",
+            content: content,
+            trigger: trigger
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                Self.logger.error("Failed to schedule nag reminder: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Cancels the hourly nag reminder for a task.
+    static func cancelNagReminder(for taskID: String) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(
+            withIdentifiers: ["\(nagIdentifierPrefix)\(taskID)"]
+        )
     }
 
     /// Schedules a "now overdue" notification at a task's deadline.
@@ -132,13 +183,14 @@ struct ReminderScheduler {
         }
     }
 
-    /// Cancels a pending reminder and any overdue-badge notification for a task.
+    /// Cancels a pending reminder, overdue-badge, and nag notification for a task.
     static func cancelReminder(for taskID: String) {
         UNUserNotificationCenter.current()
             .removePendingNotificationRequests(
                 withIdentifiers: [
                     "\(identifierPrefix)\(taskID)",
-                    "\(overdueIdentifierPrefix)\(taskID)"
+                    "\(overdueIdentifierPrefix)\(taskID)",
+                    "\(nagIdentifierPrefix)\(taskID)"
                 ]
             )
     }
@@ -256,7 +308,12 @@ struct ReminderScheduler {
         for task in active {
             guard let due = task.dueDate else { continue }
             if let offset = task.reminderOffset {
-                let fire = computeFireDate(dueDate: due, isDueDateOnly: task.isDueDateOnly, reminderOffset: offset)
+                let fire = computeFireDate(
+                    dueDate: due,
+                    isDueDateOnly: task.isDueDateOnly,
+                    reminderOffset: offset,
+                    allDayReminderMinutes: TaskDefaultsPreferences.allDayReminderMinutes
+                )
                 guard fire > now else { continue }
                 entries.append((fire, task.id, .reminder))
             } else {
@@ -284,11 +341,25 @@ struct ReminderScheduler {
 
     /// Computes the notification fire date for a task.
     ///
-    /// Uses `DueDateHelper.effectiveDeadline` so date-only tasks fire
-    /// relative to end-of-local-day rather than midnight UTC.
-    static func computeFireDate(dueDate: Date, isDueDateOnly: Bool, reminderOffset: Int) -> Date {
-        let effectiveDue = DueDateHelper.effectiveDeadline(for: dueDate, isDateOnly: isDueDateOnly)
-        return effectiveDue.addingTimeInterval(-Double(reminderOffset))
+    /// - Date-only (all-day) tasks fire at a configurable time-of-day on the due
+    ///   day (`allDayReminderMinutes` since local midnight, default 9:00 AM) —
+    ///   matching Apple Reminders — rather than at end-of-local-day, so an all-day
+    ///   reminder pings in the morning instead of at midnight. The `reminderOffset`
+    ///   then shifts earlier from that anchor (e.g. 86400 = the day before at the
+    ///   same time).
+    /// - Date+time tasks fire at `dueDate - reminderOffset`, unchanged.
+    static func computeFireDate(
+        dueDate: Date,
+        isDueDateOnly: Bool,
+        reminderOffset: Int,
+        allDayReminderMinutes: Int = TaskDefaultsPreferences.defaultAllDayReminderMinutes
+    ) -> Date {
+        guard isDueDateOnly else {
+            return dueDate.addingTimeInterval(-Double(reminderOffset))
+        }
+        let anchor = DueDateHelper.localStartOfDay(for: dueDate, isDateOnly: true)
+            .addingTimeInterval(Double(allDayReminderMinutes) * 60)
+        return anchor.addingTimeInterval(-Double(reminderOffset))
     }
 
     // MARK: - Helpers
@@ -344,7 +415,8 @@ struct ReminderScheduler {
                 let fireDate = computeFireDate(
                     dueDate: dueDate,
                     isDueDateOnly: task.isDueDateOnly,
-                    reminderOffset: offset
+                    reminderOffset: offset,
+                    allDayReminderMinutes: TaskDefaultsPreferences.allDayReminderMinutes
                 )
                 if fireDate <= now {
                     shouldCount = true

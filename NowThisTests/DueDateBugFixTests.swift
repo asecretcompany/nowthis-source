@@ -175,6 +175,82 @@ struct DueDateFormattingTests {
         #expect(!formatted.contains(":"), "Date-only should not show a time")
     }
 
+    @Test("Date-only due dates display the stored UTC calendar day, not a timezone-shifted day")
+    func dateOnlyRendersUTCDay() {
+        // A CalDAV `DUE;VALUE=DATE:20260629` is parsed and stored as midnight UTC
+        // (2026-06-29 00:00:00 +0000). In any timezone west of UTC (e.g. PDT) the
+        // raw value is the *previous* evening, so naive local formatting yields the
+        // wrong day ("Jun 28") and/or a spurious time ("5:00 PM").
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let midnightUTC = utc.date(from: DateComponents(year: 2026, month: 6, day: 29))!
+
+        let formatted = DueDateFormatter.format(midnightUTC, isDateOnly: true)
+
+        #expect(!formatted.contains(":"), "Date-only must not show a time component")
+        #expect(formatted.contains("29"), "Must show the stored UTC day (29), not a timezone-shifted day (28)")
+    }
+
+    @Test("Date-only due dates show an 'All day' label instead of no time")
+    func dateOnlyShowsAllDay() {
+        // A date-only task (DUE;VALUE=DATE) is stored as midnight UTC.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let midnightUTC = utc.date(from: DateComponents(year: 2026, month: 7, day: 6))!
+
+        let formatted = DueDateFormatter.format(midnightUTC, isDateOnly: true)
+
+        #expect(formatted.contains("All day"), "Date-only badge should read 'All day' for time consistency")
+        #expect(formatted.contains("6"), "Must still show the stored calendar day")
+        #expect(!formatted.contains(":"), "Date-only must not show a clock time")
+    }
+
+    @Test("Date+time due dates do not show the 'All day' label")
+    func dateTimeHasNoAllDayLabel() {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 7
+        components.day = 6
+        components.hour = 19
+        components.minute = 0
+        let dateTime = Calendar.current.date(from: components)!
+
+        let formatted = DueDateFormatter.format(dateTime, isDateOnly: false)
+
+        #expect(!formatted.contains("All day"), "Timed tasks show the clock time, not 'All day'")
+        #expect(formatted.contains(":"), "Timed tasks show the time with a colon separator")
+    }
+
+    @Test("VoiceOver label for a date-only task reads 'All day' without the visual middle-dot glyph")
+    func accessibilityLabelDateOnlyOmitsMiddleDot() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let midnightUTC = utc.date(from: DateComponents(year: 2026, month: 7, day: 6))!
+
+        let label = DueDateFormatter.accessibilityLabel(midnightUTC, isDateOnly: true)
+
+        #expect(label.contains("All day"), "VoiceOver should hear the all-day designation")
+        #expect(!label.contains("·"), "The spoken label must not contain the decorative middle-dot glyph")
+        #expect(!label.contains(":"), "Date-only must not read a clock time")
+        #expect(label.contains("6"), "Must read the stored calendar day")
+    }
+
+    @Test("VoiceOver label for a timed task reads the clock time")
+    func accessibilityLabelTimedReadsTime() {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 7
+        components.day = 6
+        components.hour = 19
+        components.minute = 0
+        let dateTime = Calendar.current.date(from: components)!
+
+        let label = DueDateFormatter.accessibilityLabel(dateTime, isDateOnly: false)
+
+        #expect(!label.contains("All day"), "Timed tasks read the clock time, not 'All day'")
+        #expect(label.contains(":"), "Timed tasks read the clock time")
+    }
+
     @Test("Due dates with a specific time show the time")
     func dateTimeFormat() {
         // 2:00 PM local time — has a meaningful time component
