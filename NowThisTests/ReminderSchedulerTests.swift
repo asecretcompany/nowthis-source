@@ -8,11 +8,11 @@ struct ReminderSchedulerFireDateTests {
 
     // MARK: - Date-Only Fire Date Tests
 
-    @Test("Date-only task fire date uses end-of-local-day, not midnight UTC")
-    func dateOnlyFireDateUsesEffectiveDeadline() {
+    @Test("Date-only task fire date anchors to the all-day time, not end-of-day")
+    func dateOnlyFireDateUsesAllDayTime() {
         // A date-only task stored as midnight UTC for "today"
         let utcMidnight = makeMidnightUTC(daysFromNow: 0)
-        let offset = 3600 // 1 hour before
+        let offset = 3600 // 1 hour before the anchor
 
         let fireDate = ReminderScheduler.computeFireDate(
             dueDate: utcMidnight,
@@ -20,18 +20,51 @@ struct ReminderSchedulerFireDateTests {
             reminderOffset: offset
         )
 
-        // The effective deadline for a date-only task is end-of-local-day
-        // (start of next day in local timezone).
-        // Fire date should be effectiveDeadline - offset.
-        let expectedEffectiveDeadline = DueDateHelper.effectiveDeadline(
-            for: utcMidnight, isDateOnly: true
-        )
-        let expectedFireDate = expectedEffectiveDeadline.addingTimeInterval(-Double(offset))
+        // The default anchor is 9:00 AM local (540 minutes) on the due day.
+        let anchor = DueDateHelper.localStartOfDay(for: utcMidnight, isDateOnly: true)
+            .addingTimeInterval(Double(TaskDefaultsPreferences.defaultAllDayReminderMinutes) * 60)
+        let expectedFireDate = anchor.addingTimeInterval(-Double(offset))
 
         #expect(
             abs(fireDate.timeIntervalSince(expectedFireDate)) < 1,
-            "Fire date should be end-of-local-day minus offset, not midnight UTC minus offset"
+            "Fire date should be the all-day anchor (9 AM local) minus offset"
         )
+    }
+
+    @Test("Date-only all-day time is configurable")
+    func dateOnlyFireDateHonorsConfiguredTime() {
+        let utcMidnight = makeMidnightUTC(daysFromNow: 0)
+        let customMinutes = 8 * 60 + 30 // 8:30 AM
+
+        let fireDate = ReminderScheduler.computeFireDate(
+            dueDate: utcMidnight,
+            isDueDateOnly: true,
+            reminderOffset: 0,
+            allDayReminderMinutes: customMinutes
+        )
+
+        let expected = DueDateHelper.localStartOfDay(for: utcMidnight, isDateOnly: true)
+            .addingTimeInterval(Double(customMinutes) * 60)
+
+        #expect(abs(fireDate.timeIntervalSince(expected)) < 1)
+    }
+
+    @Test("Day-before offset fires at the all-day time on the previous day")
+    func dateOnlyDayBeforeOffset() {
+        let utcMidnight = makeMidnightUTC(daysFromNow: 2)
+        let dayBefore = 86400 // 1 day before the anchor
+
+        let fireDate = ReminderScheduler.computeFireDate(
+            dueDate: utcMidnight,
+            isDueDateOnly: true,
+            reminderOffset: dayBefore
+        )
+
+        let anchor = DueDateHelper.localStartOfDay(for: utcMidnight, isDateOnly: true)
+            .addingTimeInterval(Double(TaskDefaultsPreferences.defaultAllDayReminderMinutes) * 60)
+        let expected = anchor.addingTimeInterval(-Double(dayBefore))
+
+        #expect(abs(fireDate.timeIntervalSince(expected)) < 1)
     }
 
     @Test("Date+time task fire date uses exact due date")
@@ -89,8 +122,8 @@ struct ReminderSchedulerFireDateTests {
         }
     }
 
-    @Test("Zero offset fires at effective deadline")
-    func zeroOffsetFiresAtDeadline() {
+    @Test("Zero offset fires at the all-day anchor time")
+    func zeroOffsetFiresAtAllDayAnchor() {
         let utcMidnight = makeMidnightUTC(daysFromNow: 1) // tomorrow
         let offset = 0
 
@@ -100,13 +133,12 @@ struct ReminderSchedulerFireDateTests {
             reminderOffset: offset
         )
 
-        let expectedDeadline = DueDateHelper.effectiveDeadline(
-            for: utcMidnight, isDateOnly: true
-        )
+        let expectedAnchor = DueDateHelper.localStartOfDay(for: utcMidnight, isDateOnly: true)
+            .addingTimeInterval(Double(TaskDefaultsPreferences.defaultAllDayReminderMinutes) * 60)
 
         #expect(
-            abs(fireDate.timeIntervalSince(expectedDeadline)) < 1,
-            "Zero offset should fire exactly at the effective deadline"
+            abs(fireDate.timeIntervalSince(expectedAnchor)) < 1,
+            "Zero offset should fire exactly at the all-day anchor time (9 AM local)"
         )
     }
 

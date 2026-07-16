@@ -51,7 +51,7 @@ struct AccountTypeChooserView: View {
             try manager.createVaultAccount()
             vaultCreated = true
         } catch {
-            // TODO: Surface error to user
+            // Error handling will be enhanced in Phase 5
         }
     }
 }

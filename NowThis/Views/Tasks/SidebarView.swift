@@ -40,6 +40,81 @@ enum SidebarSelection: Hashable {
     case savedFilter(String) // SavedFilter ID
     case journals
     case tag(String) // Tag ID
+
+    /// Encodes the selection as a string for persistence (e.g. @SceneStorage).
+    var encoded: String {
+        switch self {
+        case .smart(let list): return "smart:\(list.rawValue)"
+        case .taskList(let id): return "list:\(id)"
+        case .savedFilter(let id): return "filter:\(id)"
+        case .journals: return "journals"
+        case .tag(let id): return "tag:\(id)"
+        }
+    }
+
+    /// Decodes a selection from a persisted string. Returns `.smart(.today)` on invalid input.
+    static func decode(from string: String) -> SidebarSelection {
+        if string == "journals" { return .journals }
+        let parts = string.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else { return .smart(.today) }
+        let prefix = String(parts[0])
+        let value = String(parts[1])
+        switch prefix {
+        case "smart":
+            return .smart(SmartList(rawValue: value) ?? .today)
+        case "list":
+            return .taskList(value)
+        case "filter":
+            return .savedFilter(value)
+        case "tag":
+            return .tag(value)
+        default:
+            return .smart(.today)
+        }
+    }
+}
+
+/// Sidebar navigation showing smart lists and user-created task lists.
+/// Reorderable sidebar sections.
+///
+/// Smart Lists is always first and non-hideable. The remaining sections
+/// can be reordered and hidden via Settings → Sidebar Layout.
+enum SidebarSection: String, Codable, CaseIterable, Identifiable {
+    case filters
+    case journals
+    case tags
+    case lists
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .filters: return "Filters"
+        case .journals: return "Journals"
+        case .tags: return "Tags"
+        case .lists: return "Lists"
+        }
+    }
+
+    /// Default section order (matches the original hardcoded layout).
+    static let defaultOrder: [SidebarSection] = [.filters, .journals, .tags, .lists]
+
+    /// Loads the section order from AppStorage JSON, falling back to default.
+    static func loadOrder(from json: String) -> [SidebarSection] {
+        guard let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([SidebarSection].self, from: data) else {
+            return defaultOrder
+        }
+        return decoded
+    }
+
+    /// Encodes a section order array to JSON for AppStorage.
+    static func encodeOrder(_ order: [SidebarSection]) -> String {
+        guard let data = try? JSONEncoder().encode(order) else {
+            return "[]"
+        }
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
 }
 
 /// Sidebar navigation showing smart lists and user-created task lists.
@@ -51,22 +126,30 @@ struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showingNewListSheet = false
     @State private var showingFilterBuilder = false
+    @AppStorage("sidebarSectionOrder") private var sectionOrderJSON = ""
+    @AppStorage("sidebarHiddenSections") private var hiddenSectionsJSON = ""
+
+    private var sectionOrder: [SidebarSection] {
+        let order = SidebarSection.loadOrder(from: sectionOrderJSON)
+        return order.isEmpty ? SidebarSection.defaultOrder : order
+    }
+
+    private var hiddenSections: Set<SidebarSection> {
+        guard let data = hiddenSectionsJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([SidebarSection].self, from: data) else {
+            return []
+        }
+        return Set(decoded)
+    }
 
     var body: some View {
         List(selection: $selection) {
             SmartListsSection()
-            SavedFiltersSection(
-                filters: savedFilters,
-                onDelete: deleteFilter,
-                onAddNew: { showingFilterBuilder = true }
-            )
-            JournalsSidebarSection()
-            TagsSidebarSection()
-            UserListsSection(
-                taskLists: visibleTaskLists,
-                onDelete: deleteList,
-                onAddNew: { showingNewListSheet = true }
-            )
+            ForEach(sectionOrder) { section in
+                if !hiddenSections.contains(section) {
+                    sectionView(for: section)
+                }
+            }
         }
         .navigationTitle("NowThis")
         .listStyle(.sidebar)
@@ -75,6 +158,28 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showingFilterBuilder) {
             FilterBuilderView()
+        }
+    }
+
+    @ViewBuilder
+    private func sectionView(for section: SidebarSection) -> some View {
+        switch section {
+        case .filters:
+            SavedFiltersSection(
+                filters: savedFilters,
+                onDelete: deleteFilter,
+                onAddNew: { showingFilterBuilder = true }
+            )
+        case .journals:
+            JournalsSidebarSection()
+        case .tags:
+            TagsSidebarSection()
+        case .lists:
+            UserListsSection(
+                taskLists: visibleTaskLists,
+                onDelete: deleteList,
+                onAddNew: { showingNewListSheet = true }
+            )
         }
     }
 
@@ -354,6 +459,7 @@ private struct UserListsSection: View {
     let taskLists: [TaskList]
     let onDelete: (IndexSet) -> Void
     let onAddNew: () -> Void
+    @State private var editingList: TaskList?
 
     var body: some View {
         Section("Lists") {
@@ -371,6 +477,13 @@ private struct UserListsSection: View {
                     }
                 }
                 .accessibilityLabel("\(list.name), \(list.tasks.count) task\(list.tasks.count == 1 ? "" : "s")")
+                .contextMenu {
+                    Button {
+                        editingList = list
+                    } label: {
+                        Label("Edit List", systemImage: "pencil")
+                    }
+                }
             }
             .onDelete(perform: onDelete)
 
@@ -378,6 +491,9 @@ private struct UserListsSection: View {
                 Label("New List", systemImage: "plus.circle.fill")
                     .foregroundStyle(.blue)
             }
+        }
+        .sheet(item: $editingList) { list in
+            EditListSheet(list: list)
         }
     }
 }
@@ -439,6 +555,98 @@ private struct NewListSheet: View {
         list.account = accounts.first
 
         modelContext.insert(list)
+        try? modelContext.save()
+        HapticManager.success()
+        dismiss()
+    }
+}
+
+// MARK: - Edit List Sheet
+
+private struct EditListSheet: View {
+    @Bindable var list: TaskList
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @State private var listName: String
+    @State private var selectedColor: String
+    /// Per-list due-date override rule, or "" to use the global default.
+    @State private var dueDateRuleRaw: String
+    /// Per-list reminder override ("on"/"off"), or "" to use the global default.
+    @State private var reminderModeRaw: String
+
+    private let colors = [
+        "#007AFF", "#FF3B30", "#FF9500", "#FFCC00",
+        "#34C759", "#5856D6", "#AF52DE", "#FF2D55"
+    ]
+
+    init(list: TaskList) {
+        self.list = list
+        self._listName = State(initialValue: list.name)
+        self._selectedColor = State(initialValue: list.colorHex)
+        self._dueDateRuleRaw = State(initialValue: list.defaultDueDateRuleRaw ?? "")
+        self._reminderModeRaw = State(initialValue: list.defaultReminderModeRaw ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("List Name", text: $listName)
+                }
+                Section("Color") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 12) {
+                        ForEach(colors, id: \.self) { hex in
+                            ColorDot(hex: hex, isSelected: selectedColor == hex) {
+                                selectedColor = hex
+                            }
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                Section {
+                    Picker("Default Due Date", selection: $dueDateRuleRaw) {
+                        Text("Use Global Default").tag("")
+                        ForEach(DefaultDueDateRule.allCases) { rule in
+                            Text(rule.displayName).tag(rule.rawValue)
+                        }
+                    }
+                    .accessibilityHint("The due date applied to new tasks added to this list")
+
+                    Picker("Default Reminder", selection: $reminderModeRaw) {
+                        Text("Use Global Default").tag("")
+                        Text("On").tag("on")
+                        Text("Off").tag("off")
+                    }
+                    .accessibilityHint("Whether new tasks in this list get a reminder automatically")
+                } header: {
+                    Text("New Task Defaults")
+                } footer: {
+                    Text("Overrides the app-wide defaults for tasks added to this list.")
+                }
+            }
+            .navigationTitle("Edit List")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { saveChanges() }
+                        .disabled(listName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func saveChanges() {
+        let trimmed = listName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        list.name = trimmed
+        list.colorHex = selectedColor
+        list.defaultDueDateRuleRaw = dueDateRuleRaw.isEmpty ? nil : dueDateRuleRaw
+        list.defaultReminderModeRaw = reminderModeRaw.isEmpty ? nil : reminderModeRaw
         try? modelContext.save()
         HapticManager.success()
         dismiss()

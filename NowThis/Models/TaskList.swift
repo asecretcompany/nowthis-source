@@ -35,6 +35,13 @@ final class TaskList {
         set { ctag = newValue }
     }
 
+    /// When the last *full* inbound pull of this collection completed.
+    /// Bounds the CTag skip optimization (see `SyncEngine.shouldSkipPull`): even
+    /// when the server CTag still matches, a full pull is forced once this is
+    /// stale, so a cached/stale `getctag` can never silently suppress server
+    /// changes indefinitely. `nil` until the first full pull.
+    var lastFullPullDate: Date?
+
     /// Path component used for constructing CalDAV request URLs.
     var calendarPath: String?
 
@@ -42,6 +49,16 @@ final class TaskList {
 
     /// Per-list read-only toggle. When true, the UI disables all mutation controls.
     var isReadOnly: Bool = false
+
+    /// Per-list override for the default due date applied to new tasks, stored as
+    /// a `DefaultDueDateRule` raw value. `nil` = fall back to the global default.
+    /// Local-only app configuration (not serialized to CalDAV). Typed access is
+    /// via the `defaultDueDateRule` extension in the app target.
+    var defaultDueDateRuleRaw: String?
+
+    /// Per-list override for whether new tasks get a default reminder: `"on"`,
+    /// `"off"`, or `nil` (use the global setting). Local-only app configuration.
+    var defaultReminderModeRaw: String?
 
     // MARK: - Relationships
 

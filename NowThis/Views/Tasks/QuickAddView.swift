@@ -23,6 +23,21 @@ struct QuickAddView: View {
     @State private var parseResult = NaturalLanguageParser.ParseResult()
     @FocusState private var isFocused: Bool
     let defaultList: TaskList?
+    var defaultSmartList: SmartList?
+
+    init(defaultList: TaskList?, defaultSmartList: SmartList? = nil) {
+        self.defaultList = defaultList
+        self.defaultSmartList = defaultSmartList
+        // Pre-fill the due date from the resolved contextual/per-list/global
+        // default so Quick Add matches the inline add bar. The resolver already
+        // bakes the default due time onto the date, so surface it directly in the
+        // picker as a timed value.
+        let resolved = NewTaskDefaults.resolve(smartList: defaultSmartList, list: defaultList)
+        if let due = resolved.dueDate {
+            self._hasDueDate = State(initialValue: true)
+            self._dueDate = State(initialValue: due)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -111,9 +126,21 @@ struct QuickAddView: View {
             task.tags.append(tag)
         }
 
+        // Apply a default reminder (opt-in, per-list/global) when the task has a
+        // due date and none was otherwise set. Offset 0 fires at the due time.
+        if task.dueDate != nil,
+           task.reminderOffset == nil,
+           NewTaskDefaults.effectiveReminderEnabled(for: task.taskList) {
+            task.reminderOffset = 0
+        }
+
         task.isDirty = true
         modelContext.insert(task)
         try? modelContext.save()
+        if task.reminderOffset != nil {
+            ReminderScheduler.requestPermissionIfNeeded()
+            ReminderScheduler.scheduleReminder(for: task)
+        }
         syncScheduler.syncAfterChange(modelContext: modelContext)
 
         // Auto-sync to calendar if enabled

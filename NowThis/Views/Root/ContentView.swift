@@ -37,10 +37,52 @@ struct ContentView: View {
 /// The primary tab bar housing Tasks (NavigationSplitView) and Settings.
 struct MainTabView: View {
 
-    @State private var selectedTab = 0
+    @SceneStorage("selectedTab") private var selectedTab = 0
     @Binding var deepLinkTaskID: String?
 
+    @EnvironmentObject private var syncScheduler: SyncScheduler
+
+    /// The sync failure the user has dismissed. The banner stays hidden for
+    /// this exact failure until it clears (a sync succeeds) or a different
+    /// failure occurs.
+    @State private var dismissedFailure: SyncFailure?
+
+    private static let settingsTab = 4
+
     var body: some View {
+        VStack(spacing: 0) {
+            if SyncFailureBanner.isVisible(
+                failure: syncScheduler.lastSyncFailure,
+                dismissed: dismissedFailure
+            ), let failure = syncScheduler.lastSyncFailure {
+                SyncFailureBanner(
+                    failure: failure,
+                    onTap: failure.isUserActionable ? {
+                        withAnimation {
+                            selectedTab = Self.settingsTab
+                            dismissedFailure = syncScheduler.lastSyncFailure
+                        }
+                    } : nil,
+                    onDismiss: {
+                        withAnimation { dismissedFailure = syncScheduler.lastSyncFailure }
+                    }
+                )
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            tabView
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.9),
+                   value: syncScheduler.lastSyncFailure)
+        .onChange(of: syncScheduler.lastSyncFailure) { _, newValue in
+            // Once a sync succeeds (failure clears), forget the dismissal so a
+            // later, genuinely new failure can surface again.
+            if newValue == nil { dismissedFailure = nil }
+        }
+    }
+
+    private var tabView: some View {
         TabView(selection: $selectedTab) {
             MainShellView()
                 .tabItem {
@@ -49,18 +91,21 @@ struct MainTabView: View {
                 .tag(0)
 
             KanbanBoardView()
+                .refreshOnInboundSync()
                 .tabItem {
                     Label("Board", systemImage: "rectangle.split.3x1")
                 }
                 .tag(1)
 
             CalendarContainerView()
+                .refreshOnInboundSync()
                 .tabItem {
                     Label("Calendar", systemImage: "calendar")
                 }
                 .tag(2)
 
             EisenhowerMatrixView()
+                .refreshOnInboundSync()
                 .tabItem {
                     Label("Matrix", systemImage: "square.grid.2x2")
                 }

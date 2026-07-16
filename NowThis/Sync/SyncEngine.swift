@@ -55,16 +55,20 @@ actor SyncEngine {
     ///   - serverBaseURL: The server's base URL.
     ///   - credentials: The CalDAV credentials.
     ///   - modelContainer: The shared `ModelContainer` (a background context is created internally).
+    /// Returns `true` if the inbound pull created or updated any local task, so
+    /// the caller can refresh the UI's `@Query`-backed lists (which do not
+    /// observe the background context's writes).
+    @discardableResult
     func performFullSync(
         accountID: String,
         serverBaseURL: String,
         credentials: CalDAVClient.Credentials,
         modelContainer: ModelContainer,
         syncWindowMonths: Int = 0
-    ) async throws {
+    ) async throws -> Bool {
         guard !isRunning else {
             logger.info("Sync already in progress, skipping full sync")
-            return
+            return false
         }
         isRunning = true
         defer { isRunning = false }
@@ -84,8 +88,10 @@ actor SyncEngine {
         accountDescriptor.fetchLimit = 1
         guard let account = try bgContext.fetch(accountDescriptor).first else {
             setState(.idle)
-            return
+            return false
         }
+
+        var didImportInbound = false
 
         do {
             // Step 1: Discover calendars
@@ -121,14 +127,16 @@ actor SyncEngine {
             // Step 3: Sync each calendar
             for remoteCal in updatedCalendars {
                 try Task.checkCancellation()
-                try await syncCalendar(
+                if try await syncCalendar(
                     remoteCal: remoteCal,
                     account: account,
                     baseURL: serverBaseURL,
                     credentials: credentials,
                     modelContext: bgContext,
                     syncWindowMonths: syncWindowMonths
-                )
+                ) {
+                    didImportInbound = true
+                }
             }
 
             // Clean up any duplicate TaskItems that accumulated from prior syncs
@@ -155,11 +163,15 @@ actor SyncEngine {
         } catch is CancellationError {
             setState(.idle)
         } catch {
-            let message = error.localizedDescription
-            setState(.error(message))
-            await MainActor.run { ErrorState.shared.show("Sync failed: \(message)") }
+            // Record internal error state and re-throw. The foreground caller
+            // (`SyncScheduler`) translates this into a categorized, user-facing
+            // `SyncFailure` banner — so we no longer raise a raw technical alert
+            // here (that double-surfaced and showed unhelpful wording).
+            setState(.error(error.localizedDescription))
             throw error
         }
+
+        return didImportInbound
     }
 
     // MARK: - Background Sync
@@ -295,7 +307,10 @@ actor SyncEngine {
                     }
                 }
 
-                // Update sync metadata
+                // Update sync metadata. Background sync always performs a full
+                // pull, so record it too — keeping both sync paths in agreement
+                // about when the last full pull happened.
+                taskList.lastFullPullDate = Date()
                 taskList.syncCTag = remoteCal.ctag
                 try bgContext.save()
             }
@@ -328,31 +343,44 @@ actor SyncEngine {
     /// Applies a single remote task to the local store. Not `@MainActor`-isolated.
     ///
     /// This is the background-safe equivalent of `processRemoteTask`.
-    private func applyRemoteTask(
+    @discardableResult
+    nonisolated private func applyRemoteTask(
         _ remoteTask: CalDAVClient.RemoteTask,
         taskList: TaskList,
         uidMap: inout [String: TaskItem],
         modelContext: ModelContext
-    ) throws {
+    ) throws -> Bool {
         guard let todoData = try ICalendarParser.parseSingleVTODO(
             from: remoteTask.icsData
-        ) else { return }
+        ) else { return false }
 
         let uid = todoData.uid
 
         if let existingTask = uidMap[uid] {
             // Never overwrite a task with unsynced local edits — local wins
-            guard !existingTask.isDirty else { return }
+            guard !existingTask.isDirty else { return false }
 
             let remoteModified = todoData.lastModifiedDate ?? Date.distantPast
             let localModified = existingTask.lastModifiedDate ?? Date.distantPast
+            // The etag — not LAST-MODIFIED — is the authoritative change signal.
+            // Nextcloud stores the client's LAST-MODIFIED verbatim, so a server-side
+            // change such as a manual reorder (which rewrites X-APPLE-SORT-ORDER)
+            // changes the resource's etag without advancing LAST-MODIFIED. Gating on
+            // the etag means those changes are applied and surfaced to the UI, while
+            // the timestamp guard still refuses a strictly-older (stale) remote.
+            let contentChanged = existingTask.etag != remoteTask.etag
 
-            if remoteModified >= localModified {
+            if contentChanged && remoteModified >= localModified {
                 applyTodoDataBackground(todoData, to: existingTask)
                 existingTask.etag = remoteTask.etag
                 existingTask.remoteHref = remoteTask.href
                 existingTask.isDirty = false
+                // A changed etag with a non-older remote is a real inbound change.
+                // An unchanged etag (e.g. the periodic forced pull re-fetching the
+                // same resource) is filtered out above and never refreshes the UI.
+                return true
             }
+            return false
         } else {
             let newTask = TaskItem(
                 uid: todoData.uid,
@@ -365,11 +393,13 @@ actor SyncEngine {
             newTask.taskList = taskList
             modelContext.insert(newTask)
             uidMap[uid] = newTask
+            return true
         }
     }
 
-    /// Applies parsed VTODO data onto a TaskItem. Not `@MainActor`-isolated.
-    private func applyTodoDataBackground(
+    /// Applies parsed VTODO data onto a TaskItem. `nonisolated` so it can be
+    /// called from `applyRemoteTask` without actor hops (it touches no actor state).
+    nonisolated private func applyTodoDataBackground(
         _ data: ICalendarParser.VTODOData,
         to task: TaskItem
     ) {
@@ -396,11 +426,22 @@ actor SyncEngine {
         task.parentUID = data.parentUID
         task.reminderOffset = data.alarmTriggerSeconds
         task.recurrenceRule = data.recurrenceRule
+        // Adopt the server's manual order only when present, so a locally
+        // assigned order isn't wiped by a VTODO that omits X-APPLE-SORT-ORDER.
+        if let order = data.manualSortOrder {
+            task.manualSortOrder = order
+        }
     }
 
     // MARK: - Calendar Sync
 
     /// Syncs a single remote calendar with its local TaskList counterpart.
+    ///
+    /// Returns `true` if the inbound pull created or updated any local task —
+    /// the signal the UI uses to refresh its `@Query`-backed lists (which do not
+    /// observe the background context's writes). Push-only work, skipped pulls,
+    /// and no-op re-applies return `false`.
+    @discardableResult
     private func syncCalendar(
         remoteCal: CalDAVClient.RemoteCalendar,
         account: ServerAccount,
@@ -408,7 +449,7 @@ actor SyncEngine {
         credentials: CalDAVClient.Credentials,
         modelContext: ModelContext,
         syncWindowMonths: Int = 0
-    ) async throws {
+    ) async throws -> Bool {
         // Find or create local TaskList
         let taskList = findOrCreateTaskList(
             for: remoteCal,
@@ -416,12 +457,17 @@ actor SyncEngine {
             modelContext: modelContext
         )
 
-        // CTag delta check: skip the expensive full pull when nothing
-        // changed on the server. Still push local dirty/deleted tasks.
-        if let localCTag = taskList.syncCTag,
-           !localCTag.isEmpty,
-           localCTag == remoteCal.ctag {
-
+        // CTag delta check: skip the expensive full pull when nothing changed
+        // on the server AND a full pull happened recently. The recency bound
+        // (see `shouldSkipPull`) ensures a stale/cached `getctag` can never
+        // silently suppress server changes. Still push local dirty/deleted tasks.
+        if Self.shouldSkipPull(
+            localCTag: taskList.syncCTag,
+            remoteCTag: remoteCal.ctag,
+            lastFullPull: taskList.lastFullPullDate,
+            now: Date(),
+            maxSkipInterval: Self.maxPullSkipInterval
+        ) {
             logger.debug("CTag unchanged for \(remoteCal.displayName), skipping pull")
 
             // Push local dirty tasks even when server hasn't changed (with per-task error isolation)
@@ -459,8 +505,12 @@ actor SyncEngine {
             }
 
             try modelContext.save()
-            return
+            return false
         }
+
+        // Tracks whether the inbound pull actually changed local data, so the
+        // UI is only forced to re-query when the server delivered something new.
+        var inboundChanged = false
 
         // Pull remote tasks
         let remoteTasks = try await calDAVClient.fetchAllTasks(
@@ -492,12 +542,14 @@ actor SyncEngine {
         // Process active tasks
         for (index, remoteTask) in activeTasks.enumerated() {
             try Task.checkCancellation()
-            try processRemoteTask(
+            if try processRemoteTask(
                 remoteTask,
                 taskList: taskList,
                 uidMap: &uidMap,
                 modelContext: modelContext
-            )
+            ) {
+                inboundChanged = true
+            }
             if (index + 1) % 100 == 0 {
                 try modelContext.save()
             }
@@ -509,12 +561,14 @@ actor SyncEngine {
         // Process completed tasks with periodic saves
         for (index, remoteTask) in completedTasks.enumerated() {
             try Task.checkCancellation()
-            try processRemoteTask(
+            if try processRemoteTask(
                 remoteTask,
                 taskList: taskList,
                 uidMap: &uidMap,
                 modelContext: modelContext
-            )
+            ) {
+                inboundChanged = true
+            }
             if (index + 1) % 100 == 0 {
                 try modelContext.save()
             }
@@ -561,6 +615,10 @@ actor SyncEngine {
         }
 
         // Update sync metadata
+        // A full pull just completed — record it so the CTag skip optimization
+        // can safely fast-path subsequent syncs until this goes stale.
+        taskList.lastFullPullDate = Date()
+
         // If we pushed anything, clear CTag to force a re-pull next time.
         // PUTs change the server's CTag, so the pre-push value is stale.
         if !dirtyTasks.isEmpty || !deletedTasks.isEmpty {
@@ -570,6 +628,7 @@ actor SyncEngine {
         }
 
         try modelContext.save()
+        return inboundChanged
     }
 
     // MARK: - Pull (Remote → Local)
@@ -577,32 +636,45 @@ actor SyncEngine {
     /// Processes a single remote task: creates or updates the local TaskItem.
     ///
     /// Uses a pre-built UID map for O(1) lookups instead of per-task SwiftData queries.
+    @discardableResult
     private func processRemoteTask(
         _ remoteTask: CalDAVClient.RemoteTask,
         taskList: TaskList,
         uidMap: inout [String: TaskItem],
         modelContext: ModelContext
-    ) throws {
+    ) throws -> Bool {
         guard let todoData = try ICalendarParser.parseSingleVTODO(
             from: remoteTask.icsData
-        ) else { return }
+        ) else { return false }
 
         let uid = todoData.uid
 
         if let existingTask = uidMap[uid] {
             // Never overwrite a task with unsynced local edits — local wins
-            guard !existingTask.isDirty else { return }
+            guard !existingTask.isDirty else { return false }
 
-            // Update existing task if remote is newer
+            // Update the existing task when the server's copy actually changed.
             let remoteModified = todoData.lastModifiedDate ?? Date.distantPast
             let localModified = existingTask.lastModifiedDate ?? Date.distantPast
+            // The etag — not LAST-MODIFIED — is the authoritative change signal.
+            // Nextcloud stores the client's LAST-MODIFIED verbatim, so a server-side
+            // change such as a manual reorder (which rewrites X-APPLE-SORT-ORDER)
+            // changes the resource's etag without advancing LAST-MODIFIED. Gating on
+            // the etag means those changes are applied and surfaced to the UI, while
+            // the timestamp guard still refuses a strictly-older (stale) remote.
+            let contentChanged = existingTask.etag != remoteTask.etag
 
-            if remoteModified >= localModified {
+            if contentChanged && remoteModified >= localModified {
                 applyTodoData(todoData, to: existingTask)
                 existingTask.etag = remoteTask.etag
                 existingTask.remoteHref = remoteTask.href
                 existingTask.isDirty = false
+                // A changed etag with a non-older remote is a real inbound change.
+                // An unchanged etag (e.g. the periodic forced pull re-fetching the
+                // same resource) is filtered out above and never refreshes the UI.
+                return true
             }
+            return false
         } else {
             // Create new local task
             let newTask = TaskItem(
@@ -616,6 +688,7 @@ actor SyncEngine {
             newTask.taskList = taskList
             modelContext.insert(newTask)
             uidMap[uid] = newTask
+            return true
         }
     }
 
@@ -647,6 +720,11 @@ actor SyncEngine {
         task.parentUID = data.parentUID
         task.reminderOffset = data.alarmTriggerSeconds
         task.recurrenceRule = data.recurrenceRule
+        // Adopt the server's manual order only when present, so a locally
+        // assigned order isn't wiped by a VTODO that omits X-APPLE-SORT-ORDER.
+        if let order = data.manualSortOrder {
+            task.manualSortOrder = order
+        }
     }
 
     // MARK: - Push (Local → Remote)
@@ -771,7 +849,8 @@ actor SyncEngine {
             recurrenceRule: task.recurrenceRule,
             alarmTriggerSeconds: task.reminderOffset,
             isDueDateOnly: task.isDueDateOnly,
-            isStartDateOnly: task.isStartDateOnly
+            isStartDateOnly: task.isStartDateOnly,
+            manualSortOrder: task.effectiveSortOrder
         )
     }
 
@@ -944,6 +1023,40 @@ actor SyncEngine {
         return (active, completed)
     }
 
+    // MARK: - Pull-Skip Decision
+
+    /// The longest a matching CTag may suppress a full pull before one is forced
+    /// regardless. Bounds the CTag optimization so a stale/cached `getctag` can
+    /// never silently blind the device to server changes indefinitely.
+    static let maxPullSkipInterval: TimeInterval = 600 // 10 minutes
+
+    /// Decides whether the inbound pull may be skipped for a calendar.
+    ///
+    /// The CTag delta check is only a *bandwidth* optimization, so it must never
+    /// be the reason server data goes missing. A pull is skipped **only** when
+    /// the stored CTag is present, equals the freshly-fetched server CTag, AND a
+    /// full pull completed within `maxSkipInterval`. Any other case (no/empty
+    /// CTag, differing CTags, no prior full pull, or a stale one) forces a pull.
+    static func shouldSkipPull(
+        localCTag: String?,
+        remoteCTag: String,
+        lastFullPull: Date?,
+        now: Date,
+        maxSkipInterval: TimeInterval
+    ) -> Bool {
+        guard let localCTag, !localCTag.isEmpty, localCTag == remoteCTag else {
+            return false // ctags differ / missing → pull
+        }
+        guard let lastFullPull else {
+            return false // never completed a full pull → pull
+        }
+        // A backward clock jump (NTP correction, manual change) makes the elapsed
+        // interval negative; treat that as "stale" and pull, so a clock change can
+        // never wedge the skip optimization into suppressing server changes.
+        let elapsed = now.timeIntervalSince(lastFullPull)
+        return elapsed >= 0 && elapsed < maxSkipInterval
+    }
+
     // MARK: - Sync Window Filter
 
     /// Filters completed remote tasks to only include those completed within the given window.
@@ -1009,13 +1122,16 @@ actor SyncEngine {
 
     // MARK: - Test Helpers
 
-    /// Test-accessible wrapper for `applyRemoteTask`.
-    func testApplyRemoteTask(
+    /// Test-accessible wrapper for `applyRemoteTask`. `nonisolated` so tests can
+    /// drive it synchronously with an `inout` map (an `inout` can't cross an
+    /// actor boundary). Returns whether the apply changed local data.
+    @discardableResult
+    nonisolated func testApplyRemoteTask(
         _ remoteTask: CalDAVClient.RemoteTask,
         taskList: TaskList,
         uidMap: inout [String: TaskItem],
         modelContext: ModelContext
-    ) throws {
+    ) throws -> Bool {
         try applyRemoteTask(remoteTask, taskList: taskList, uidMap: &uidMap, modelContext: modelContext)
     }
 

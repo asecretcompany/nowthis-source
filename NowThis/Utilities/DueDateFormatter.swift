@@ -6,14 +6,18 @@ import Foundation
 /// date+time for dates with a specific time component.
 enum DueDateFormatter {
 
+    /// Appended to date-only badges so every due date reads as a time slot —
+    /// e.g. `"Jul 6 · All day"` sits alongside `"Jul 6 at 7:00 PM"`.
+    private static let allDaySuffix = " · All day"
+
     /// Formats a due date for display in the task row badge.
     ///
-    /// - Returns: `"May 28"` for date-only, `"May 28, 2:00 PM"` for date+time.
+    /// - Returns: `"May 28 · All day"` for date-only, `"May 28, 2:00 PM"` for date+time.
     static func format(_ date: Date) -> String {
         if hasTimeComponent(date) {
             return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         } else {
-            return date.formatted(.dateTime.month(.abbreviated).day())
+            return date.formatted(.dateTime.month(.abbreviated).day()) + allDaySuffix
         }
     }
 
@@ -24,7 +28,33 @@ enum DueDateFormatter {
     /// exactly midnight local time.
     static func format(_ date: Date, isDateOnly: Bool) -> String {
         if isDateOnly {
-            return date.formatted(.dateTime.month(.abbreviated).day())
+            // Date-only values are stored as midnight UTC and represent a whole
+            // calendar day. Render the components in UTC so the stored day is
+            // preserved — local formatting would shift it (e.g. midnight-UTC
+            // Jun 29 reads as "Jun 28, 5:00 PM" in PDT). Mirrors DueDateHelper,
+            // which also extracts the calendar day in UTC.
+            var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+            style.timeZone = TimeZone(identifier: "UTC")!
+            return date.formatted(style) + allDaySuffix
+        } else {
+            return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        }
+    }
+
+    /// A VoiceOver-friendly rendering of a due date.
+    ///
+    /// Mirrors ``format(_:isDateOnly:)`` for display, but uses a spoken comma
+    /// separator instead of the visual middle dot — VoiceOver can announce "·"
+    /// as "middle dot" at higher punctuation verbosity, so the badge keeps the
+    /// dot while the accessibility label reads plain text. Date-only dates read
+    /// `"Jul 6, All day"`; timed dates read the same clock time as the badge.
+    static func accessibilityLabel(_ date: Date, isDateOnly: Bool) -> String {
+        if isDateOnly {
+            // Match the badge's UTC day extraction so the spoken day equals the
+            // visible day — local formatting would shift it (see `format`).
+            var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+            style.timeZone = TimeZone(identifier: "UTC")!
+            return date.formatted(style) + ", All day"
         } else {
             return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         }

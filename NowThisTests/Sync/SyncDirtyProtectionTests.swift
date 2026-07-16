@@ -76,18 +76,12 @@ struct SyncDirtyProtectionTests {
         // The actual runtime behavior is tested via the full background sync
         // test above and integration tests.
 
-        // Resolve project root from this test file's location
-        let testFileURL = URL(fileURLWithPath: #filePath)
-        let projectRoot = testFileURL
-            .deletingLastPathComponent()  // Sync/
-            .deletingLastPathComponent()  // NowThisTests/
-            .deletingLastPathComponent()  // project root
-        let engineURL = projectRoot
-            .appendingPathComponent("NowThis/Sync/SyncEngine.swift")
+        // Verify the guard exists in the source
+        let engineURL = URL(fileURLWithPath: "/Users/comadminish/code/nowthis/NowThis/Sync/SyncEngine.swift")
         let source = try String(contentsOf: engineURL, encoding: .utf8)
 
         #expect(
-            source.contains("guard !existingTask.isDirty else { return }"),
+            source.contains("guard !existingTask.isDirty else { return false }"),
             "SyncEngine.applyRemoteTask must contain isDirty guard"
         )
     }

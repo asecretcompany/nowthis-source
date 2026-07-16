@@ -18,6 +18,8 @@ struct SettingsView: View {
                 CalendarSection(accounts: accounts, modelContext: modelContext)
                 NotificationsSection()
                 TaskBehaviorSection()
+                SiriShortcutsSection()
+                SidebarLayoutSection()
                 AppearanceSection()
                 AboutSection()
             }
@@ -104,7 +106,7 @@ private struct VaultAccountRow: View {
 private struct SyncSection: View {
     @ObservedObject var syncScheduler: SyncScheduler
     let modelContext: ModelContext
-    @AppStorage("syncWindowMonths") private var syncWindowMonths = 0
+    @AppStorage(SyncPreferences.windowMonthsKey) private var syncWindowMonths = SyncPreferences.defaultWindowMonths
 
     var body: some View {
         Section {
@@ -232,10 +234,31 @@ private struct NotificationsSection: View {
 
 private struct TaskBehaviorSection: View {
     @AppStorage("defaultSiriListID") private var defaultSiriListID: String = ""
+    @AppStorage("showCompletedTasks") private var showCompleted = false
+    @AppStorage("startupScreen") private var startupScreen = "last"
+    @AppStorage(TaskDefaultsPreferences.dueDateRuleKey) private var defaultDueDateRule: DefaultDueDateRule = .none
+    @AppStorage(TaskDefaultsPreferences.reminderEnabledKey) private var defaultReminderEnabled = false
+    @AppStorage(TaskDefaultsPreferences.allDayReminderMinutesKey) private var allDayReminderMinutes = TaskDefaultsPreferences.defaultAllDayReminderMinutes
+    @AppStorage(TaskDefaultsPreferences.dueTimeMinutesKey) private var dueTimeMinutes = TaskDefaultsPreferences.defaultDueTimeMinutes
     @Query(sort: \TaskList.name) private var taskLists: [TaskList]
 
     var body: some View {
         Section {
+            Picker(selection: $startupScreen) {
+                Text("Last Place").tag("last")
+                ForEach(SmartList.allCases) { smart in
+                    Text(smart.rawValue).tag("smart:\(smart.rawValue)")
+                }
+            } label: {
+                Label("Open App To", systemImage: "arrow.right.circle")
+            }
+            .accessibilityHint("Choose which screen appears when you open NowThis")
+
+            Toggle(isOn: $showCompleted) {
+                Label("Show Completed Tasks", systemImage: "checkmark.circle")
+            }
+            .accessibilityHint("When off, completed tasks are hidden from all lists and views")
+
             Picker(selection: $defaultSiriListID) {
                 Text("First List").tag("")
                 ForEach(taskLists) { list in
@@ -247,6 +270,201 @@ private struct TaskBehaviorSection: View {
             .accessibilityHint("Choose which list Siri adds tasks to when you don't specify one")
         } header: {
             Text("Task Behavior")
+        } footer: {
+            Text("Completed tasks can also be toggled from the filter bar on any list.")
+        }
+
+        Section {
+            Picker(selection: $defaultDueDateRule) {
+                ForEach(DefaultDueDateRule.allCases) { rule in
+                    Text(rule.displayName).tag(rule)
+                }
+            } label: {
+                Label("Default Due Date", systemImage: "calendar")
+            }
+            .accessibilityHint("The due date applied to new tasks. Individual lists can override this, and you can change it per task.")
+
+            Toggle(isOn: $defaultReminderEnabled) {
+                Label("Remind Me About New Tasks", systemImage: "bell")
+            }
+            .accessibilityHint("When on, new tasks that have a due date get a reminder automatically")
+
+            DatePicker(
+                selection: dueTimeBinding,
+                displayedComponents: .hourAndMinute
+            ) {
+                Label("Default Due Time", systemImage: "clock.badge.checkmark")
+            }
+            .accessibilityHint("The time of day given to new tasks when you pick a quick due date like Today or Tomorrow. You can still change the time, or mark a task All Day, per task.")
+
+            DatePicker(
+                selection: allDayReminderTimeBinding,
+                displayedComponents: .hourAndMinute
+            ) {
+                Label("All-Day Reminder Time", systemImage: "clock")
+            }
+            .accessibilityHint("The time of day reminders fire for tasks that are due on a day without a specific time")
+        } header: {
+            Text("New Task Defaults")
+        } footer: {
+            Text("New tasks pick up these defaults so they stay visible in the list you add them to. You can override the date on each task, and give any list its own defaults from the list's settings.")
+        }
+    }
+
+    /// Bridges the stored minutes-since-midnight to a `Date` for the time picker.
+    private var allDayReminderTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                let start = Calendar.current.startOfDay(for: Date())
+                return start.addingTimeInterval(Double(allDayReminderMinutes) * 60)
+            },
+            set: { newDate in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                allDayReminderMinutes = (comps.hour ?? 9) * 60 + (comps.minute ?? 0)
+            }
+        )
+    }
+
+    /// Bridges the stored default-due-time minutes-since-midnight to a `Date`.
+    private var dueTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                let start = Calendar.current.startOfDay(for: Date())
+                return start.addingTimeInterval(Double(dueTimeMinutes) * 60)
+            },
+            set: { newDate in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                dueTimeMinutes = (comps.hour ?? 9) * 60 + (comps.minute ?? 0)
+            }
+        )
+    }
+}
+
+// MARK: - Siri & Shortcuts Section
+
+private struct SiriShortcutsSection: View {
+    var body: some View {
+        Section {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Try: \"Hey Siri, add a reminder in NowThis\"")
+                        .font(.callout)
+                    Text("Also works: \"add a task\", \"what's due today\", \"complete a task\"")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "mic.fill")
+                    .foregroundStyle(.blue)
+            }
+
+            Link(destination: URL(string: "shortcuts://")!) {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Custom Siri Phrases")
+                            .font(.callout)
+                        Text("Create your own voice commands in the Shortcuts app using NowThis actions.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(.purple)
+                }
+            }
+        } header: {
+            Text("Siri & Shortcuts")
+        }
+    }
+}
+
+// MARK: - Sidebar Layout Section
+
+private struct SidebarLayoutSection: View {
+    @AppStorage("sidebarSectionOrder") private var sectionOrderJSON = ""
+    @AppStorage("sidebarHiddenSections") private var hiddenSectionsJSON = ""
+    @State private var sections: [SidebarSection] = SidebarSection.defaultOrder
+    @State private var hiddenSections: Set<SidebarSection> = []
+
+    var body: some View {
+        Section {
+            ForEach($sections) { $section in
+                let currentSection = section
+                HStack {
+                    Label(currentSection.displayName, systemImage: iconFor(currentSection))
+                    Spacer()
+                    Button {
+                        toggleVisibility(currentSection)
+                    } label: {
+                        Image(systemName: hiddenSections.contains(currentSection) ? "eye.slash" : "eye")
+                            .foregroundStyle(hiddenSections.contains(currentSection) ? Color.secondary : Color.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(hiddenSections.contains(currentSection) ? "Show \(currentSection.displayName)" : "Hide \(currentSection.displayName)")
+                }
+            }
+            .onMove(perform: moveSection)
+
+            Button("Reset to Default") {
+                sections = SidebarSection.defaultOrder
+                hiddenSections = []
+                saveOrder()
+                saveHidden()
+            }
+            .foregroundStyle(.red)
+        } header: {
+            HStack {
+                Text("Sidebar Layout")
+                Spacer()
+                EditButton()
+                    .font(.caption)
+            }
+        } footer: {
+            Text("Smart Lists always appears first. Drag to reorder, tap the eye to hide sections.")
+        }
+        .onAppear { loadState() }
+    }
+
+    private func iconFor(_ section: SidebarSection) -> String {
+        switch section {
+        case .filters: return "line.3.horizontal.decrease.circle"
+        case .journals: return "book.closed.fill"
+        case .tags: return "tag.fill"
+        case .lists: return "list.bullet"
+        }
+    }
+
+    private func loadState() {
+        sections = SidebarSection.loadOrder(from: sectionOrderJSON)
+        if sections.isEmpty { sections = SidebarSection.defaultOrder }
+        if let data = hiddenSectionsJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([SidebarSection].self, from: data) {
+            hiddenSections = Set(decoded)
+        }
+    }
+
+    private func moveSection(from source: IndexSet, to destination: Int) {
+        sections.move(fromOffsets: source, toOffset: destination)
+        saveOrder()
+    }
+
+    private func toggleVisibility(_ section: SidebarSection) {
+        if hiddenSections.contains(section) {
+            hiddenSections.remove(section)
+        } else {
+            hiddenSections.insert(section)
+        }
+        saveHidden()
+    }
+
+    private func saveOrder() {
+        sectionOrderJSON = SidebarSection.encodeOrder(sections)
+    }
+
+    private func saveHidden() {
+        let array = Array(hiddenSections)
+        if let data = try? JSONEncoder().encode(array) {
+            hiddenSectionsJSON = String(data: data, encoding: .utf8) ?? ""
         }
     }
 }

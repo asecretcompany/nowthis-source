@@ -72,10 +72,12 @@ struct WidgetReloadTests {
         context.insert(list)
 
         let task1 = TaskItem(title: "Active task")
+        task1.dueDate = Date()
         task1.taskList = list
         context.insert(task1)
 
         let task2 = TaskItem(title: "Will complete")
+        task2.dueDate = Date()
         task2.taskList = list
         context.insert(task2)
 

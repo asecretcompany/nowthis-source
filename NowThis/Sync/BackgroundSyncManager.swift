@@ -116,7 +116,7 @@ final class BackgroundSyncManager {
                     password: password
                 )
 
-                let syncWindowMonths = UserDefaults.standard.integer(forKey: "syncWindowMonths")
+                let syncWindowMonths = SyncPreferences.windowMonths()
 
                 try await syncEngine.performBackgroundSync(
                     accountID: snapshot.id,

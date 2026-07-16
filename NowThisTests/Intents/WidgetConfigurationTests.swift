@@ -33,10 +33,12 @@ struct WidgetConfigurationTests {
         context.insert(list2)
 
         let task1 = TaskItem(title: "Work task")
+        task1.dueDate = Date()
         task1.taskList = list1
         context.insert(task1)
 
         let task2 = TaskItem(title: "Home task")
+        task2.dueDate = Date()
         task2.taskList = list2
         context.insert(task2)
 
@@ -66,10 +68,12 @@ struct WidgetConfigurationTests {
         context.insert(homeList)
 
         let workTask = TaskItem(title: "Work task")
+        workTask.dueDate = Date()
         workTask.taskList = workList
         context.insert(workTask)
 
         let homeTask = TaskItem(title: "Home task")
+        homeTask.dueDate = Date()
         homeTask.taskList = homeList
         context.insert(homeTask)
 
@@ -102,14 +106,17 @@ struct WidgetConfigurationTests {
         context.insert(list3)
 
         let t1 = TaskItem(title: "Work task")
+        t1.dueDate = Date()
         t1.taskList = list1
         context.insert(t1)
 
         let t2 = TaskItem(title: "Home task")
+        t2.dueDate = Date()
         t2.taskList = list2
         context.insert(t2)
 
         let t3 = TaskItem(title: "Shopping task")
+        t3.dueDate = Date()
         t3.taskList = list3
         context.insert(t3)
 
@@ -140,10 +147,12 @@ struct WidgetConfigurationTests {
         context.insert(list)
 
         let active = TaskItem(title: "Active task")
+        active.dueDate = Date()
         active.taskList = list
         context.insert(active)
 
         let deleted = TaskItem(title: "Deleted task")
+        deleted.dueDate = Date()
         deleted.taskList = list
         deleted.isDeletedLocally = true
         context.insert(deleted)
@@ -173,6 +182,7 @@ struct WidgetConfigurationTests {
 
         for i in 1...10 {
             let task = TaskItem(title: "Task \(i)")
+            task.dueDate = Date()
             task.taskList = list
             context.insert(task)
         }
@@ -215,7 +225,7 @@ struct WidgetConfigurationTests {
 
     // MARK: - Due date sorting
 
-    @Test("Tasks with due dates appear before tasks without due dates")
+    @Test("Overdue tasks sort before today's tasks with showOverdue")
     @MainActor
     func dueDateTasksSortFirst() async throws {
         let container = try makeContainer()
@@ -224,36 +234,38 @@ struct WidgetConfigurationTests {
         let list = TaskList(serverURL: "", name: "Work", colorHex: "#FF0000")
         context.insert(list)
 
-        let noDue = TaskItem(title: "No due date")
-        noDue.taskList = list
-        context.insert(noDue)
+        let overdue = TaskItem(title: "Overdue task")
+        overdue.dueDate = Calendar.current.date(byAdding: .day, value: -2, to: Date())
+        overdue.taskList = list
+        context.insert(overdue)
 
-        let hasDue = TaskItem(title: "Has due date")
-        hasDue.dueDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())
-        hasDue.taskList = list
-        context.insert(hasDue)
+        let todayLater = TaskItem(title: "Today later")
+        todayLater.dueDate = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date())
+        todayLater.taskList = list
+        context.insert(todayLater)
 
-        let earlierDue = TaskItem(title: "Earlier due date")
-        earlierDue.dueDate = Date()
-        earlierDue.taskList = list
-        context.insert(earlierDue)
+        let todayEarlier = TaskItem(title: "Today earlier")
+        todayEarlier.dueDate = Calendar.current.date(bySettingHour: 8, minute: 0, second: 0, of: Date())
+        todayEarlier.taskList = list
+        context.insert(todayEarlier)
 
         try context.save()
 
         let result = try SelectListsIntent.fetchFilteredTasks(
             listIDs: [list.id],
             maxTasks: 10,
+            showOverdue: true,
             container: container
         )
 
         #expect(result.tasks.count == 3)
-        // Tasks with due dates should come first, sorted by soonest
-        #expect(result.tasks[0].title == "Earlier due date")
-        #expect(result.tasks[1].title == "Has due date")
-        #expect(result.tasks[2].title == "No due date")
+        // Sorted by soonest first: overdue, today earlier, today later
+        #expect(result.tasks[0].title == "Overdue task")
+        #expect(result.tasks[1].title == "Today earlier")
+        #expect(result.tasks[2].title == "Today later")
     }
 
-    @Test("Widget only shows due-date tasks when limit is reached")
+    @Test("Widget respects maxTasks limit with today's tasks")
     @MainActor
     func dueDateTasksFillLimitFirst() async throws {
         let container = try makeContainer()
@@ -262,24 +274,17 @@ struct WidgetConfigurationTests {
         let list = TaskList(serverURL: "", name: "Work", colorHex: "#FF0000")
         context.insert(list)
 
-        // Create 3 tasks without due dates
-        for i in 1...3 {
-            let task = TaskItem(title: "No due \(i)")
-            task.taskList = list
-            context.insert(task)
-        }
-
-        // Create 3 tasks WITH due dates
-        for i in 1...3 {
-            let task = TaskItem(title: "Due \(i)")
-            task.dueDate = Calendar.current.date(byAdding: .day, value: i, to: Date())
+        // Create 5 tasks due today
+        for i in 1...5 {
+            let task = TaskItem(title: "Today \(i)")
+            task.dueDate = Date()
             task.taskList = list
             context.insert(task)
         }
 
         try context.save()
 
-        // Limit to 3 — should get ALL 3 due-date tasks, NONE of the no-due-date ones
+        // Limit to 3 — should get only 3 of the 5 today tasks
         let result = try SelectListsIntent.fetchFilteredTasks(
             listIDs: [list.id],
             maxTasks: 3,
@@ -287,9 +292,6 @@ struct WidgetConfigurationTests {
         )
 
         #expect(result.tasks.count == 3)
-        for task in result.tasks {
-            #expect(task.dueDate != nil, "All tasks in limited widget should have due dates, got: \(task.title)")
-        }
     }
 
     // MARK: - Excludes completed tasks
@@ -304,10 +306,12 @@ struct WidgetConfigurationTests {
         context.insert(list)
 
         let active = TaskItem(title: "Active task")
+        active.dueDate = Date()
         active.taskList = list
         context.insert(active)
 
         let completed = TaskItem(title: "Completed task", status: .completed)
+        completed.dueDate = Date()
         completed.taskList = list
         context.insert(completed)
 

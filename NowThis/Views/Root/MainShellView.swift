@@ -7,14 +7,29 @@ import SwiftData
 /// On iPhone: collapses to navigation stack with sidebar as root list.
 struct MainShellView: View {
 
+    @SceneStorage("sidebarSelection") private var selectionKey = "smart:Today"
+    @AppStorage("startupScreen") private var startupScreen = "last"
     @State private var selection: SidebarSelection? = .smart(.today)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var hasAppliedStartup = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selection)
         } detail: {
             DetailColumn(selection: selection)
+        }
+        .onAppear {
+            if !hasAppliedStartup {
+                hasAppliedStartup = true
+                let key = startupScreen == "last" ? selectionKey : startupScreen
+                selection = SidebarSelection.decode(from: key)
+            }
+        }
+        .onChange(of: selection) { _, newValue in
+            if let newValue {
+                selectionKey = newValue.encoded
+            }
         }
     }
 }
@@ -29,8 +44,10 @@ private struct DetailColumn: View {
             switch selection {
             case .journals:
                 JournalListView()
+                    .refreshOnInboundSync()
             case .tag, .smart, .taskList, .savedFilter:
                 TaskListView(selection: selection)
+                    .refreshOnInboundSync()
             }
         } else {
             ContentUnavailableView(
