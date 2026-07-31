@@ -76,8 +76,14 @@ struct SyncDirtyProtectionTests {
         // The actual runtime behavior is tested via the full background sync
         // test above and integration tests.
 
-        // Verify the guard exists in the source
-        let engineURL = URL(fileURLWithPath: "/Users/comadminish/code/nowthis/NowThis/Sync/SyncEngine.swift")
+        // Verify the guard exists in the source. Resolved relative to this file so the
+        // test passes in any checkout — an absolute path pins it to one machine and puts
+        // the author's home directory in a public repository.
+        let engineURL = URL(fileURLWithPath: #filePath)      // NowThisTests/Sync/SyncDirtyProtectionTests.swift
+            .deletingLastPathComponent()                     // NowThisTests/Sync
+            .deletingLastPathComponent()                     // NowThisTests
+            .deletingLastPathComponent()                     // <repository root>
+            .appendingPathComponent("NowThis/Sync/SyncEngine.swift")
         let source = try String(contentsOf: engineURL, encoding: .utf8)
 
         #expect(
