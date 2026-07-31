@@ -319,7 +319,9 @@ actor CalDAVClient {
         request.setValue("text/calendar; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.httpBody = icsData.data(using: .utf8)
 
-        // ETag-based conflict detection (CRITICAL per GEMINI.md)
+        // ETag-based conflict detection. Load-bearing: without the If-Match /
+        // If-None-Match pair a concurrent edit on another device is silently
+        // overwritten instead of surfacing as a 412 the sync engine can resolve.
         if let existingEtag = etag {
             request.setValue("\"\(existingEtag)\"", forHTTPHeaderField: "If-Match")
         } else {

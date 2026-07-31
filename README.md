@@ -63,9 +63,24 @@ NowThis uses [XcodeGen](https://github.com/yonaskolb/XcodeGen) to manage its pro
 
 ## Technical Details
 
-* **Architecture:** iOS client leveraging SwiftData for local persistence and CloudKit (via App Groups) for widget/app target data sharing.
+* **Architecture:** iOS client leveraging SwiftData for local persistence and an App Group container for widget/app target data sharing. There is no CloudKit or other cloud backend — your CalDAV server is the only place your data goes.
 * **Sync Engine:** Custom-built `CalDAVClient` using `os.Logger` for observability and actor-based concurrency for safe data handling.
-* **Security:** `KeychainManager` securely stores server credentials with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
+* **Security:** `KeychainManager` stores server credentials in the iOS Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so they are never synced off-device and stay unreadable until the first unlock after boot.
+
+### Versioning & Releases
+
+NowThis uses calendar versioning on a monthly release cadence:
+
+```
+yy.mm[.v]     e.g. 26.8  →  August 2026
+              e.g. 26.8.1 →  first mid-month fix on top of 26.8
+```
+
+* `yy.mm` — the year and month the release is cut. A new minor version ships each month.
+* `.v` — appended only for a mid-month patch release.
+* The build number (`CURRENT_PROJECT_VERSION`) is a single counter that always increases and never restarts, because it is what TestFlight orders builds by.
+
+`1.0.4` was the last release under the old sequential scheme; `26.8` is the first under calendar versioning. The jump is deliberate, not a mis-tagged release.
 
 ## Contributing
 

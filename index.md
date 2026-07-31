@@ -66,7 +66,7 @@ It uses a pull-then-push strategy:
 
 We take privacy seriously. 
 - No analytics SDKs or tracking frameworks are included.
-- All credentials are stored in the Secure Enclave using `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
+- All credentials are stored in the iOS Keychain using `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, which keeps them on this device only and unreadable until the first unlock after boot.
 - Network requests are strictly authenticated and validate redirects to prevent token leakage.
 
 ## License
