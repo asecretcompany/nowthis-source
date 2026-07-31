@@ -3,8 +3,8 @@ import SwiftData
 
 /// Full-featured task editor with all VTODO fields.
 ///
-/// Decomposed into focused sub-views per section to keep each body
-/// under 50 lines as required by GEMINI.md.
+/// Decomposed into focused sub-views per section so that each `body` stays
+/// under 50 lines and the type-checker keeps up with the nesting.
 struct TaskDetailView: View {
 
     @Bindable var task: TaskItem
