@@ -33,7 +33,9 @@ NowThis is a powerful, local-first iOS task manager that seamlessly syncs with a
 ## Installation
 
 ### For Users
-The easiest way to get NowThis is on the [App Store](https://apps.apple.com/us/app/nowthis-tasks-for-nextcloud/id6772790227) — a one-time $4.99 purchase, no subscriptions. Current release: **1.0.4**.
+The easiest way to get NowThis is on the [App Store](https://apps.apple.com/us/app/nowthis-tasks-for-nextcloud/id6772790227) — a one-time $4.99 purchase, no subscriptions. Current release: **26.8**.
+
+An optional one-time **NowThis Pro** purchase unlocks the Apple Watch app's check-off and voice-add; browsing tasks and complications on the watch is free.
 
 ### For Developers
 

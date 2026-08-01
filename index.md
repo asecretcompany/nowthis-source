@@ -22,6 +22,24 @@ Welcome to the open-source documentation for **NowThis**.
 
 This site provides technical guidance for developers looking to build, fork, or contribute to the NowThis iOS client.
 
+## What's New in 26.8
+
+The 26.8 release brings NowThis to five more languages, and changes the shape of the version number to get there.
+
+- **Five new languages** — NowThis is being translated into **German, Spanish, French, Italian and Dutch**. This reaches further than the interface: Siri's spoken replies for all seven voice commands, every reminder and location notification, all twenty sync and sign-in error messages, and the Apple Calendar permission states were previously assembled as plain strings that no translation system can see. Each is now a proper template.
+- **A new version number** — This release is **26.8**, not 1.0.6. NowThis now uses calendar versioning: the two-digit year and the month the release was cut, so 26.8 is August 2026 and the next is 26.9. A fix inside the same month adds a third number (26.8.1). The 1.0.x line ends at Build 16; the jump is deliberate, not a mis-tagged release.
+- **One word per concept** — A list of tasks is now a **List** everywhere; it had been a "Task List" on the widget and Focus screens and a "calendar" in two sync errors. "Calendar" now refers only to the Apple Calendar the app mirrors into. Finished tasks read **Completed** throughout, and "Done" now means only the button that closes a sheet.
+- **Menus no longer show stored identifiers** — Sort options, Smart Lists, the default-view picker, filter builder fields, the Month/Week switch and recurrence presets were displaying values stored on disk. They now show a separate label, so translating them is safe and nothing about what is stored changes.
+- **Filters survive translation** — Saved priority filters stored the word shown on screen and would have matched nothing once that word changed language; they now store a fixed code, and filters saved by earlier versions still work. Focus filters let you pick lists instead of typing their names, so renaming or translating a list no longer breaks them.
+- **Fixes** — "Repeat Hourly Until Completed" now stops when the task is completed or deleted, from the app, Siri or the widget. Completed tasks sync correctly on Buddhist and Japanese calendars, and are hidden from the calendar's day view when "Show Completed Tasks" is off. Removing a second account no longer creates a duplicate Recovered Tasks list, and journal previews render exactly what you wrote.
+
+## What's New in 1.0.5
+
+A companion **Apple Watch** app, unlocked by a one-time **NowThis Pro** purchase.
+
+- **NowThis on your wrist** — Browse your tasks and complications for free. A one-time NowThis Pro purchase (no subscription) turns on checking tasks off and adding them by voice. Watch edits reach your server as ordinary pushes from the iPhone; there are no CalDAV or server-side changes.
+- **Restore Purchases** — Available in **Settings → NowThis Pro** for a device you've bought on before.
+
 ## What's New in 1.0.4
 
 The 1.0.4 release focuses on faster task entry, rock-solid Nextcloud sync, and smarter due dates.
