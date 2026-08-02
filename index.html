@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>NowThis Developer Docs | NowThis</title>
+    <meta name="description" content="Privacy-first, self-hosted CalDAV task manager for iOS.">
+    <link rel="canonical" href="https://opensource.nowthis.app/">
+
+    <meta property="og:title" content="NowThis Developer Docs">
+    <meta property="og:description" content="Privacy-first, self-hosted CalDAV task manager for iOS.">
+    <meta property="og:url" content="https://opensource.nowthis.app/">
+    <meta property="og:site_name" content="NowThis">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="en_US">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="NowThis Developer Docs">
+
+    <link rel="stylesheet" href="/assets/css/style.css">
+  </head>
+
+  <body>
+    <a id="skip-to-content" href="#content">Skip to the content.</a>
+
+    <header class="page-header" role="banner">
+      <h1 class="project-name">NowThis Developer Docs</h1>
+      <h2 class="project-tagline">Privacy-first, self-hosted CalDAV task manager for iOS.</h2>
+      <a href="https://github.com/asecretcompany/nowthis-source" class="btn">View on GitHub</a>
+      <a href="https://testflight.apple.com/join/WEVC7CCZ" class="btn">Join the Beta on TestFlight</a>
+      <a href="https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE" class="btn">GPLv3 License</a>
+    </header>
+
+    <main id="content" class="main-content" role="main">
+      <p>Welcome to the open-source documentation for <strong>NowThis</strong>.</p>
+
+      <p>This site provides technical guidance for developers looking to build, fork, or
+      contribute to the NowThis iOS client.</p>
+
+      <h2 id="whats-new-in-268">What's New in 26.8</h2>
+
+      <p>The 26.8 release brings NowThis to five more languages, and changes the shape of the
+      version number to get there.</p>
+
+      <ul>
+        <li><strong>Five new languages</strong> — NowThis is being translated into
+        <strong>German, Spanish, French, Italian and Dutch</strong>. This reaches further than the
+        interface: Siri's spoken replies for all seven voice commands, every reminder and location
+        notification, all twenty sync and sign-in error messages, and the Apple Calendar permission
+        states were previously assembled as plain strings that no translation system can see. Each
+        is now a proper template.</li>
+
+        <li><strong>A new version number</strong> — This release is <strong>26.8</strong>, not
+        1.0.6. NowThis now uses calendar versioning: the two-digit year and the month the release
+        was cut, so 26.8 is August 2026 and the next is 26.9. A fix inside the same month adds a
+        third number (26.8.1). The 1.0.x line ends at Build 16; the jump is deliberate, not a
+        mis-tagged release.</li>
+
+        <li><strong>One word per concept</strong> — A list of tasks is now a <strong>List</strong>
+        everywhere; it had been a "Task List" on the widget and Focus screens and a "calendar" in
+        two sync errors. "Calendar" now refers only to the Apple Calendar the app mirrors into.
+        Finished tasks read <strong>Completed</strong> throughout, and "Done" now means only the
+        button that closes a sheet.</li>
+
+        <li><strong>Menus no longer show stored identifiers</strong> — Sort options, Smart Lists,
+        the default-view picker, filter builder fields, the Month/Week switch and recurrence presets
+        were displaying values stored on disk. They now show a separate label, so translating them
+        is safe and nothing about what is stored changes.</li>
+
+        <li><strong>Filters survive translation</strong> — Saved priority filters stored the word
+        shown on screen and would have matched nothing once that word changed language; they now
+        store a fixed code, and filters saved by earlier versions still work. Focus filters let you
+        pick lists instead of typing their names, so renaming or translating a list no longer breaks
+        them.</li>
+
+        <li><strong>Fixes</strong> — "Repeat Hourly Until Completed" now stops when the task is
+        completed or deleted, from the app, Siri or the widget. Completed tasks sync correctly on
+        Buddhist and Japanese calendars, and are hidden from the calendar's day view when "Show
+        Completed Tasks" is off. Removing a second account no longer creates a duplicate Recovered
+        Tasks list, and journal previews render exactly what you wrote.</li>
+      </ul>
+
+      <h2 id="whats-new-in-105">What's New in 1.0.5</h2>
+
+      <p>A companion <strong>Apple Watch</strong> app, unlocked by a one-time
+      <strong>NowThis Pro</strong> purchase.</p>
+
+      <ul>
+        <li><strong>NowThis on your wrist</strong> — Browse your tasks and complications for free.
+        A one-time NowThis Pro purchase (no subscription) turns on checking tasks off and adding
+        them by voice. Watch edits reach your server as ordinary pushes from the iPhone; there are
+        no CalDAV or server-side changes.</li>
+
+        <li><strong>Restore Purchases</strong> — Available in
+        <strong>Settings → NowThis Pro</strong> for a device you've bought on before.</li>
+      </ul>
+
+      <h2 id="whats-new-in-104">What's New in 1.0.4</h2>
+
+      <p>The 1.0.4 release focuses on faster task entry, rock-solid Nextcloud sync, and smarter
+      due dates.</p>
+
+      <ul>
+        <li><strong>Add tasks by voice</strong> — Natural-language quick-add via Siri: dictate one
+        sentence (<em>"buy milk tomorrow at 5pm"</em>) and NowThis parses the title and due
+        date/time. The same parser powers typed Quick Add.</li>
+
+        <li><strong>Faster task entry</strong> — Single-tap to add on any list, an inline quick-add
+        field on every list, and smart new-task defaults (app-wide and per-list default due date and
+        time).</li>
+
+        <li><strong>Reliable two-way Nextcloud sync</strong> — Server-side creates, edits,
+        completions, and reorders now reach the device and widget automatically; manual ordering
+        round-trips via <code>X-APPLE-SORT-ORDER</code>; subtasks sort and reorder under their
+        parent; fresh installs sync the last 3 months of completed tasks by default.</li>
+
+        <li><strong>Smarter due dates</strong> — Every due date shows a time slot (all-day tasks
+        read "· All day"), all-day (date-only) due dates now show the correct day, and an All Day
+        toggle flips a task between all-day and a specific time.</li>
+
+        <li><strong>Clearer sync errors</strong> — Plain-language banners for sign-in, connection,
+        permission, and temporary server problems.</li>
+
+        <li><strong>Stability</strong> — The Kanban board no longer crashes when a task is deleted
+        during sync.</li>
+      </ul>
+
+      <h2 id="core-architecture">Core Architecture</h2>
+
+      <p>NowThis is written in <strong>Swift 6</strong> using <strong>SwiftUI</strong> for the user
+      interface and <strong>SwiftData</strong> for local persistence.</p>
+
+      <p>Key technical pillars include:</p>
+
+      <ul>
+        <li><strong>CalDAV Sync Engine:</strong> A custom-built, actor-isolated sync engine
+        (<code>CalDAVClient</code>) that supports background fetching and ETag-based inbound change
+        detection with conflict resolution.</li>
+
+        <li><strong>Natural-Language Parsing:</strong> A shared <code>NaturalLanguageParser</code>
+        turns free-text and Siri dictation into structured title + due date/time, powering both
+        Quick Add and App Intents.</li>
+
+        <li><strong>Local Vault:</strong> A completely offline mode that bypasses the network layer,
+        storing everything securely on-device.</li>
+
+        <li><strong>Geofencing:</strong> Location-based task reminders driven by CoreLocation and
+        UserNotifications.</li>
+
+        <li><strong>App Groups:</strong> Shared state between the main app and widgets using iOS
+        App Groups.</li>
+      </ul>
+
+      <h2 id="getting-started">Getting Started</h2>
+
+      <p>NowThis uses <strong>XcodeGen</strong> to avoid merge conflicts in <code>.xcodeproj</code>
+      files. To build the project locally:</p>
+
+      <ol>
+        <li>Clone the repo from
+        <a href="https://github.com/asecretcompany/nowthis-source">GitHub</a>.</li>
+        <li>Create a <code>Local.xcconfig</code> file from the template and add your Apple Developer
+        Team ID.</li>
+        <li>Run <code>xcodegen generate</code> to create the <code>.xcodeproj</code> file.</li>
+        <li>Open the project in Xcode and run.</li>
+      </ol>
+
+      <h2 id="sync-deep-dive">Sync Deep Dive</h2>
+
+      <p>Our sync engine communicates with any standard CalDAV server (with first-class support for
+      Nextcloud). It uses a pull-then-push strategy:</p>
+
+      <ol>
+        <li>Fetch latest changes via <code>REPORT</code> requests.</li>
+        <li>Resolve conflicts using ETag matching.</li>
+        <li>Push local changes via <code>PUT</code> requests.</li>
+        <li>Refresh the local SwiftData <code>ModelContext</code>.</li>
+      </ol>
+
+      <h2 id="security--privacy">Security &amp; Privacy</h2>
+
+      <p>We take privacy seriously.</p>
+
+      <ul>
+        <li>No analytics SDKs or tracking frameworks are included.</li>
+        <li>All credentials are stored in the iOS Keychain using
+        <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>, which keeps them on this
+        device only and unreadable until the first unlock after boot.</li>
+        <li>Network requests are strictly authenticated and validate redirects to prevent token
+        leakage.</li>
+      </ul>
+
+      <h2 id="license">License</h2>
+
+      <p>NowThis is released under the <strong>GNU General Public License v3.0 (GPLv3)</strong>.
+      For more details, see the
+      <a href="https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE">LICENSE</a>
+      file in the repository.</p>
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/asecretcompany/nowthis-source">nowthis-source</a> is maintained by <a href="https://github.com/asecretcompany">asecretcompany</a>.</span>
+        <span class="site-footer-credits">Hosted on GitHub Pages.</span>
+      </footer>
+    </main>
+  </body>
+</html>
