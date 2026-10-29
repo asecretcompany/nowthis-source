@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Recursively renders a task and its subtasks as an indented tree.
+/// Iteratively renders a task and its subtasks as an indented tree.
 ///
-/// Each level is indented by 20pt. Subtasks can be collapsed/expanded
-/// with a disclosure chevron. Supports infinite nesting.
+/// The first four levels are indented by 20pt. Subtasks can be collapsed/expanded
+/// with a disclosure chevron. Deep hierarchies use a lazy flat sequence.
 struct SubtaskTreeView: View {
 
     @Bindable var task: TaskItem
@@ -17,20 +17,17 @@ struct SubtaskTreeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            TaskRowView(task: task) { onSelect(task) }
-                .padding(.leading, CGFloat(depth) * 20)
-                .accessibilityLabel(depth > 0 ? "Subtask level \(depth), \(task.title)" : task.title)
-
-            ForEach(sortedSubtasks) { subtask in
-                SubtaskTreeView(task: subtask, depth: depth + 1, onSelect: onSelect)
+        LazyVStack(spacing: 0) {
+            ForEach(TaskHierarchyTraversal.entries(from: task, depth: depth)) { entry in
+                if let data = TaskRowData(task: entry.task) {
+                    TaskRowView(data: data, task: entry.task) { onSelect(entry.task) }
+                        .padding(.leading, CGFloat(min(entry.depth, 4)) * 20)
+                        .accessibilityLabel(entry.depth > 0 ? String(
+                            localized: "subtask.a11y.level",
+                            defaultValue: "Subtask level \(entry.depth), \(data.title)",
+                            comment: "VoiceOver label for a nested subtask row; first interpolated value is the numeric nesting depth, second is the user's task title") : data.title)
+                }
             }
         }
-    }
-
-    private var sortedSubtasks: [TaskItem] {
-        task.subtasks
-            .filter { !$0.isDeletedLocally }
-            .sorted { ($0.createdDate) < ($1.createdDate) }
     }
 }

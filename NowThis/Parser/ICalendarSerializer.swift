@@ -52,7 +52,10 @@ struct ICalendarSerializer {
         alarmTriggerSeconds: Int? = nil,
         isDueDateOnly: Bool = false,
         isStartDateOnly: Bool = false,
-        manualSortOrder: Int? = nil
+        manualSortOrder: Int? = nil,
+        dtStamp: Date = Date(),
+        photos: [TaskPhotoAttachment] = [],
+        opaqueAttachments: [String] = []
     ) -> String {
         var lines: [String] = []
 
@@ -62,7 +65,7 @@ struct ICalendarSerializer {
         lines.append("BEGIN:VTODO")
 
         lines.append("UID:\(uid)")
-        lines.append("DTSTAMP:\(formatDate(Date()))")
+        lines.append("DTSTAMP:\(formatDate(dtStamp))")
         lines.append("CREATED:\(formatDate(createdDate))")
         lines.append("LAST-MODIFIED:\(formatDate(lastModifiedDate))")
         lines.append("SUMMARY:\(escapeText(summary))")
@@ -90,11 +93,8 @@ struct ICalendarSerializer {
         }
 
         if let start = startDate {
-            // RFC 5545: DUE must occur after DTSTART when both are present.
-            // Sabre/DAV (snapd Nextcloud) rejects VTODOs that violate this.
-            // Omit DTSTART if it's >= DUE to avoid server-side 415 errors.
-            let shouldEmit = dueDate.map { start < $0 } ?? true
-            if shouldEmit {
+            if !omitsStart(startDate: start, dueDate: dueDate,
+                           isDueDateOnly: isDueDateOnly, isStartDateOnly: isStartDateOnly) {
                 if isStartDateOnly {
                     lines.append("DTSTART;VALUE=DATE:\(formatDateOnly(start))")
                 } else {
@@ -148,6 +148,9 @@ struct ICalendarSerializer {
             lines.append("END:VALARM")
         }
 
+        lines.append(contentsOf: photos.compactMap(\.contentLine))
+        lines.append(contentsOf: opaqueAttachments.filter(TaskPhotoAttachment.safeOpaque))
+
         lines.append("END:VTODO")
         lines.append("END:VCALENDAR")
 
@@ -191,6 +194,17 @@ struct ICalendarSerializer {
         let data = Data(line.utf8)
 
         guard data.count > maxOctets else { return line }
+        // Binary ATTACH payloads are ASCII. Chunk bytes instead of visiting every Character.
+        if line.hasPrefix("ATTACH;"), data.allSatisfy({ $0 < 128 }) {
+            var folded = Data(); folded.reserveCapacity(data.count + data.count / 74 * 3)
+            var offset = 0
+            while offset < data.count {
+                if offset > 0 { folded.append(contentsOf: [13, 10, 32]) }
+                let end = min(data.count, offset + (offset == 0 ? 75 : 74))
+                folded.append(data[offset..<end]); offset = end
+            }
+            return String(decoding: folded, as: UTF8.self)
+        }
 
         var result = ""
         var currentByteCount = 0
@@ -234,6 +248,40 @@ struct ICalendarSerializer {
     /// Formats a Date to iCalendar date-only: `YYYYMMDD`.
     static func formatDateOnly(_ date: Date) -> String {
         return dateOnlyFormatter.string(from: date)
+    }
+
+    // MARK: - DTSTART Suppression
+
+    /// Whether a VTODO for these values will be written without its `DTSTART`.
+    ///
+    /// RFC 5545 requires `DUE` to be later than `DTSTART` in a VTODO, and
+    /// Sabre/DAV (snapd Nextcloud) rejects violations with a 415, so a start
+    /// that is not before the due date is left out of the payload.
+    ///
+    /// **The comparison respects the due value's type.** An all-day due is
+    /// stored as midnight UTC carrying a calendar date, and the task is due at
+    /// the *end* of that day. Comparing raw instants made every timed start on
+    /// the due day look late — so turning on Due Date and Start Date in one
+    /// sitting was enough to have the start silently dropped from the PUT.
+    /// Only that mixed case moves: two date-only values are both midnight UTC,
+    /// so comparing them already compares calendar days, and a same-day pair
+    /// must stay suppressed because as `DATE`s they would be equal rather than
+    /// strictly ordered.
+    ///
+    /// **Also read by the pull**, which is why it is a named rule rather than
+    /// an expression inside `serialize`. An omitted `DTSTART` never reached the
+    /// server, so a VTODO coming back without one does not mean the user
+    /// cleared it — and the applier needs to ask exactly the question that was
+    /// answered here, not a re-derivation of it that could drift.
+    static func omitsStart(startDate: Date?,
+                           dueDate: Date?,
+                           isDueDateOnly: Bool,
+                           isStartDateOnly: Bool) -> Bool {
+        guard let start = startDate, let due = dueDate else { return false }
+        let deadline = isDueDateOnly && !isStartDateOnly
+            ? DueDateHelper.effectiveDeadline(for: due, isDateOnly: true)
+            : due
+        return start >= deadline
     }
 
     // MARK: - Duration Formatting

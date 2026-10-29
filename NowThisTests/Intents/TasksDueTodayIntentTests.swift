@@ -27,7 +27,10 @@ struct TasksDueTodayIntentTests {
         let intent = TasksDueTodayIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Nothing due today") || result.dialog.contains("nothing due today") || result.dialog.contains("no tasks due"))
+        // Localized reply — compare against the resolved string, not English prose.
+        let expected = try LocalizationCatalogFixture.rendering(
+            ofKey: "intent.dialog.dueToday.none", inCatalogAt: "NowThis/Localizable.xcstrings")
+        #expect(result.spokenText == expected)
     }
 
     @Test("Returns tasks due today")
@@ -54,8 +57,8 @@ struct TasksDueTodayIntentTests {
         let intent = TasksDueTodayIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Today's task"))
-        #expect(!result.dialog.contains("Tomorrow's task"))
+        #expect(result.spokenText.contains("Today's task"))
+        #expect(!result.spokenText.contains("Tomorrow's task"))
     }
 
     @Test("Excludes completed tasks from today's list")
@@ -82,7 +85,7 @@ struct TasksDueTodayIntentTests {
         let intent = TasksDueTodayIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Active today"))
-        #expect(!result.dialog.contains("Done today"))
+        #expect(result.spokenText.contains("Active today"))
+        #expect(!result.spokenText.contains("Done today"))
     }
 }

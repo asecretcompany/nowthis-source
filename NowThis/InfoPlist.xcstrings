@@ -1,0 +1,200 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CFBundleDisplayName" : {
+      "comment" : "Bundle display name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "NSCalendarsFullAccessUsageDescription" : {
+      "comment" : "Info.plist NSCalendarsFullAccessUsageDescription",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis verwendet den Kalenderzugriff, um deine Aufgaben neben deinen Terminen anzuzeigen und Fälligkeitsdaten als Kalenderereignisse zu synchronisieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis uses calendar access to show your tasks alongside your schedule and sync task due dates as calendar events."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa el acceso al calendario para mostrar tus tareas junto a tu agenda y sincronizar las fechas de vencimiento como eventos del calendario."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis utilise l'accès au calendrier pour afficher vos tâches à côté de votre agenda et synchroniser les dates d'échéance sous forme d'événements."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa l'accesso al calendario per mostrare le tue attività accanto ai tuoi impegni e sincronizzare le date di scadenza come eventi del calendario."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis gebruikt toegang tot je agenda om je taken naast je afspraken te tonen en vervaldatums als agenda-activiteiten te synchroniseren."
+          }
+        }
+      }
+    },
+    "NSLocationAlwaysAndWhenInUseUsageDescription" : {
+      "comment" : "Info.plist NSLocationAlwaysAndWhenInUseUsageDescription",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis verwendet den Standort im Hintergrund, um dich an Aufgaben zu erinnern, wenn du an einem Ort ankommst oder ihn verlässt — auch bei geschlossener App."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis uses background location to notify you about tasks when you arrive at or leave a place, even when the app is closed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa la ubicación en segundo plano para avisarte de tus tareas cuando llegas a un lugar o lo abandonas, incluso con la app cerrada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis utilise la localisation en arrière-plan pour vous signaler vos tâches lorsque vous arrivez dans un lieu ou le quittez, même quand l'app est fermée."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa la posizione in background per avvisarti delle attività quando arrivi in un luogo o lo lasci, anche ad app chiusa."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis gebruikt je locatie op de achtergrond om je aan taken te herinneren wanneer je op een plek aankomt of vertrekt, ook als de app gesloten is."
+          }
+        }
+      }
+    },
+    "NSLocationWhenInUseUsageDescription" : {
+      "comment" : "Info.plist NSLocationWhenInUseUsageDescription",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis verwendet deinen Standort, um dich an Aufgaben zu erinnern, wenn du an einem Ort ankommst oder ihn verlässt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis uses your location to remind you about tasks when you arrive at or leave a place."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa tu ubicación para recordarte tus tareas cuando llegas a un lugar o lo abandonas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis utilise votre position pour vous rappeler vos tâches lorsque vous arrivez dans un lieu ou le quittez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa la tua posizione per ricordarti le attività quando arrivi in un luogo o lo lasci."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis gebruikt je locatie om je aan taken te herinneren wanneer je op een plek aankomt of vertrekt."
+          }
+        }
+      }
+    },
+    "NSCameraUsageDescription" : {
+      "comment" : "Info.plist NSCameraUsageDescription",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis uses the camera to add photos to your tasks. Synced photos are visible to everyone with access to the list."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis verwendet die Kamera, um Fotos zu deinen Aufgaben hinzuzufügen. Synchronisierte Fotos sind für alle sichtbar, die Zugriff auf die Liste haben."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa la cámara para añadir fotos a tus tareas. Las fotos sincronizadas son visibles para cualquiera que tenga acceso a la lista."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis utilise l’appareil photo pour ajouter des photos à vos tâches. Les photos synchronisées sont visibles par toute personne ayant accès à la liste."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis usa la fotocamera per aggiungere foto alle tue attività. Le foto sincronizzate sono visibili a chiunque abbia accesso all’elenco."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis gebruikt de camera om foto’s aan je taken toe te voegen. Gesynchroniseerde foto’s zijn zichtbaar voor iedereen met toegang tot de lijst."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

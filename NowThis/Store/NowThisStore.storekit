@@ -1,0 +1,314 @@
+{
+  "identifier": "A0000000",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "39.99",
+      "familyShareable": false,
+      "internalID": "LIFETIME0001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "NowThis Supporter – Lifetime",
+          "description": "Apple Watch: add, check off & app icons"
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "NowThis Supporter – dauerhaft",
+          "description": "Apple Watch: abhaken, hinzufügen & Icons"
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "NowThis Supporter – vitalicio",
+          "description": "Apple Watch: añadir, completar e iconos"
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "NowThis Supporter – à vie",
+          "description": "Apple Watch : cocher, ajouter et icônes"
+        },
+        {
+          "locale": "it",
+          "displayName": "NowThis Supporter – a vita",
+          "description": "Apple Watch: completa, aggiungi e icone"
+        },
+        {
+          "locale": "nl_NL",
+          "displayName": "NowThis Supporter – levenslang",
+          "description": "Apple Watch: afvinken, toevoegen & iconen"
+        }
+      ],
+      "productID": "com.asecretcompany.nowthis.pro",
+      "referenceName": "lifetime",
+      "type": "NonConsumable"
+    },
+    {
+      "displayPrice": "1.99",
+      "familyShareable": false,
+      "internalID": "TIPSMALL0001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "Small Tip",
+          "description": "Support NowThis development"
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "Kleiner Beitrag",
+          "description": "Unterstütze die Entwicklung von NowThis"
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Pequeño apoyo",
+          "description": "Apoya el desarrollo de NowThis"
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Petit soutien",
+          "description": "Soutenez le développement de NowThis"
+        },
+        {
+          "locale": "it",
+          "displayName": "Piccolo contributo",
+          "description": "Sostieni lo sviluppo di NowThis"
+        },
+        {
+          "locale": "nl_NL",
+          "displayName": "Kleine bijdrage",
+          "description": "Steun de ontwikkeling van NowThis"
+        }
+      ],
+      "productID": "com.asecretcompany.nowthis.tip.small",
+      "referenceName": "tipSmall",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "4.99",
+      "familyShareable": false,
+      "internalID": "TIPMEDIUM0001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "Medium Tip",
+          "description": "Support NowThis development"
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "Mittlerer Beitrag",
+          "description": "Unterstütze die Entwicklung von NowThis"
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Apoyo mediano",
+          "description": "Apoya el desarrollo de NowThis"
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Soutien moyen",
+          "description": "Soutenez le développement de NowThis"
+        },
+        {
+          "locale": "it",
+          "displayName": "Contributo medio",
+          "description": "Sostieni lo sviluppo di NowThis"
+        },
+        {
+          "locale": "nl_NL",
+          "displayName": "Gemiddelde bijdrage",
+          "description": "Steun de ontwikkeling van NowThis"
+        }
+      ],
+      "productID": "com.asecretcompany.nowthis.tip.medium",
+      "referenceName": "tipMedium",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "9.99",
+      "familyShareable": false,
+      "internalID": "TIPLARGE0001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "Large Tip",
+          "description": "Support NowThis development"
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "Großer Beitrag",
+          "description": "Unterstütze die Entwicklung von NowThis"
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Gran apoyo",
+          "description": "Apoya el desarrollo de NowThis"
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Grand soutien",
+          "description": "Soutenez le développement de NowThis"
+        },
+        {
+          "locale": "it",
+          "displayName": "Grande contributo",
+          "description": "Sostieni lo sviluppo di NowThis"
+        },
+        {
+          "locale": "nl_NL",
+          "displayName": "Grote bijdrage",
+          "description": "Steun de ontwikkeling van NowThis"
+        }
+      ],
+      "productID": "com.asecretcompany.nowthis.tip.large",
+      "referenceName": "tipLarge",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "19.99",
+      "familyShareable": false,
+      "internalID": "TIPEXTRA0001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "Extra Tip",
+          "description": "Support NowThis development"
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "Zusätzlicher Beitrag",
+          "description": "Unterstütze die Entwicklung von NowThis"
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Apoyo extra",
+          "description": "Apoya el desarrollo de NowThis"
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Soutien supplémentaire",
+          "description": "Soutenez le développement de NowThis"
+        },
+        {
+          "locale": "it",
+          "displayName": "Contributo extra",
+          "description": "Sostieni lo sviluppo di NowThis"
+        },
+        {
+          "locale": "nl_NL",
+          "displayName": "Extra bijdrage",
+          "description": "Steun de ontwikkeling van NowThis"
+        }
+      ],
+      "productID": "com.asecretcompany.nowthis.tip.extra",
+      "referenceName": "tipExtra",
+      "type": "Consumable"
+    }
+  ],
+  "settings": {},
+  "subscriptionGroups": [
+    {
+      "id": "NOWTHIS_SUPPORT",
+      "name": "NowThis Supporter",
+      "localizations": [],
+      "subscriptions": [
+        {
+          "displayPrice": "1.99",
+          "familyShareable": false,
+          "internalID": "MONTHLY0001",
+          "localizations": [
+            {
+              "locale": "en_US",
+              "displayName": "NowThis Supporter – Monthly",
+              "description": "Apple Watch: add, check off & app icons"
+            },
+            {
+              "locale": "de_DE",
+              "displayName": "NowThis Supporter – Monat",
+              "description": "Apple Watch: abhaken, hinzufügen & Icons"
+            },
+            {
+              "locale": "es_ES",
+              "displayName": "NowThis Supporter – mensual",
+              "description": "Apple Watch: añadir, completar e iconos"
+            },
+            {
+              "locale": "fr_FR",
+              "displayName": "NowThis Supporter – mensuel",
+              "description": "Apple Watch : cocher, ajouter et icônes"
+            },
+            {
+              "locale": "it",
+              "displayName": "NowThis Supporter – mensile",
+              "description": "Apple Watch: completa, aggiungi e icone"
+            },
+            {
+              "locale": "nl_NL",
+              "displayName": "NowThis Supporter – maand",
+              "description": "Apple Watch: afvinken, toevoegen & iconen"
+            }
+          ],
+          "productID": "com.asecretcompany.nowthis.pro.monthlyg",
+          "referenceName": "monthly",
+          "type": "RecurringSubscription",
+          "groupNumber": 1,
+          "subscriptionGroupID": "NOWTHIS_SUPPORT",
+          "recurringSubscriptionPeriod": "P1M",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "introductoryOffer": null,
+          "winBackOffers": []
+        },
+        {
+          "displayPrice": "9.99",
+          "familyShareable": false,
+          "internalID": "ANNUAL0001",
+          "localizations": [
+            {
+              "locale": "en_US",
+              "displayName": "NowThis Supporter – Annual",
+              "description": "Apple Watch: add, check off & app icons"
+            },
+            {
+              "locale": "de_DE",
+              "displayName": "NowThis Supporter – jährlich",
+              "description": "Apple Watch: abhaken, hinzufügen & Icons"
+            },
+            {
+              "locale": "es_ES",
+              "displayName": "NowThis Supporter – anual",
+              "description": "Apple Watch: añadir, completar e iconos"
+            },
+            {
+              "locale": "fr_FR",
+              "displayName": "NowThis Supporter – annuel",
+              "description": "Apple Watch : cocher, ajouter et icônes"
+            },
+            {
+              "locale": "it",
+              "displayName": "NowThis Supporter – annuale",
+              "description": "Apple Watch: completa, aggiungi e icone"
+            },
+            {
+              "locale": "nl_NL",
+              "displayName": "NowThis Supporter – jaar",
+              "description": "Apple Watch: afvinken, toevoegen & iconen"
+            }
+          ],
+          "productID": "com.asecretcompany.nowthis.pro.annualg",
+          "referenceName": "annual",
+          "type": "RecurringSubscription",
+          "groupNumber": 1,
+          "subscriptionGroupID": "NOWTHIS_SUPPORT",
+          "recurringSubscriptionPeriod": "P1Y",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "introductoryOffer": null,
+          "winBackOffers": []
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

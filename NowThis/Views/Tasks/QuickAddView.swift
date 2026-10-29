@@ -62,9 +62,19 @@ struct QuickAddView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
-            .navigationTitle("New Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Drawn as a principal item rather than `.navigationTitle` so it can
+                // scale. Inline titles truncate instead of shrinking, and German put
+                // "Neue Aufgabe" between "Abbrechen" and "Hinzufügen" — it rendered
+                // "Neue Aufg…".
+                ToolbarItem(placement: .principal) {
+                    Text("New Task")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
@@ -113,12 +123,15 @@ struct QuickAddView: View {
 
         task.recurrenceRule = recurrenceRule
 
-        // Resolve list: parsed #list name or the default
-        if let listName = parseResult.listName {
-            task.taskList = resolveTaskList(named: listName) ?? defaultList
-        } else {
-            task.taskList = defaultList
-        }
+        // Resolve list: parsed #list name, else the list this sheet was opened from,
+        // else the user's default. `defaultList` was captured when the sheet was
+        // presented and sync may have deleted it since, so it is liveness-checked
+        // before use — a dead list here would otherwise be assigned to the new task.
+        let liveDefault = defaultList.flatMap { $0.modelContext != nil ? $0 : nil }
+        let tokenList = parseResult.listName.flatMap { resolveTaskList(named: $0) }
+        task.taskList = NewTaskDefaults.resolveListAdopting(
+            explicit: tokenList ?? liveDefault, in: modelContext
+        )
 
         // Resolve tags: create-or-find for each @tag
         for tagName in parseResult.tagNames {
@@ -136,11 +149,14 @@ struct QuickAddView: View {
 
         task.isDirty = true
         modelContext.insert(task)
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
         if task.reminderOffset != nil {
             ReminderScheduler.requestPermissionIfNeeded()
-            ReminderScheduler.scheduleReminder(for: task)
         }
+        // Unconditional: a task with a due date and no reminder still needs its "now overdue"
+        // notification, and that notification is the only thing that moves the app icon badge
+        // while the app is closed.
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
         syncScheduler.syncAfterChange(modelContext: modelContext)
 
         // Auto-sync to calendar if enabled
@@ -254,12 +270,20 @@ private struct QuickOptionsBar: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                PriorityPicker(priority: $priority)
-                DueDateToggle(hasDueDate: $hasDueDate, dueDate: $dueDate)
-                RepeatToggle(recurrenceRule: $recurrenceRule)
-                Spacer()
+            // Scrolls horizontally rather than compressing. The three chips fit side by
+            // side in English; in German "Fälligkeitsdatum" and "Wiederholen" do not, and
+            // a plain HStack squeezed each capsule until SwiftUI hyphen-broke the labels
+            // across two and three lines ("Wie-der-holen") at three different heights.
+            // Same pattern the filter row on the task list already uses.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    PriorityPicker(priority: $priority)
+                    DueDateToggle(hasDueDate: $hasDueDate, dueDate: $dueDate)
+                    RepeatToggle(recurrenceRule: $recurrenceRule)
+                }
+                .padding(.horizontal, 1)   // keeps the capsule glass edges from clipping
             }
+            .scrollBounceBehavior(.basedOnSize)
 
             if hasDueDate {
                 DatePicker(
@@ -293,6 +317,7 @@ private struct PriorityPicker: View {
         } label: {
             Label("Priority", systemImage: priorityIcon)
                 .font(.subheadline)
+                .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .glassBackground(in: Capsule())
@@ -319,11 +344,14 @@ private struct DueDateToggle: View {
         } label: {
             Label("Due Date", systemImage: hasDueDate ? "calendar.badge.checkmark" : "calendar")
                 .font(.subheadline)
+                .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .glassBackground(in: Capsule())
         }
-        .accessibilityLabel("Due date")
+        .accessibilityLabel(String(localized: "quickAdd.a11y.dueDate",
+                                   defaultValue: "Due date",
+                                   comment: "VoiceOver label for the due-date chip in Quick Add. Spoken, not shown — sentence case, unlike the visible 'Due Date' sort option and intent parameter."))
         .accessibilityValue(hasDueDate ? "Set" : "Not set")
         .accessibilityHint(hasDueDate ? "Double tap to remove due date" : "Double tap to set a due date")
     }
@@ -338,7 +366,7 @@ private struct RepeatToggle: View {
     private var displayText: String {
         guard let rrule = recurrenceRule,
               let rule = RecurrenceRule.parse(rrule) else {
-            return "Repeat"
+            return String(localized: "quickadd.recurrence.repeat", defaultValue: "Repeat", comment: "Label on the Quick Add recurrence chip before a repeat rule has been set; tapping it opens the recurrence picker")
         }
         return rule.displayText
     }
@@ -349,6 +377,7 @@ private struct RepeatToggle: View {
         } label: {
             Label(displayText, systemImage: "repeat")
                 .font(.subheadline)
+                .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .glassBackground(in: Capsule())
@@ -357,7 +386,7 @@ private struct RepeatToggle: View {
             RecurrencePickerSheet(recurrenceRule: $recurrenceRule)
         }
         .accessibilityLabel("Repeat")
-        .accessibilityValue(hasRecurrence ? displayText : "Never")
+        .accessibilityValue(hasRecurrence ? displayText : String(localized: "quickadd.recurrence.never", defaultValue: "Never", comment: "VoiceOver value for the Quick Add recurrence chip when no repeat rule is set; the other branch, displayText, is an already-localized description of the active repeat rule"))
         .accessibilityHint("Double tap to set a recurrence schedule")
     }
 }

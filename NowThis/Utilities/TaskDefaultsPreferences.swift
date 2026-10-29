@@ -15,6 +15,13 @@ struct TaskDefaultsPreferences {
     static let allDayReminderMinutesKey = "allDayReminderMinutes"
     static let dueTimeMinutesKey = "defaultDueTimeMinutes"
 
+    /// The list new tasks go into when the user isn't already viewing one.
+    static let defaultListIDKey = "defaultNewTaskListID"
+
+    /// What ``defaultListIDKey`` was called when it only governed Siri. Read once
+    /// per install by ``defaultListID`` and copied forward; never written.
+    static let legacySiriListIDKey = "defaultSiriListID"
+
     /// Default all-day reminder time: 9:00 AM, expressed as minutes since local
     /// midnight. Matches the platform convention (Apple Reminders defaults to 9 AM).
     static let defaultAllDayReminderMinutes = 540
@@ -48,6 +55,38 @@ struct TaskDefaultsPreferences {
             return defaultAllDayReminderMinutes
         }
         return defaults.integer(forKey: allDayReminderMinutesKey)
+    }
+
+    /// The stored default-list ID, or `nil` when the user has never chosen one.
+    ///
+    /// Migrates ``legacySiriListIDKey`` forward on first read, so a user who set a
+    /// Siri list before this preference was widened keeps it.
+    ///
+    /// Empty strings count as absent on both keys, and that is not defensiveness:
+    /// the picker this replaced tagged its "First List" row with `""`, so a user who
+    /// deliberately chose the abstract option has an empty string stored rather than
+    /// a missing key. A `nil` check alone cannot tell "opted out" from "never set",
+    /// and both have to mean "pick one for me".
+    static var defaultListID: String? {
+        let defaults = UserDefaults.standard
+        if let current = defaults.string(forKey: defaultListIDKey), !current.isEmpty {
+            return current
+        }
+        guard let legacy = defaults.string(forKey: legacySiriListIDKey), !legacy.isEmpty else {
+            return nil
+        }
+        defaults.set(legacy, forKey: defaultListIDKey)
+        return legacy
+    }
+
+    /// Stores the default-list ID. `nil` clears it, returning the app to "adopt one".
+    static func setDefaultListID(_ id: String?) {
+        let defaults = UserDefaults.standard
+        if let id, !id.isEmpty {
+            defaults.set(id, forKey: defaultListIDKey)
+        } else {
+            defaults.removeObject(forKey: defaultListIDKey)
+        }
     }
 
     /// Time-of-day, in minutes since local midnight, stamped onto a new task's due

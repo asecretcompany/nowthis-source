@@ -1,43 +1,80 @@
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
 # === Xcode / XcodeGen ===
+# NowThis.xcodeproj is generated from project.yml by `xcodegen generate`.
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
 DerivedData/
-*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
-
-# === Build artifacts ===
 build/
+dd/
+*.xcresult
+*.xcarchive
 *.ipa
-*.dSYM.zip
 *.dSYM
+*.dSYM.zip
 
 # === Swift Package Manager ===
 .build/
 .swiftpm/
 Package.resolved
 
-# === macOS ===
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-
 # === Local configuration ===
+# Copy Local.xcconfig.template to Local.xcconfig and set your own team ID.
 Local.xcconfig
+*.local
 
-# === Internal / product docs (keep strategy, roadmaps, pricing out of the public repo) ===
-docs/
-
-# === AI coding tools ===
-.gemini/
+# === Claude Code ===
 .claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json
+
+# === Codex ===
+.codex/
+.agents/
+AGENTS.md
+AGENTS.override.md
+
+# === Other AI coding tools ===
+.gemini/
+GEMINI.md
 .cursor/
+.cursorrules
 .aider*
 .copilot/
-GEMINI.md
-CLAUDE.md
+.windsurf/
+.windsurfrules
+.continue/
+.goose/
+.goose-reviews/
+.superpowers/
 
-# === IDE ===
+# === Development-only files (not part of the public source) ===
+docs/
+fastlane/
+marketing/
+Translations/
+RELEASE_NOTES.md
+TRANSLATION.md
+*PRD.md
+*TRD.md
+homescreen_check.png
+__pycache__/
+*.pyc
+
+# === IDE / editor ===
 .idea/
 .vscode/
 *.swp
@@ -46,10 +83,14 @@ CLAUDE.md
 *.orig
 *.bak
 
-# === Secrets & env ===
+# === Secrets & signing ===
+.env
+.env.*
 *.p8
 *.p12
 *.key
 *.pem
-.env
-.env.*
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.developerprofile

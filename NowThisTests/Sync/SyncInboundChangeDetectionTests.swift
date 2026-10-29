@@ -72,17 +72,26 @@ struct SyncInboundChangeDetectionTests {
         #expect(uidMap["srv-new-1"] != nil)
     }
 
-    @Test("An unchanged (older remote) task is not reported as a change")
+    /// The etag is the whole test for "did this resource change". A re-fetch of
+    /// the copy we already hold must not be reported as an inbound change, or
+    /// every periodic forced pull would rebuild the visible list.
+    ///
+    /// The timestamps here are deliberately lopsided — the local copy is stamped
+    /// ~2033 against 2001 on the wire — to pin that they are *not* consulted.
+    /// LAST-MODIFIED is written by whichever client touched the task last, so
+    /// comparing it against ours compares two unrelated clocks; a task completed
+    /// in Nextcloud stayed open on the device whenever that comparison went the
+    /// wrong way. Matching etags, not the timestamp, are why this reports nothing.
+    @Test("A re-fetch of the copy we already hold is not reported as a change")
     func unchangedTaskReportsNoChange() throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let list = makeList(in: context)
         let engine = SyncEngine()
 
-        // Local copy is already newer than the remote payload (server is behind):
-        // ~2033 locally vs. 2001 on the wire below.
         let local = TaskItem(uid: "srv-1", title: "Local")
         local.lastModifiedDate = Date(timeIntervalSince1970: 2_000_000_000)
+        local.etag = "etag-1"
         local.isDirty = false
         local.taskList = list
         context.insert(local)
@@ -99,6 +108,7 @@ struct SyncInboundChangeDetectionTests {
         )
 
         #expect(changed == false)
+        #expect(local.title == "Local", "An unchanged etag must not re-apply the remote copy")
     }
 
     @Test("A newer remote edit of an existing task is reported as a change")

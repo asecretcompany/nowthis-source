@@ -41,7 +41,10 @@ struct ErrorBannerModifier: ViewModifier {
             .alert("Error", isPresented: $errorState.isPresented) {
                 Button("OK") { errorState.dismiss() }
             } message: {
-                Text(errorState.currentError ?? "An unknown error occurred.")
+                Text(errorState.currentError ?? String(
+                    localized: "error.unknown",
+                    defaultValue: "An unknown error occurred.",
+                    comment: "Message body of the global error alert shown when no more specific error message is available."))
             }
     }
 }

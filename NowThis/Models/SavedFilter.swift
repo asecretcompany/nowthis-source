@@ -79,10 +79,16 @@ enum FilterLogic: String, Codable, CaseIterable {
     case and = "AND"
     case or = "OR"
 
-    var label: String {
+    /// User-facing label. The rawValue ("AND"/"OR") is persisted in
+    /// `SavedFilter.logicOperator` and must stay English.
+    var displayName: String {
         switch self {
-        case .and: return "All of"
-        case .or: return "Any of"
+        case .and:
+            return String(localized: "filter.logic.and", defaultValue: "All of",
+                          comment: "Saved filter: a task must match every rule. Reads as the start of 'All of these rules'.")
+        case .or:
+            return String(localized: "filter.logic.or", defaultValue: "Any of",
+                          comment: "Saved filter: a task must match at least one rule. Reads as the start of 'Any of these rules'.")
         }
     }
 }
@@ -108,8 +114,12 @@ struct FilterRule: Codable, Identifiable, Hashable {
             return compare(taskStatus, to: value.lowercased())
 
         case .priority:
-            let taskPri = task.priority.displayName.lowercased()
-            return compare(taskPri, to: value.lowercased())
+            // Compare stable tokens, never display names. `value` was written to disk by a
+            // build that may have been running any language; `TaskPriority(filterToken:)`
+            // accepts both today's token and the legacy English spellings.
+            guard let wanted = TaskPriority(filterToken: value) else { return false }
+            let taskToken = task.priority.filterToken
+            return compare(taskToken, to: wanted.filterToken)
 
         case .tag:
             let tagNames = task.tags.map { $0.name.lowercased() }
@@ -170,6 +180,37 @@ enum FilterField: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// User-facing label. The rawValue is Codable-encoded into `SavedFilter.rulesData`
+    /// on disk and must stay English.
+    var displayName: String {
+        switch self {
+        case .status:
+            return String(localized: "filter.field.status", defaultValue: "Status",
+                          comment: "Saved filter field: the task's status (Needs Action / In Progress / Completed / Cancelled).")
+        case .priority:
+            return String(localized: "filter.field.priority", defaultValue: "Priority",
+                          comment: "Saved filter field: the task's High/Medium/Low priority.")
+        case .tag:
+            return String(localized: "filter.field.tag", defaultValue: "Tag",
+                          comment: "Saved filter field: one of the task's tags. Singular.")
+        case .list:
+            return String(localized: "filter.field.list", defaultValue: "List",
+                          comment: "Saved filter field: which list the task is in. 'List' is the app's word for a CalDAV collection.")
+        case .dueDateBefore:
+            return String(localized: "filter.field.dueBefore", defaultValue: "Due Before",
+                          comment: "Saved filter field: the task is due earlier than a given date.")
+        case .dueDateAfter:
+            return String(localized: "filter.field.dueAfter", defaultValue: "Due After",
+                          comment: "Saved filter field: the task is due later than a given date.")
+        case .hasDueDate:
+            return String(localized: "filter.field.hasDueDate", defaultValue: "Has Due Date",
+                          comment: "Saved filter field: whether the task has a due date at all.")
+        case .title:
+            return String(localized: "filter.field.title", defaultValue: "Title",
+                          comment: "Saved filter field: the task's name.")
+        }
+    }
+
     var icon: String {
         switch self {
         case .status: return "circle.dashed"
@@ -207,4 +248,23 @@ enum FilterComparison: String, Codable, CaseIterable, Identifiable {
     case notContains = "does not contain"
 
     var id: String { rawValue }
+
+    /// User-facing label. The rawValue is Codable-encoded into `SavedFilter.rulesData`
+    /// on disk and must stay English.
+    var displayName: String {
+        switch self {
+        case .equals:
+            return String(localized: "filter.comparison.equals", defaultValue: "is",
+                          comment: "Saved filter comparison, read as the middle of a sentence: '<field> is <value>'. Lowercase, no punctuation.")
+        case .notEquals:
+            return String(localized: "filter.comparison.notEquals", defaultValue: "is not",
+                          comment: "Saved filter comparison: '<field> is not <value>'. Lowercase, no punctuation.")
+        case .contains:
+            return String(localized: "filter.comparison.contains", defaultValue: "contains",
+                          comment: "Saved filter comparison: '<field> contains <value>' — substring match. Lowercase, no punctuation.")
+        case .notContains:
+            return String(localized: "filter.comparison.notContains", defaultValue: "does not contain",
+                          comment: "Saved filter comparison: '<field> does not contain <value>'. Lowercase, no punctuation.")
+        }
+    }
 }

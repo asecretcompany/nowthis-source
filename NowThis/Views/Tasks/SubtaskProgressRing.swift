@@ -2,15 +2,19 @@ import SwiftUI
 
 /// Circular progress ring showing aggregated subtask completion.
 ///
-/// Recursively counts all descendant subtasks (not just direct children)
-/// and displays `completed / total` as a filled ring with a center label.
+/// Displays `completed / total` as a filled ring with a center label. The counts
+/// are aggregated across all descendants (not just direct children) by
+/// `TaskRowData`, which snapshots them while the task is still valid — the ring
+/// never touches a live `PersistentModel`, so an account-delete cascade can't
+/// invalidate what it is rendering.
 ///
 /// The ring uses a green fill for completed proportion and a gray track
 /// for remaining. When all subtasks are complete, a checkmark replaces
 /// the fraction label.
 struct SubtaskProgressRing: View {
 
-    let task: TaskItem
+    let completed: Int
+    let total: Int
 
     /// Ring stroke width.
     private let lineWidth: CGFloat = 3
@@ -19,7 +23,7 @@ struct SubtaskProgressRing: View {
     private let size: CGFloat = 28
 
     var body: some View {
-        let stats = aggregatedProgress(for: task)
+        let stats = Progress(completed: completed, total: total)
 
         ZStack {
             // Background track
@@ -44,15 +48,16 @@ struct SubtaskProgressRing: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.green)
             } else {
-                Text("\(stats.completed)")
+                Text(stats.completed, format: .number)
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            "\(stats.completed) of \(stats.total) subtask\(stats.total == 1 ? "" : "s") completed"
-        )
+        .accessibilityLabel(String(
+            localized: "subtasks.a11y.progress",
+            defaultValue: "\(stats.completed) of \(stats.total) subtasks completed",
+            comment: "VoiceOver label for the subtask progress ring. First placeholder is how many subtasks are done, second is the total. The second one drives the plural."))
     }
 
     // MARK: - Progress Calculation
@@ -72,31 +77,4 @@ struct SubtaskProgressRing: View {
         }
     }
 
-    /// Recursively counts completed and total subtasks across the full hierarchy.
-    ///
-    /// Only counts non-deleted subtasks. A subtask with its own subtasks
-    /// contributes its own status AND its children's counts.
-    private func aggregatedProgress(for task: TaskItem) -> Progress {
-        let activeSubtasks = task.subtasks.filter { !$0.isDeletedLocally }
-        guard !activeSubtasks.isEmpty else {
-            return Progress(completed: 0, total: 0)
-        }
-
-        var completed = 0
-        var total = 0
-
-        for subtask in activeSubtasks {
-            total += 1
-            if subtask.status == .completed {
-                completed += 1
-            }
-
-            // Recurse into children
-            let childProgress = aggregatedProgress(for: subtask)
-            completed += childProgress.completed
-            total += childProgress.total
-        }
-
-        return Progress(completed: completed, total: total)
-    }
 }

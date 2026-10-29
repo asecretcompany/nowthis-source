@@ -7,9 +7,9 @@ import Foundation
 /// categories a person can actually act on — wrong password vs. offline vs.
 /// no permission — each with plain-language guidance. It drives the in-app
 /// `SyncFailureBanner` and the Settings status line.
-struct SyncFailure: Equatable {
+struct SyncFailure: Equatable, Sendable {
 
-    enum Category {
+    enum Category: Sendable {
         /// Wrong username/password, or no credentials — the user must re-auth.
         case authentication
         /// Signed in, but the account lacks permission to this calendar (403).
@@ -31,6 +31,15 @@ struct SyncFailure: Equatable {
     /// Plain-language, actionable guidance to show the user.
     let message: String
 
+    /// The HTTP status only; never store response bodies, URLs or credentials.
+    let httpStatusCode: Int?
+
+    init(category: Category, message: String, httpStatusCode: Int? = nil) {
+        self.category = category
+        self.message = message
+        self.httpStatusCode = httpStatusCode
+    }
+
     /// `true` when the user can resolve this themselves by editing their
     /// account in Settings — drives the banner's "tap to fix" affordance.
     var isUserActionable: Bool {
@@ -47,8 +56,36 @@ struct SyncFailure: Equatable {
     /// Translates a thrown error into a user-facing failure, or `nil` if the
     /// error is a cancellation (an intentional stop, not a real failure).
     static func from(_ error: Error) -> SyncFailure? {
+        guard let failure = classify(error) else { return nil }
+        return SyncFailure(category: failure.category, message: failure.message,
+                           httpStatusCode: httpStatus(for: error))
+    }
+
+    private static func httpStatus(for error: Error) -> Int? {
+        if let retry = error as? HTTPRetryError { return retry.statusCode }
+        if let sync = error as? SyncError, case .calDAVError(let underlying) = sync {
+            return httpStatus(for: underlying)
+        }
+        guard let dav = error as? CalDAVError else { return nil }
+        switch dav {
+        case .unauthorized: return 401
+        case .forbidden: return 403
+        case .notFound: return 404
+        case .conflict: return 412
+        case .rateLimited: return 429
+        case .serverError(let status): return status
+        default: return nil
+        }
+    }
+
+    private static func classify(_ error: Error) -> SyncFailure? {
         guard !isCancellation(error) else { return nil }
 
+        if error is TaskPhotoAttachmentError {
+            return SyncFailure(category: .unknown, message: photoMessage)
+        }
+        if error is RetryDeferredError { return SyncFailure(category: .busy, message: busyMessage) }
+        if error is HTTPRetryError { return SyncFailure(category: .server, message: serverMessage) }
         if let syncError = error as? SyncError {
             switch syncError {
             case .calDAVError(let calDAVError):
@@ -104,10 +141,12 @@ struct SyncFailure: Equatable {
 
     // MARK: - Messages
 
+    static let photoMessage = String(localized:
+        "A task photo could not be synced because its attachment is invalid or too large. Ask the list owner to replace it.")
     static let authMessage = String(localized:
         "Can't sign in — your username or password may be wrong. Tap to update your account in Settings.")
     static let accessDeniedMessage = String(localized:
-        "Signed in, but your account doesn't have access to this calendar. Contact your server administrator.")
+        "Signed in, but your account doesn't have access to this list. Contact your server administrator.")
     static let connectionMessage = String(localized:
         "Can't reach the server. Check your internet connection.")
     static let serverMessage = String(localized:
@@ -115,7 +154,7 @@ struct SyncFailure: Equatable {
     static let busyMessage = String(localized:
         "The server is busy. We'll try again shortly.")
     static let configurationMessage = String(localized:
-        "Couldn't find your calendars. Check your server address in Settings.")
+        "Couldn't find your lists. Check your server address in Settings.")
     static let unknownMessage = String(localized:
         "Sync failed. Pull down to refresh and try again.")
 }

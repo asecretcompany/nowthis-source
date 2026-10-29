@@ -19,13 +19,14 @@ struct MigrationPlanTests {
         #expect(container.schema.entities.count > 0)
     }
 
-    @Test("Current schema includes all 7 model types")
+    @Test("Current schema includes all 8 model types")
     func schemaIncludesAllModels() {
         let modelTypes = SchemaV2.models
-        #expect(modelTypes.count == 7)
+        #expect(modelTypes.count == 8)
 
         let names = modelTypes.map { String(describing: $0) }
         #expect(names.contains("TaskItem"))
+        #expect(names.contains("TaskPhoto"))
         #expect(names.contains("TaskList"))
         #expect(names.contains("JournalEntry"))
         #expect(names.contains("Tag"))

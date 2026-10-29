@@ -31,6 +31,9 @@ final class SyncMetadata {
     /// Timestamp of the last successful full sync pass.
     var lastFullSync: Date?
 
+    /// Folder binding for durable photo cleanup; unrelated sync metadata leaves it nil.
+    var photoFolderID: String?
+
     // MARK: - Initializer
 
     init(

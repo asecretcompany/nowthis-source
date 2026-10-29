@@ -19,6 +19,14 @@ struct CreateTaskIntentDefaultListTests {
         )
     }
 
+    /// Clears both the current and legacy keys. `UserDefaults` is shared across the
+    /// whole test host, and the resolver now *writes* the list it adopts — so a test
+    /// that failed midway used to leave its choice behind for whatever ran next.
+    private func clearStoredList() {
+        UserDefaults.standard.removeObject(forKey: TaskDefaultsPreferences.defaultListIDKey)
+        UserDefaults.standard.removeObject(forKey: TaskDefaultsPreferences.legacySiriListIDKey)
+    }
+
     @Test("Uses configured default list instead of first alphabetical list")
     @MainActor
     func usesConfiguredDefaultList() async throws {
@@ -34,10 +42,11 @@ struct CreateTaskIntentDefaultListTests {
         context.insert(work)
         try context.save()
 
-        // Configure "Work" as the default Siri list
-        UserDefaults.standard.set(work.id, forKey: "defaultSiriListID")
+        // Configure "Work" as the default list
+        TaskDefaultsPreferences.setDefaultListID(work.id)
+        defer { clearStoredList() }
 
-        var intent = CreateTaskIntent()
+        let intent = CreateTaskIntent()
         intent.taskTitle = "Buy coffee beans"
         // list is nil — should use the configured default, not alphabetical first
         let result = try await intent.performWithContainer(container)
@@ -45,10 +54,7 @@ struct CreateTaskIntentDefaultListTests {
         let tasks = try context.fetch(FetchDescriptor<TaskItem>())
         #expect(tasks.count == 1)
         #expect(tasks.first?.taskList?.id == work.id)
-        #expect(result.dialog.contains("Work"))
-
-        // Cleanup
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        #expect(result.spokenText.contains("Work"))
     }
 
     @Test("Falls back to first list when configured default list is deleted")
@@ -64,9 +70,10 @@ struct CreateTaskIntentDefaultListTests {
         try context.save()
 
         // Point to a non-existent list ID
-        UserDefaults.standard.set("deleted-list-id-that-does-not-exist", forKey: "defaultSiriListID")
+        TaskDefaultsPreferences.setDefaultListID("deleted-list-id-that-does-not-exist")
+        defer { clearStoredList() }
 
-        var intent = CreateTaskIntent()
+        let intent = CreateTaskIntent()
         intent.taskTitle = "Fallback task"
         let result = try await intent.performWithContainer(container)
 
@@ -74,10 +81,7 @@ struct CreateTaskIntentDefaultListTests {
         #expect(tasks.count == 1)
         // Should fall back to first alphabetical list
         #expect(tasks.first?.taskList?.id == alpha.id)
-        #expect(result.dialog.contains("Alpha"))
-
-        // Cleanup
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        #expect(result.spokenText.contains("Alpha"))
     }
 
     @Test("Falls back to first list when no default is configured")
@@ -93,9 +97,10 @@ struct CreateTaskIntentDefaultListTests {
         try context.save()
 
         // Ensure no default is set
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = CreateTaskIntent()
+        let intent = CreateTaskIntent()
         intent.taskTitle = "No default task"
         let result = try await intent.performWithContainer(container)
 
@@ -103,6 +108,6 @@ struct CreateTaskIntentDefaultListTests {
         #expect(tasks.count == 1)
         // Should use first alphabetical list (existing behavior)
         #expect(tasks.first?.taskList?.id == alpha.id)
-        #expect(result.dialog.contains("Alpha"))
+        #expect(result.spokenText.contains("Alpha"))
     }
 }

@@ -66,7 +66,7 @@ private struct HeaderSection: View {
                 .fontWeight(.semibold)
                 .multilineTextAlignment(.center)
 
-            Text("You can switch anytime in Settings.")
+            Text("You can add a Nextcloud account later in Settings.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

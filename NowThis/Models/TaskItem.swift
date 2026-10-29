@@ -98,6 +98,19 @@ final class TaskItem {
     @Relationship(inverse: \JournalEntry.associatedTasks)
     var associatedJournals: [JournalEntry] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \TaskPhoto.task)
+    var photos: [TaskPhoto] = []
+
+    /// Unsupported ATTACH properties retained verbatim when editing the task.
+    var opaqueAttachmentLines: [String]?
+    /// nil identifies a task imported before this release learned about ATTACH.
+    var attachmentStateKnown: Bool?
+
+    var opaqueAttachments: [String] {
+        get { opaqueAttachmentLines ?? [] }
+        set { opaqueAttachmentLines = newValue }
+    }
+
     // MARK: - Extended Properties
 
     /// VTODO LOCATION — free text location name.
@@ -136,6 +149,16 @@ final class TaskItem {
     /// When true, the sync engine will issue a DELETE on next push,
     /// then hard-delete from SwiftData on server confirmation.
     var isDeletedLocally: Bool = false
+
+    /// The CalDAV href this task occupied before it was moved to another list.
+    /// Non-nil means the server still holds a stale copy at that path, awaiting
+    /// its DELETE. See `TaskMover`.
+    var pendingMoveFromHref: String?
+
+    /// `TaskList.id` of the collection `pendingMoveFromHref` lives in. The DELETE
+    /// needs the *source* account's server and credentials, which need not be the
+    /// destination's.
+    var pendingMoveFromListID: String?
 
     /// Timestamp of the last successful sync for this item.
     var lastSyncDate: Date?
@@ -191,9 +214,16 @@ final class TaskItem {
     }
 
     /// Raw integer priority (0-9) for iCalendar serialization.
+    ///
+    /// The setter maps the server's full RFC-5545 range through
+    /// `TaskPriority.fromRFC5545`, which is what collapses 1–4 to `.high` and
+    /// 6–9 to `.low`. `TaskPriority(rawValue:)` accepts only the four tier
+    /// values themselves (0/1/5/9), so an inbound `PRIORITY:3` — Nextcloud's
+    /// picker writes the whole 1–9 range, as does any other CalDAV client —
+    /// fell through to `.none` and the server's priority appeared to vanish.
     var priorityRaw: Int {
         get { priority.rawValue }
-        set { priority = TaskPriority(rawValue: newValue) ?? TaskPriority.none }
+        set { priority = TaskPriority.fromRFC5545(newValue) }
     }
 
     // MARK: - Initializer
@@ -207,6 +237,7 @@ final class TaskItem {
         status: TaskStatus = .needsAction
     ) {
         self.id = id
+        self.attachmentStateKnown = true
         self.uid = uid
         self.title = title
         self.descriptionText = descriptionText
@@ -222,4 +253,10 @@ final class TaskItem {
         self.percentComplete = 0
         self.isLocalOnly = true
     }
+    var photoAttachments: [TaskPhotoAttachment] {
+        photos.filter { $0.pendingOperation != "remove" }
+            .sorted { $0.sortOrder == $1.sortOrder ? $0.photoID < $1.photoID : $0.sortOrder < $1.sortOrder }
+            .map(\.attachment)
+    }
+
 }

@@ -1,5 +1,14 @@
-# Set your Apple Developer Team ID here.
-# Copy this file to Local.xcconfig and fill in your team ID.
-# Local.xcconfig is git-ignored and will not be committed.
+// Local, machine-specific build settings. NOT tracked by git.
+//
+// Copy this file to `Local.xcconfig` and fill in your own values, then run
+// `xcodegen generate`. `Local.xcconfig` is git-ignored so a personal Apple
+// Developer Team ID never reaches a commit — this repository is mirrored to
+// the public `nowthis-source` repository, and project.yml goes with it.
+//
+//     cp Local.xcconfig.template Local.xcconfig
+//
+// Leaving DEVELOPMENT_TEAM empty is supported: Xcode falls back to manual
+// team selection in Signing & Capabilities, which is what a contributor
+// building for their own device wants anyway.
 
 DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE

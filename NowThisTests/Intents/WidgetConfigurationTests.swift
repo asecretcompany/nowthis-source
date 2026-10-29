@@ -51,7 +51,12 @@ struct WidgetConfigurationTests {
         )
 
         #expect(result.tasks.count == 2)
-        #expect(result.displayName == "All Lists")
+        // Resolved through the app bundle, not hardcoded English: this assertion compared
+        // runtime output to "All Lists" and failed as "Alle Listen" the first time the
+        // suite was run on a German simulator.
+        let expected = try LocalizationCatalogFixture.rendering(
+            ofKey: "widget.header.allLists", inCatalogAt: "NowThis/Localizable.xcstrings")
+        #expect(result.displayName == expected)
     }
 
     // MARK: - Single list filter

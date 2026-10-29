@@ -18,14 +18,6 @@ struct RecurrenceRule {
 
         var id: String { rawValue }
 
-        var displayName: String {
-            switch self {
-            case .daily: return "Daily"
-            case .weekly: return "Weekly"
-            case .monthly: return "Monthly"
-            case .yearly: return "Yearly"
-            }
-        }
     }
 
     enum Weekday: String, CaseIterable, Identifiable {
@@ -39,16 +31,18 @@ struct RecurrenceRule {
 
         var id: String { rawValue }
 
-        var shortName: String {
-            switch self {
-            case .monday: return "Mon"
-            case .tuesday: return "Tue"
-            case .wednesday: return "Wed"
-            case .thursday: return "Thu"
-            case .friday: return "Fri"
-            case .saturday: return "Sat"
-            case .sunday: return "Sun"
-            }
+        /// The abbreviated weekday name in the reader's language.
+        ///
+        /// **Resolved by deletion, not by translation.** These were seven hardcoded English
+        /// literals — `"Mon"`…`"Sun"` — which would have needed seven keys × five languages and
+        /// would then have disagreed with `CalendarMonthView`, which already reads its headers
+        /// from `Calendar`. Foundation ships every locale's weekday names; asking for them is
+        /// both correct and less code.
+        ///
+        /// `shortWeekdaySymbols` is indexed 0…6 from **Sunday**, which is what `calendarWeekday`
+        /// already numbers 1…7 from.
+        func shortName(in calendar: Calendar = .current) -> String {
+            calendar.shortWeekdaySymbols[calendarWeekday - 1]
         }
 
         var calendarWeekday: Int {
@@ -134,30 +128,6 @@ struct RecurrenceRule {
             parts.append("UNTIL=\(formatted)")
         }
         return parts.joined(separator: ";")
-    }
-
-    // MARK: - Display
-
-    /// Human-readable description of the recurrence.
-    var displayText: String {
-        var text: String
-        if interval == 1 {
-            text = frequency.displayName
-        } else {
-            switch frequency {
-            case .daily: text = "Every \(interval) days"
-            case .weekly: text = "Every \(interval) weeks"
-            case .monthly: text = "Every \(interval) months"
-            case .yearly: text = "Every \(interval) years"
-            }
-        }
-
-        if !byDay.isEmpty && frequency == .weekly {
-            let dayNames = byDay.map(\.shortName).joined(separator: ", ")
-            text += " on \(dayNames)"
-        }
-
-        return text
     }
 
     // MARK: - Next Occurrence

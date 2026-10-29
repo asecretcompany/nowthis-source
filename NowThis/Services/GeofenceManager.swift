@@ -1,5 +1,6 @@
 @preconcurrency import CoreLocation
 import UserNotifications
+import UIKit
 import SwiftData
 import os
 
@@ -158,6 +159,7 @@ final class GeofenceManager: NSObject, ObservableObject {
 
     /// Requests notification permission for geofence alerts.
     func requestNotificationPermission() {
+        guard NotificationPrompt.isAllowed(applicationIsActive: UIApplication.shared.applicationState == .active) else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { [logger] granted, error in
             if let error {
                 logger.error("Notification permission error: \(error.localizedDescription)")
@@ -170,10 +172,20 @@ final class GeofenceManager: NSObject, ObservableObject {
         content.sound = .default
 
         // Try to include task title from the region identifier
-        content.title = entering ? "📍 You've arrived" : "📍 You're leaving"
+        content.title = entering
+            ? String(localized: "notification.geofence.arrived.title",
+                     defaultValue: "📍 You've arrived",
+                     comment: "Title of the notification sent on entering a task's location. The pin emoji is part of the string; keep it at the start.")
+            : String(localized: "notification.geofence.leaving.title",
+                     defaultValue: "📍 You're leaving",
+                     comment: "Title of the notification sent on leaving a task's location. The pin emoji is part of the string; keep it at the start.")
         content.body = entering
-            ? "You have a task nearby. Open NowThis to see details."
-            : "Reminder: you're leaving a task location."
+            ? String(localized: "notification.geofence.arrived.body",
+                     defaultValue: "You have a task nearby. Open NowThis to see details.",
+                     comment: "Body of the notification sent on entering a task's location. NowThis is the product name and is not translated.")
+            : String(localized: "notification.geofence.leaving.body",
+                     defaultValue: "Reminder: you're leaving a task location.",
+                     comment: "Body of the notification sent on leaving a task's location.")
         content.userInfo = ["taskID": taskID]
 
         let request = UNNotificationRequest(

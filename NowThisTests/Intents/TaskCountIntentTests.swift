@@ -56,7 +56,7 @@ struct TaskCountIntentTests {
         let result = try await intent.performWithContainer(container)
 
         #expect(result.value == 5)
-        #expect(result.dialog.contains("5"))
+        #expect(result.spokenText.contains("5"))
     }
 
     @Test("Counts tasks filtered by list")
@@ -81,11 +81,11 @@ struct TaskCountIntentTests {
 
         try context.save()
 
-        var intent = TaskCountIntent()
+        let intent = TaskCountIntent()
         intent.list = TaskListEntity(id: workList.id, name: "Work")
         let result = try await intent.performWithContainer(container)
 
         #expect(result.value == 3)
-        #expect(result.dialog.contains("Work"))
+        #expect(result.spokenText.contains("Work"))
     }
 }

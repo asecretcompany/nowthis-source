@@ -136,7 +136,7 @@ struct ICalendarParserTimezoneTests {
         localJune15.year = 2024
         localJune15.month = 6
         localJune15.day = 15
-        let localDay = Calendar.current.date(from: localJune15)!
+        let localDay = Calendar(identifier: .gregorian).date(from: localJune15)!
         #expect(DueDateHelper.isOnDay(todo!.dueDate!, isDateOnly: true, sameAs: localDay))
     }
 

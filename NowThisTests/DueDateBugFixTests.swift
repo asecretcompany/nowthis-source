@@ -43,7 +43,7 @@ struct CalendarDiscoveryFilterTests {
     }
 
     @Test("DAVXMLParser correctly distinguishes VTODO vs VEVENT calendars")
-    func parserDistinguishesCalendarTypes() {
+    func parserDistinguishesCalendarTypes() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <d:multistatus xmlns:d="DAV:"
@@ -80,7 +80,7 @@ struct CalendarDiscoveryFilterTests {
         """
 
         let parser = DAVXMLParser()
-        let resources = parser.parse(data: xml.data(using: .utf8)!)
+        let resources = try parser.parse(data: xml.data(using: .utf8)!)
 
         let tasksCalendar = resources.first(where: { $0.href.contains("tasks") })
         #expect(tasksCalendar?.isVTODOSupported == true)
@@ -163,6 +163,34 @@ struct UIDDeduplicationTests {
 @Suite("Due Date Formatting")
 struct DueDateFormattingTests {
 
+    /// The all-day phrase as the app actually renders it, with the date removed.
+    ///
+    /// `DueDateFormatter` builds a whole template — "Jul 6 · All day" — so the phrase cannot be
+    /// asserted as a bare literal any more, and asserting the English one would fail on a correct
+    /// German build. Rendering a known date and subtracting the formatted date isolates the
+    /// non-date part without hardcoding either half.
+    static let allDayMarker: String = {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = utc.date(from: DateComponents(year: 2026, month: 7, day: 6))!
+        var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        style.timeZone = TimeZone(identifier: "UTC")!
+        return DueDateFormatter.format(day, isDateOnly: true)
+            .replacingOccurrences(of: day.formatted(style), with: "")
+    }()
+
+    /// The spoken form of the same phrase — a different key, because the badge uses a middle dot
+    /// and VoiceOver must not read "middle dot".
+    static let spokenAllDayMarker: String = {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = utc.date(from: DateComponents(year: 2026, month: 7, day: 6))!
+        var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        style.timeZone = TimeZone(identifier: "UTC")!
+        return DueDateFormatter.accessibilityLabel(day, isDateOnly: true)
+            .replacingOccurrences(of: day.formatted(style), with: "")
+    }()
+
     @Test("Date-only due dates show no time component")
     func dateOnlyFormat() {
         // Local midnight = a date-only task (no specific time set)
@@ -200,7 +228,11 @@ struct DueDateFormattingTests {
 
         let formatted = DueDateFormatter.format(midnightUTC, isDateOnly: true)
 
-        #expect(formatted.contains("All day"), "Date-only badge should read 'All day' for time consistency")
+        // Compared against the same catalog lookup the formatter performs, not the English
+        // words: once a translation exists, "All day" is not what a German build renders and this
+        // assertion would fail on correct code. `allDayMarker` isolates the phrase from the date.
+        #expect(formatted.contains(Self.allDayMarker),
+                "Date-only badge should carry the all-day phrase for time consistency: \(formatted)")
         #expect(formatted.contains("6"), "Must still show the stored calendar day")
         #expect(!formatted.contains(":"), "Date-only must not show a clock time")
     }
@@ -217,7 +249,8 @@ struct DueDateFormattingTests {
 
         let formatted = DueDateFormatter.format(dateTime, isDateOnly: false)
 
-        #expect(!formatted.contains("All day"), "Timed tasks show the clock time, not 'All day'")
+        #expect(!formatted.contains(Self.allDayMarker),
+                "Timed tasks show the clock time, not the all-day phrase: \(formatted)")
         #expect(formatted.contains(":"), "Timed tasks show the time with a colon separator")
     }
 
@@ -229,7 +262,8 @@ struct DueDateFormattingTests {
 
         let label = DueDateFormatter.accessibilityLabel(midnightUTC, isDateOnly: true)
 
-        #expect(label.contains("All day"), "VoiceOver should hear the all-day designation")
+        #expect(label.contains(Self.spokenAllDayMarker),
+                "VoiceOver should hear the all-day designation: \(label)")
         #expect(!label.contains("·"), "The spoken label must not contain the decorative middle-dot glyph")
         #expect(!label.contains(":"), "Date-only must not read a clock time")
         #expect(label.contains("6"), "Must read the stored calendar day")
@@ -247,7 +281,8 @@ struct DueDateFormattingTests {
 
         let label = DueDateFormatter.accessibilityLabel(dateTime, isDateOnly: false)
 
-        #expect(!label.contains("All day"), "Timed tasks read the clock time, not 'All day'")
+        #expect(!label.contains(Self.spokenAllDayMarker),
+                "Timed tasks read the clock time, not the all-day phrase: \(label)")
         #expect(label.contains(":"), "Timed tasks read the clock time")
     }
 

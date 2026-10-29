@@ -9,7 +9,7 @@ import Foundation
 struct DAVXMLParserTests {
 
     @Test("Parse PROPFIND multi-status response with calendars")
-    func parsePropfindResponse() {
+    func parsePropfindResponse() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <d:multistatus xmlns:d="DAV:"
@@ -36,7 +36,7 @@ struct DAVXMLParserTests {
         """
 
         let parser = DAVXMLParser()
-        let resources = parser.parse(data: xml.data(using: .utf8)!)
+        let resources = try parser.parse(data: xml.data(using: .utf8)!)
 
         #expect(resources.count >= 1)
 
@@ -50,7 +50,7 @@ struct DAVXMLParserTests {
     }
 
     @Test("Parse calendar-multiget REPORT response")
-    func parseCalendarMultiget() {
+    func parseCalendarMultiget() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
@@ -73,7 +73,7 @@ struct DAVXMLParserTests {
         """
 
         let parser = DAVXMLParser()
-        let resources = parser.parse(data: xml.data(using: .utf8)!)
+        let resources = try parser.parse(data: xml.data(using: .utf8)!)
 
         #expect(resources.count >= 1)
 
@@ -85,7 +85,7 @@ struct DAVXMLParserTests {
     }
 
     @Test("Parse ETag with surrounding quotes stripped")
-    func parseETagQuotes() {
+    func parseETagQuotes() throws {
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <d:multistatus xmlns:d="DAV:">
@@ -101,7 +101,7 @@ struct DAVXMLParserTests {
         """
 
         let parser = DAVXMLParser()
-        let resources = parser.parse(data: xml.data(using: .utf8)!)
+        let resources = try parser.parse(data: xml.data(using: .utf8)!)
 
         let first = resources.first
         #expect(first?.etag == "quoted-etag-value")

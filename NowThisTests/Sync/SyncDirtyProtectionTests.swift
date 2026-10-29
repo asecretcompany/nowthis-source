@@ -69,16 +69,17 @@ struct SyncDirtyProtectionTests {
         #expect(found?.isDirty == true, "isDirty flag must remain true")
     }
 
-    @Test("applyRemoteTask guards dirty tasks via isDirty check")
+    @Test("Both inbound apply paths guard dirty tasks via isDirty check")
     func applyRemoteTaskGuardsDirty() async throws {
-        // This test verifies the compile-time presence of the isDirty guard
-        // in SyncEngine.applyRemoteTask by checking the source code pattern.
-        // The actual runtime behavior is tested via the full background sync
-        // test above and integration tests.
+        // A source-presence check, not a behavioural one — the runtime behaviour is
+        // pinned by `backgroundPullDoesNotOverwriteDirty` above and by
+        // `SyncInboundChangeDetectionTests.dirtyTaskReportsNoChange`. What it adds is
+        // both compatibility entry points delegate to the canonical importer.
+        // Runtime tests also cover the shared bounded writer used by both runners.
 
-        // Verify the guard exists in the source. Resolved relative to this file so the
-        // test passes in any checkout — an absolute path pins it to one machine and puts
-        // the author's home directory in a public repository.
+        // Resolved relative to this file so the test passes in any checkout — an
+        // absolute path pins it to one machine and leaks the author's home
+        // directory into a public mirror.
         let engineURL = URL(fileURLWithPath: #filePath)      // NowThisTests/Sync/SyncDirtyProtectionTests.swift
             .deletingLastPathComponent()                     // NowThisTests/Sync
             .deletingLastPathComponent()                     // NowThisTests
@@ -86,9 +87,10 @@ struct SyncDirtyProtectionTests {
             .appendingPathComponent("NowThis/Sync/SyncEngine.swift")
         let source = try String(contentsOf: engineURL, encoding: .utf8)
 
-        #expect(
-            source.contains("guard !existingTask.isDirty else { return false }"),
-            "SyncEngine.applyRemoteTask must contain isDirty guard"
-        )
+        let importerURL = engineURL.deletingLastPathComponent().appendingPathComponent("SyncImportStore.swift")
+        let importer = try String(contentsOf: importerURL, encoding: .utf8)
+        #expect(source.contains("try applyRemoteTask(remoteTask"), "Foreground must use the same canonical importer as background compatibility calls")
+        #expect(source.contains("return importer.apply(try importer.parse(remoteTask)"), "The wrapper must delegate to the shared store")
+        #expect(importer.contains("!task.isDirty"), "The canonical import policy must preserve pending local work")
     }
 }

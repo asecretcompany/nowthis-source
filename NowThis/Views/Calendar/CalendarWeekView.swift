@@ -11,10 +11,15 @@ struct CalendarWeekView: View {
     let tasks: [TaskItem]
     @Binding var selectedDate: Date
     @Binding var displayedMonth: Date
+    var projection: CalendarTaskProjection? = nil
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        VStack(spacing: 8) {
+        // Snapshot once for the whole strip: seven columns each used to re-walk
+        // the task array, and each walk read `dueDate`/`status` off live models.
+        let buckets = projection ?? CalendarTaskProjection(rows: tasks.glanceRows())
+        let overdueTasks = buckets.overdueRows
+        return VStack(spacing: 8) {
             // Week navigation
             weekHeader
 
@@ -25,8 +30,8 @@ struct CalendarWeekView: View {
                         date: date,
                         isToday: Calendar.current.isDateInToday(date),
                         isSelected: Calendar.current.isDate(date, inSameDayAs: selectedDate),
-                        tasks: tasksForDay(date),
-                        overdueTasks: Calendar.current.isDateInToday(date) ? overdueTasks : []
+                        tasks: buckets.bucket(on: date).rows.filter { $0.data.status != .completed },
+                        overdueTasks: buckets.isToday(date) ? overdueTasks : []
                     )
                     .onTapGesture {
                         selectedDate = date
@@ -65,8 +70,12 @@ struct CalendarWeekView: View {
 
             Spacer()
 
-            if let first = weekDates.first, let last = weekDates.last {
-                Text("\(first, format: .dateTime.month(.abbreviated).day()) – \(last, format: .dateTime.month(.abbreviated).day())")
+            if let first = weekDates.first, let last = weekDates.last, first < last {
+                // Two dates and an en dash extracted as the key `%@%@` — one catalog entry shared
+                // with every other two-placeholder string in the app, and a separator English
+                // chose. `.interval` formats a whole range the way the reader's language does,
+                // including whether the month is repeated on the right-hand side.
+                Text((first..<last).formatted(.interval.month(.abbreviated).day()))
                     .font(.subheadline)
                     .fontWeight(.medium)
             }
@@ -94,23 +103,9 @@ struct CalendarWeekView: View {
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekStart) }
     }
 
-    private func tasksForDay(_ date: Date) -> [TaskItem] {
-        return tasks.filter { task in
-            guard let due = task.dueDate else { return false }
-            return DueDateHelper.isOnDay(due, isDateOnly: task.isDueDateOnly, sameAs: date)
-                && task.status != .completed
-        }
-    }
-
-    private var overdueTasks: [TaskItem] {
-        return tasks.filter { task in
-            guard let due = task.dueDate else { return false }
-            return DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly)
-                && task.status != .completed
-                && task.status != .cancelled
-        }
-    }
-
+    /// Both take already-snapshotted rows: the filters read `dueDate` and
+    /// `status`, so against live models they would trap on any task an account
+    /// delete had cascaded away before a block ever rendered.
     private func advanceWeek(by value: Int) {
         if let newDate = Calendar.current.date(byAdding: .weekOfYear, value: value, to: selectedDate) {
             MotionManager.withAccessibleAnimation(.easeInOut(duration: 0.2)) {
@@ -123,7 +118,8 @@ struct CalendarWeekView: View {
     /// Reschedules tasks to a new date when dropped on a week day column.
     private func reschedule(taskIDs: [String], to newDate: Date) {
         for id in taskIDs {
-            guard let task = tasks.first(where: { $0.id == id }) else { continue }
+            guard let task = tasks.first(where: { $0.modelContext != nil && $0.id == id })
+            else { continue }
             if let oldDue = task.dueDate {
                 let calendar = Calendar.current
                 let timeComponents = calendar.dateComponents([.hour, .minute], from: oldDue)
@@ -138,7 +134,10 @@ struct CalendarWeekView: View {
             task.lastModifiedDate = Date()
         }
         HapticManager.softImpact()
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        // The dragged task's already-pending notification is pinned to its old deadline, so
+        // without this it alerts at the wrong time and carries a badge count for the wrong day.
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
@@ -148,8 +147,8 @@ private struct WeekDayColumn: View {
     let date: Date
     let isToday: Bool
     let isSelected: Bool
-    let tasks: [TaskItem]
-    let overdueTasks: [TaskItem]
+    let tasks: [TaskGlanceRow]
+    let overdueTasks: [TaskGlanceRow]
 
     var body: some View {
         VStack(spacing: 4) {
@@ -159,7 +158,7 @@ private struct WeekDayColumn: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
 
-                Text("\(Calendar.current.component(.day, from: date))")
+                Text(Calendar.current.component(.day, from: date), format: .number)
                     .font(.caption2)
                     .fontWeight(isToday ? .bold : .regular)
                     .foregroundStyle(isSelected ? .white : .primary)
@@ -175,17 +174,17 @@ private struct WeekDayColumn: View {
 
             // Task blocks
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 3) {
+                LazyVStack(spacing: 3) {
                     // Overdue tasks (today only)
-                    ForEach(overdueTasks) { task in
-                        WeekTaskBlock(task: task, isOverdue: true)
-                            .draggable(task.id)
+                    ForEach(overdueTasks) { row in
+                        WeekTaskBlock(data: row.data, isOverdue: true)
+                            .draggable(row.id)
                     }
 
                     // Regular tasks
-                    ForEach(tasks) { task in
-                        WeekTaskBlock(task: task, isOverdue: false)
-                            .draggable(task.id)
+                    ForEach(tasks) { row in
+                        WeekTaskBlock(data: row.data, isOverdue: false)
+                            .draggable(row.id)
                     }
                 }
             }
@@ -194,14 +193,17 @@ private struct WeekDayColumn: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(date, format: .dateTime.weekday(.wide)), \(tasks.count + overdueTasks.count) tasks")
+        .accessibilityLabel(String(
+            localized: "calendar.week.a11y.taskCount",
+            defaultValue: "\(date, format: .dateTime.weekday(.wide)), \(tasks.count + overdueTasks.count) tasks",
+            comment: "VoiceOver label for one day column in the week view. First placeholder is the weekday name, second is how many tasks fall on that day."))
     }
 }
 
 // MARK: - Week Task Block
 
 private struct WeekTaskBlock: View {
-    let task: TaskItem
+    let data: TaskGlanceData
     let isOverdue: Bool
 
     var body: some View {
@@ -212,7 +214,7 @@ private struct WeekTaskBlock: View {
                     .frame(width: 3)
             }
 
-            Text(task.title)
+            Text(verbatim: data.title)
                 .font(.system(size: 9))
                 .lineLimit(2)
                 .padding(.horizontal, 4)
@@ -221,10 +223,17 @@ private struct WeekTaskBlock: View {
         }
         .background(priorityColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(task.title)\(isOverdue ? ", overdue" : "")")
+        // `"\(title)\(flag ? ", overdue" : "")"` extracted as the key `%@%@`: both halves became
+        // placeholders, so the word "overdue" was never offered to a translator at all, and the
+        // key was shared with every other two-placeholder string.
+        .accessibilityLabel(isOverdue
+            ? String(localized: "calendar.week.block.a11y.overdue",
+                     defaultValue: "\(data.title), overdue",
+                     comment: "VoiceOver label for a task block in the week view when the task is past its due date. The placeholder is the user-entered task title.")
+            : data.title)
     }
 
     private var priorityColor: Color {
-        task.priority == .none ? .gray : task.priority.color
+        data.priority == .none ? .gray : data.priority.color
     }
 }

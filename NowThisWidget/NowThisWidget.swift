@@ -176,7 +176,7 @@ private struct SmallWidgetView: View {
 
             if entry.tasks.isEmpty {
                 Spacer()
-                Text("All caught up! 🎉")
+                Text("Nothing due today 🎉")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -207,7 +207,7 @@ private struct SmallTaskRow: View {
                 .foregroundStyle(task.isCompleted ? .secondary : .primary)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(task.title), \(task.isCompleted ? "completed" : "pending")")
+        .accessibilityLabel(taskRowAccessibilityLabel(title: task.title, isCompleted: task.isCompleted))
     }
 }
 
@@ -238,7 +238,7 @@ private struct MediumWidgetView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Text("No tasks — enjoy your free time! ☀️")
+                    Text("Nothing due today — enjoy it ☀️")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -285,7 +285,7 @@ private struct MediumTaskRow: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(task.title), \(task.isCompleted ? "completed" : "pending")")
+        .accessibilityLabel(taskRowAccessibilityLabel(title: task.title, isCompleted: task.isCompleted))
         .accessibilityHint(task.isCompleted ? "Double tap to mark as incomplete" : "Double tap to complete")
     }
 }
@@ -319,7 +319,7 @@ private struct LargeWidgetView: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.largeTitle)
                             .foregroundStyle(.green)
-                        Text("All tasks complete!")
+                        Text("Nothing due today")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -376,7 +376,11 @@ private struct LargeTaskRow: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(task.title), \(task.priority != .none ? "\(task.priority.label) priority, " : "")\(task.isCompleted ? "completed" : "pending")")
+        .accessibilityLabel(task.priority == .none
+            ? taskRowAccessibilityLabel(title: task.title, isCompleted: task.isCompleted)
+            : String(localized: "widget.task.a11y.withPriority",
+                     defaultValue: "\(task.title), \(task.priority.label) priority, \(taskRowStateWord(isCompleted: task.isCompleted))",
+                     comment: "VoiceOver label for a task row in the widget that has a priority. Placeholders in order: the user-entered title, the already-localized priority name, and the already-localized completion state."))
         .accessibilityHint(task.isCompleted ? "Double tap to mark as incomplete" : "Double tap to complete")
     }
 
@@ -396,10 +400,41 @@ private struct LargeTaskRow: View {
 private extension TaskPriority {
     var label: String {
         switch self {
-        case .high: return "HIGH"
-        case .medium: return "MED"
-        case .low: return "LOW"
+        case .high: return String(localized: "widget.priority.short.high",
+                                   defaultValue: "HIGH",
+                                   comment: "Abbreviated priority badge on the iOS home-screen widget for a high-priority task; extremely tight width budget (3-4 characters); full word is High; uppercase by design.")
+        case .medium: return String(localized: "widget.priority.short.medium",
+                                     defaultValue: "MED",
+                                     comment: "Abbreviated priority badge on the iOS home-screen widget for a medium-priority task; extremely tight width budget (3-4 characters); full word is Medium; uppercase by design.")
+        case .low: return String(localized: "widget.priority.short.low",
+                                  defaultValue: "LOW",
+                                  comment: "Abbreviated priority badge on the iOS home-screen widget for a low-priority task; extremely tight width budget (3-4 characters); full word is Low; uppercase by design.")
         case .none: return ""
         }
     }
+}
+
+/// A task row's VoiceOver label: the title, then whether it is done.
+///
+/// Written out as two complete keys rather than `"\(title), \(done ? "completed" : "pending")"`.
+/// That form extracts as `%@, %@` — both halves become placeholders, the words "completed" and
+/// "pending" are never offered to a translator at all, and every two-placeholder string in the
+/// target collapses into the same entry.
+func taskRowAccessibilityLabel(title: String, isCompleted: Bool) -> String {
+    isCompleted
+        ? String(localized: "widget.task.a11y.completed",
+                 defaultValue: "\(title), completed",
+                 comment: "VoiceOver label for a task row in the widget when the task is done. The placeholder is the user-entered task title.")
+        : String(localized: "widget.task.a11y.pending",
+                 defaultValue: "\(title), pending",
+                 comment: "VoiceOver label for a task row in the widget when the task is not done yet. The placeholder is the user-entered task title.")
+}
+
+/// Just the state word, for the label above that has a priority clause between title and state.
+func taskRowStateWord(isCompleted: Bool) -> String {
+    isCompleted
+        ? String(localized: "widget.task.a11y.state.completed", defaultValue: "completed",
+                 comment: "Completion state of a task, read at the end of a VoiceOver label in the widget. Adjective agreeing with the word for a task in the target language.")
+        : String(localized: "widget.task.a11y.state.pending", defaultValue: "pending",
+                 comment: "Not-yet-done state of a task, read at the end of a VoiceOver label in the widget. Adjective agreeing with the word for a task in the target language.")
 }

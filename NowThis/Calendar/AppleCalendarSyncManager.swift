@@ -29,7 +29,9 @@ final class AppleCalendarSyncManager: ObservableObject {
     /// - Parameter modelContext: The SwiftData context to read tasks from.
     func syncAll(modelContext: ModelContext) async {
         guard permissionManager.hasAccess else {
-            lastError = "Calendar access not granted"
+            // The same condition CalendarSyncError.noAccess describes, so it reuses that string
+            // rather than carrying a second, shorter, untranslated copy of it.
+            lastError = CalendarSyncError.noAccess.localizedDescription
             return
         }
 
@@ -201,9 +203,15 @@ enum CalendarSyncError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noAccess:
-            return "Calendar access not granted. Please enable in Settings."
+            return String(
+                localized: "calendarSync.error.noAccess",
+                defaultValue: "Calendar access not granted. Please enable in Settings.",
+                comment: "Apple Calendar sync error. \"Settings\" is the iOS system app.")
         case .noCalendarSource:
-            return "No calendar source available on this device."
+            return String(
+                localized: "calendarSync.error.noSource",
+                defaultValue: "No calendar source available on this device.",
+                comment: "Apple Calendar sync error: EventKit reported no account (iCloud, Exchange, local) that a new calendar could be created in.")
         }
     }
 }

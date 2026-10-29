@@ -44,7 +44,7 @@ struct FilterBuilderView: View {
                 Section {
                     Picker("Match", selection: $logic) {
                         ForEach(FilterLogic.allCases, id: \.self) { op in
-                            Text(op.label).tag(op)
+                            Text(op.displayName).tag(op)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -141,14 +141,14 @@ private struct RuleRow: View {
             // Field picker
             Picker("Field", selection: $rule.field) {
                 ForEach(FilterField.allCases) { field in
-                    Label(field.rawValue, systemImage: field.icon).tag(field)
+                    Label(field.displayName, systemImage: field.icon).tag(field)
                 }
             }
 
             // Comparison picker
             Picker("Comparison", selection: $rule.comparison) {
                 ForEach(rule.field.comparisons) { comp in
-                    Text(comp.rawValue).tag(comp)
+                    Text(comp.displayName).tag(comp)
                 }
             }
 
@@ -170,8 +170,10 @@ private struct RuleRow: View {
 
         case .priority:
             Picker("Value", selection: $rule.value) {
-                ForEach([TaskPriority.high, .medium, .low, TaskPriority.none], id: \.displayName) { pri in
-                    Text(pri.displayName).tag(pri.displayName)
+                ForEach([TaskPriority.high, .medium, .low, TaskPriority.none], id: \.filterToken) { pri in
+                    // Display the label, store the token. The tag is written into
+                    // SavedFilter.rulesData on disk and must never be a localized string.
+                    Text(pri.displayName).tag(pri.filterToken)
                 }
             }
 
@@ -225,32 +227,39 @@ private struct RuleRow: View {
 private struct IconPicker: View {
     @Binding var selected: String
 
-    private let icons = [
-        "line.3.horizontal.decrease.circle",
-        "star.fill",
-        "heart.fill",
-        "bolt.fill",
-        "flame.fill",
-        "leaf.fill",
-        "briefcase.fill",
-        "house.fill",
-        "person.fill",
-        "tag.fill",
-        "flag.fill",
-        "bell.fill"
+    /// SF Symbol name plus the word VoiceOver should say.
+    ///
+    /// The symbol name is persisted in `SavedFilter.icon` and must never be localized; the label
+    /// is display-only. Before this, `.accessibilityLabel(icon)` read the raw symbol name aloud —
+    /// a VoiceOver user heard "line dot three dot horizontal dot decrease dot circle" and had no
+    /// way to tell the twelve icons apart.
+    private let icons: [(symbol: String, label: String)] = [
+        ("line.3.horizontal.decrease.circle",
+         String(localized: "filter.icon.filter", defaultValue: "Filter", comment: "VoiceOver name for the funnel icon in the saved-filter icon picker.")),
+        ("star.fill", String(localized: "filter.icon.star", defaultValue: "Star", comment: "VoiceOver name for the star icon in the saved-filter icon picker.")),
+        ("heart.fill", String(localized: "filter.icon.heart", defaultValue: "Heart", comment: "VoiceOver name for the heart icon in the saved-filter icon picker.")),
+        ("bolt.fill", String(localized: "filter.icon.bolt", defaultValue: "Lightning bolt", comment: "VoiceOver name for the lightning-bolt icon in the saved-filter icon picker.")),
+        ("flame.fill", String(localized: "filter.icon.flame", defaultValue: "Flame", comment: "VoiceOver name for the flame icon in the saved-filter icon picker.")),
+        ("leaf.fill", String(localized: "filter.icon.leaf", defaultValue: "Leaf", comment: "VoiceOver name for the leaf icon in the saved-filter icon picker.")),
+        ("briefcase.fill", String(localized: "filter.icon.briefcase", defaultValue: "Briefcase", comment: "VoiceOver name for the briefcase icon in the saved-filter icon picker.")),
+        ("house.fill", String(localized: "filter.icon.house", defaultValue: "House", comment: "VoiceOver name for the house icon in the saved-filter icon picker.")),
+        ("person.fill", String(localized: "filter.icon.person", defaultValue: "Person", comment: "VoiceOver name for the person icon in the saved-filter icon picker.")),
+        ("tag.fill", String(localized: "filter.icon.tag", defaultValue: "Tag", comment: "VoiceOver name for the tag icon in the saved-filter icon picker.")),
+        ("flag.fill", String(localized: "filter.icon.flag", defaultValue: "Flag", comment: "VoiceOver name for the flag icon in the saved-filter icon picker.")),
+        ("bell.fill", String(localized: "filter.icon.bell", defaultValue: "Bell", comment: "VoiceOver name for the bell icon in the saved-filter icon picker.")),
     ]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                ForEach(icons, id: \.self) { icon in
-                    iconButton(icon)
+                ForEach(icons, id: \.symbol) { entry in
+                    iconButton(entry.symbol, label: entry.label)
                 }
             }
         }
     }
 
-    private func iconButton(_ icon: String) -> some View {
+    private func iconButton(_ icon: String, label: String) -> some View {
         let isSelected = selected == icon
         return Button {
             selected = icon
@@ -264,7 +273,7 @@ private struct IconPicker: View {
                 )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(icon)
+        .accessibilityLabel(label)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

@@ -35,7 +35,12 @@ struct AccountManagerTests {
         // Should also have created an Inbox list
         let lists = try context.fetch(FetchDescriptor<TaskList>())
         #expect(lists.count == 1)
-        #expect(lists.first?.name == "Inbox")
+        // `AccountManager` creates this list with `String(localized: "Inbox")`, so the literal
+        // stops matching the moment a translation exists. Comparing against the same lookup keeps
+        // the assertion locale-independent and still proves the default list was named rather
+        // than left blank.
+        #expect(lists.first?.name == String(localized: "Inbox"))
+        #expect(lists.first?.name.isEmpty == false)
         #expect(lists.first?.account?.id == account.id)
     }
 
@@ -48,7 +53,10 @@ struct AccountManagerTests {
 
         let account = try manager.createVaultAccount()
 
-        #expect(account.displayName == "Vault")
+        // Same reason as the Inbox list above: this default comes from the catalog.
+        #expect(account.displayName == String(localized: "account.vault.defaultName",
+                                              defaultValue: "Vault"))
+        #expect(!account.displayName.isEmpty)
     }
 
     @Test("Remove account deletes account and cascades to lists")
@@ -73,6 +81,7 @@ struct AccountManagerTests {
         let listsAfter = try context.fetch(FetchDescriptor<TaskList>())
         #expect(accountsAfter.isEmpty)
         #expect(listsAfter.isEmpty)
+        #expect(try !ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
     }
 
     @Test("Remove non-existent account is a no-op")
@@ -134,6 +143,48 @@ struct AccountManagerTests {
         let accounts = try context.fetch(FetchDescriptor<ServerAccount>())
         #expect(!accounts.contains { $0.id == account.id })
         #expect(accounts.contains { $0.mode == .vault })
+    }
+
+    @Test("Removing an account keeps the DELETE a task moved into it owes another account")
+    @MainActor
+    func removeAccountKeepsOwedMoveDeletes() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let manager = AccountManager(modelContext: context)
+
+        let staying = try await manager.addNextcloudAccount(
+            displayName: "Work cloud", serverURL: "https://work.example.com",
+            username: "alice", password: "pw", storeInKeychain: false
+        )
+        let leaving = try await manager.addNextcloudAccount(
+            displayName: "Home cloud", serverURL: "https://home.example.com",
+            username: "alice", password: "pw", storeInKeychain: false
+        )
+        let work = TaskList(serverURL: "/cal/work/", name: "Work", colorHex: "#007AFF")
+        let home = TaskList(serverURL: "/cal/home/", name: "Home", colorHex: "#FF9500")
+        work.account = staying
+        home.account = leaving
+        context.insert(work)
+        context.insert(home)
+
+        let task = TaskItem(uid: "uid-moved", title: "Renew passport")
+        task.remoteHref = "/cal/work/uid-moved.ics"
+        task.isLocalOnly = false
+        task.taskList = work
+        context.insert(task)
+        try context.save()
+
+        TaskMover.move(task, to: home, in: context)
+        task.remoteHref = "/cal/home/uid-moved.ics" // the PUT into Home landed
+        try context.save()
+
+        try await manager.removeAccount(accountID: leaving.id)
+
+        let remaining = try context.fetch(FetchDescriptor<TaskItem>())
+        #expect(remaining.count == 1, "examined \(remaining.count) tasks")
+        #expect(remaining.first?.isDeletedLocally == true)
+        #expect(remaining.first?.taskList?.id == work.id)
+        #expect(remaining.first?.remoteHref == "/cal/work/uid-moved.ics")
     }
 }
 

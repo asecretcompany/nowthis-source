@@ -12,13 +12,67 @@ import Foundation
 /// LOCATION, GEO, URL, RELATED-TO, RRULE, X-APPLE-SORT-ORDER
 struct ICalendarParser {
 
+    /// A parser-worker-owned cache of formatters for named timezone date-times.
+    /// Formatting access is serialized; formatter instances never escape.
+    final class FormatterCache: @unchecked Sendable {
+        static let capacity = 32
+
+        private let lock = NSLock()
+        private var formatters: [String: DateFormatter] = [:]
+        private var leastRecentlyUsedFirst: [String] = []
+        private var creationCount = 0
+
+        var cachedNamedTimeZoneFormatterCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return formatters.count
+        }
+
+        var namedTimeZoneFormatterCreationCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return creationCount
+        }
+
+        fileprivate func date(from value: String, in timeZone: TimeZone) -> Date? {
+            lock.lock()
+            defer { lock.unlock() }
+
+            let identifier = timeZone.identifier
+            let formatter: DateFormatter
+            if let cached = formatters[identifier] {
+                formatter = cached
+                leastRecentlyUsedFirst.removeAll { $0 == identifier }
+                leastRecentlyUsedFirst.append(identifier)
+            } else {
+                if formatters.count == Self.capacity,
+                   let evictedIdentifier = leastRecentlyUsedFirst.first {
+                    leastRecentlyUsedFirst.removeFirst()
+                    formatters.removeValue(forKey: evictedIdentifier)
+                }
+
+                formatter = DateFormatter()
+                formatter.dateFormat = "yyyyMMdd'T'HHmmss"
+                formatter.timeZone = timeZone
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatters[identifier] = formatter
+                leastRecentlyUsedFirst.append(identifier)
+                creationCount += 1
+            }
+
+            return formatter.date(from: value)
+        }
+    }
+
     // MARK: - Data Structures
 
     /// Parsed VTODO data extracted from an iCalendar component.
-    struct VTODOData {
+    struct VTODOData: Sendable {
         var uid: String = ""
         var summary: String = ""
         var description: String?
+        var photos: [TaskPhotoAttachment] = []
+        var opaqueAttachments: [String] = []
         var status: String?
         var priority: Int = 0
         var percentComplete: Int = 0
@@ -27,7 +81,11 @@ struct ICalendarParser {
         var completedDate: Date?
         var createdDate: Date?
         var lastModifiedDate: Date?
-        var categories: [String] = []
+        /// `nil` when the VTODO carried no `CATEGORIES` property at all, `[]`
+        /// when it carried an empty one. The distinction is load-bearing:
+        /// silence is not a claim that the task has no categories, and treating
+        /// it as one deletes the user's tags and then pushes the deletion.
+        var categories: [String]?
         var location: String?
         var latitude: Double?
         var longitude: Double?
@@ -50,6 +108,12 @@ struct ICalendarParser {
     /// - Returns: An array of parsed `VTODOData` records.
     /// - Throws: `ParserError.invalidFormat` if the content is not valid iCalendar.
     static func parseVTODOs(from icsString: String) throws -> [VTODOData] {
+        try parseVTODOs(from: icsString, using: FormatterCache())
+    }
+
+    /// Parses VTODOs using a cache owned by the calling parser worker.
+    /// Reuse `formatterCache` across resources handled by that worker.
+    static func parseVTODOs(from icsString: String, using formatterCache: FormatterCache) throws -> [VTODOData] {
         let unfolded = unfoldLines(icsString)
         let lines = unfolded.components(separatedBy: .newlines)
 
@@ -91,9 +155,11 @@ struct ICalendarParser {
             }
 
             if inVALARM && trimmed == "END:VALARM" {
-                // Store only the first VALARM's trigger
-                if !alarmParsed, let trigger = alarmTrigger {
-                    currentTodo?.alarmTriggerSeconds = parseDurationToSeconds(trigger)
+                // Keep the first usable alarm. Malformed or unsupported triggers
+                // must not suppress a later reminder we can actually schedule.
+                if !alarmParsed, let trigger = alarmTrigger,
+                   let seconds = parseDurationToSeconds(trigger) {
+                    currentTodo?.alarmTriggerSeconds = seconds
                     alarmParsed = true
                 }
                 inVALARM = false
@@ -110,7 +176,18 @@ struct ICalendarParser {
             }
 
             if inVTODO, var todo = currentTodo {
-                parseTodoProperty(line: trimmed, into: &todo)
+                if splitProperty(trimmed).name == "ATTACH" {
+                    if let photo = try TaskPhotoAttachment.decode(trimmed) {
+                        guard !todo.photos.contains(where: { $0.id == photo.id }) else {
+                            throw TaskPhotoAttachmentError.duplicateIdentity
+                        }
+                        guard todo.photos.count < 5 else { throw TaskPhotoAttachmentError.invalid }
+                        todo.photos.append(photo)
+                    } else {
+                        todo.opaqueAttachments.append(trimmed)
+                    }
+                }
+                parseTodoProperty(line: trimmed, into: &todo, formatterCache: formatterCache)
                 currentTodo = todo
             }
         }
@@ -123,7 +200,12 @@ struct ICalendarParser {
     /// - Parameter icsString: Raw iCalendar text containing exactly one VTODO.
     /// - Returns: The parsed `VTODOData`, or `nil` if none found.
     static func parseSingleVTODO(from icsString: String) throws -> VTODOData? {
-        let todos = try parseVTODOs(from: icsString)
+        try parseSingleVTODO(from: icsString, using: FormatterCache())
+    }
+
+    /// Parses one VTODO using a cache owned by the calling parser worker.
+    static func parseSingleVTODO(from icsString: String, using formatterCache: FormatterCache) throws -> VTODOData? {
+        let todos = try parseVTODOs(from: icsString, using: formatterCache)
         return todos.first
     }
 
@@ -211,7 +293,11 @@ struct ICalendarParser {
     // MARK: - Property Parsing
 
     /// Parses a single property line and updates the VTODO data.
-    private static func parseTodoProperty(line: String, into todo: inout VTODOData) {
+    private static func parseTodoProperty(
+        line: String,
+        into todo: inout VTODOData,
+        formatterCache: FormatterCache
+    ) {
         let (name, value) = splitProperty(line)
 
         switch name {
@@ -228,22 +314,27 @@ struct ICalendarParser {
         case "PERCENT-COMPLETE":
             todo.percentComplete = min(100, max(0, Int(value) ?? 0))
         case "DUE":
-            todo.dueDate = parseDate(value, tzid: parseTZID(from: line))
+            todo.dueDate = parseDate(value, tzid: parseTZID(from: line), formatterCache: formatterCache)
             todo.isDueDateOnly = !value.contains("T")
         case "DTSTART":
-            todo.startDate = parseDate(value, tzid: parseTZID(from: line))
+            todo.startDate = parseDate(value, tzid: parseTZID(from: line), formatterCache: formatterCache)
             todo.isStartDateOnly = !value.contains("T")
         case "COMPLETED":
-            todo.completedDate = parseDate(value, tzid: parseTZID(from: line))
+            todo.completedDate = parseDate(value, tzid: parseTZID(from: line), formatterCache: formatterCache)
         case "CREATED":
             todo.createdDate = parseDate(value)
         case "LAST-MODIFIED":
             todo.lastModifiedDate = parseDate(value)
         case "CATEGORIES":
-            let cats = value.components(separatedBy: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
+            // Split only at the commas between values, then unescape each one: a
+            // comma inside a category arrives as `\,` (RFC 5545 §3.3.11), from
+            // Thunderbird and from our own serializer alike.
+            let cats = splitAtUnescapedCommas(value)
+                .map { unescapeText($0).trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
-            todo.categories.append(contentsOf: cats)
+            // Seed on first sight, so a bare `CATEGORIES:` survives as [] rather
+            // than nil. Presence is the signal; the content is the instruction.
+            todo.categories = (todo.categories ?? []) + cats
         case "LOCATION":
             todo.location = unescapeText(value)
         case "GEO":
@@ -306,6 +397,31 @@ struct ICalendarParser {
         return nil
     }
 
+    /// Splits a multi-valued TEXT property at the commas that separate its
+    /// values. Escapes are kept for `unescapeText`, so `\,` stays inside its
+    /// value and `\\,` is an escaped backslash followed by a separator.
+    private static func splitAtUnescapedCommas(_ value: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var escaping = false
+        for char in value {
+            if escaping {
+                current.append(char)
+                escaping = false
+            } else if char == "\\" {
+                current.append(char)
+                escaping = true
+            } else if char == "," {
+                parts.append(current)
+                current = ""
+            } else {
+                current.append(char)
+            }
+        }
+        parts.append(current)
+        return parts
+    }
+
     // MARK: - Date Parsing
 
     /// Parses an iCalendar date or date-time string.
@@ -322,6 +438,14 @@ struct ICalendarParser {
     ///     When supplied, a date-time without a `Z` suffix is interpreted in that
     ///     zone rather than as floating local time.
     static func parseDate(_ value: String, tzid: String? = nil) -> Date? {
+        parseDate(value, tzid: tzid, formatterCache: nil)
+    }
+
+    private static func parseDate(
+        _ value: String,
+        tzid: String?,
+        formatterCache: FormatterCache?
+    ) -> Date? {
         let cleanValue = value.trimmingCharacters(in: .whitespaces)
 
         // Try UTC format first: 20240115T120000Z
@@ -334,11 +458,7 @@ struct ICalendarParser {
         if cleanValue.contains("T"),
            let tzid = tzid,
            let timeZone = TimeZone(identifier: tzid) {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyyMMdd'T'HHmmss"
-            formatter.timeZone = timeZone
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            return formatter.date(from: cleanValue)
+            return (formatterCache ?? FormatterCache()).date(from: cleanValue, in: timeZone)
         }
 
         // Floating local date-time: 20240115T120000
@@ -460,7 +580,11 @@ struct ICalendarParser {
     /// representing "time before the due date".
     static func parseDurationToSeconds(_ duration: String) -> Int? {
         var input = duration.trimmingCharacters(in: .whitespaces)
-        guard !input.isEmpty else { return nil }
+        // RFC 5545 duration grammar: weeks stand alone, days can precede a
+        // time part, and time components occur once in descending order.
+        // Validate before conversion so a partial duration cannot become zero.
+        let pattern = #"^[+-]?P(?:(?:[0-9]+D)?T(?:[0-9]+H(?:[0-9]+M(?:[0-9]+S)?)?|[0-9]+M(?:[0-9]+S)?|[0-9]+S)|[0-9]+[DW])$"#
+        guard input.range(of: pattern, options: .regularExpression) != nil else { return nil }
 
         // Strip optional sign
         if input.hasPrefix("-") || input.hasPrefix("+") {
@@ -491,14 +615,22 @@ struct ICalendarParser {
             }
             numberBuffer = ""
 
+            let multiplier: Int
             switch (char, inTimePart) {
-            case ("D", false): total += value * 86400
-            case ("W", false): total += value * 604800
-            case ("H", true):  total += value * 3600
-            case ("M", true):  total += value * 60
-            case ("S", true):  total += value
+            case ("D", false): multiplier = 86400
+            case ("W", false): multiplier = 604800
+            case ("H", true):  multiplier = 3600
+            case ("M", true):  multiplier = 60
+            case ("S", true):  multiplier = 1
             default: return nil
             }
+            // Calendar data is untrusted. A large component or combined
+            // duration must fail parsing rather than trap the entire sync.
+            let component = value.multipliedReportingOverflow(by: multiplier)
+            guard !component.overflow else { return nil }
+            let sum = total.addingReportingOverflow(component.partialValue)
+            guard !sum.overflow else { return nil }
+            total = sum.partialValue
         }
 
         return total

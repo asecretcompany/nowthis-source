@@ -12,13 +12,42 @@ struct CalendarMonthView: View {
     let tasks: [TaskItem]
     @Binding var selectedDate: Date
     @Binding var displayedMonth: Date
+    var projection: CalendarTaskProjection? = nil
     @Environment(\.modelContext) private var modelContext
 
     private let columns = Array(repeating: GridItem(.flexible()), count: 7)
-    private let weekdaySymbols = Calendar.current.veryShortWeekdaySymbols
+
+    /// The seven column headers, **rotated to start on the calendar's first weekday**.
+    ///
+    /// `veryShortWeekdaySymbols` is always Sunday-first, whatever the locale, while the day grid
+    /// below offsets by `firstWeekday`. Rendering the symbols unrotated therefore put every date
+    /// under the wrong column in any Monday-first region — de, es, fr, it and nl all have
+    /// `firstWeekday == 2`, and so does en-GB, so this was already wrong before any translation.
+    ///
+    /// Computed rather than stored: a stored property is evaluated once at init and would not
+    /// follow a region change made while the app is running.
+    static func weekdayHeaderSymbols(for calendar: Calendar) -> [String] {
+        let symbols = calendar.veryShortWeekdaySymbols
+        guard symbols.count == 7 else { return symbols }
+        let shift = calendar.firstWeekday - 1
+        return Array(symbols[shift...] + symbols[..<shift])
+    }
+
+    /// How many blank cells precede the 1st of `month` in the grid. Shared with the header so the
+    /// two cannot drift: the guard asserts the column they agree on.
+    static func leadingEmptyCells(before firstOfMonth: Date, calendar: Calendar) -> Int {
+        let weekday = calendar.component(.weekday, from: firstOfMonth)
+        let leading = weekday - calendar.firstWeekday
+        return leading < 0 ? leading + 7 : leading
+    }
+
+    private var weekdaySymbols: [String] {
+        Self.weekdayHeaderSymbols(for: Calendar.current)
+    }
 
     var body: some View {
-        VStack(spacing: 12) {
+        let buckets = projection ?? CalendarTaskProjection(rows: tasks.glanceRows())
+        return VStack(spacing: 12) {
             // Month navigation header
             monthHeader
 
@@ -33,8 +62,8 @@ struct CalendarMonthView: View {
                             date: day,
                             isToday: Calendar.current.isDateInToday(day),
                             isSelected: Calendar.current.isDate(day, inSameDayAs: selectedDate),
-                            highestPriority: highestPriority(for: day),
-                            taskCount: taskCount(for: day)
+                            highestPriority: buckets.bucket(on: day).highestPriority,
+                            taskCount: buckets.bucket(on: day).rows.count
                         )
                         .onTapGesture {
                             selectedDate = day
@@ -106,32 +135,15 @@ struct CalendarMonthView: View {
               let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: displayedMonth))
         else { return [] }
 
-        let weekday = calendar.component(.weekday, from: firstOfMonth)
-        let leadingEmpties = weekday - calendar.firstWeekday
-        let adjustedLeading = leadingEmpties < 0 ? leadingEmpties + 7 : leadingEmpties
-
-        var days: [Date?] = Array(repeating: nil, count: adjustedLeading)
+        var days: [Date?] = Array(repeating: nil,
+                                  count: Self.leadingEmptyCells(before: firstOfMonth,
+                                                                calendar: calendar))
         for day in range {
             if let date = calendar.date(byAdding: .day, value: day - 1, to: firstOfMonth) {
                 days.append(date)
             }
         }
         return days
-    }
-
-    private func highestPriority(for date: Date) -> TaskPriority? {
-        let dayTasks = tasks.filter { task in
-            guard let due = task.dueDate else { return false }
-            return DueDateHelper.isOnDay(due, isDateOnly: task.isDueDateOnly, sameAs: date)
-        }
-        return dayTasks.map(\.priority).filter { $0 != .none }.min()
-    }
-
-    private func taskCount(for date: Date) -> Int {
-        return tasks.filter { task in
-            guard let due = task.dueDate else { return false }
-            return DueDateHelper.isOnDay(due, isDateOnly: task.isDueDateOnly, sameAs: date)
-        }.count
     }
 
     private func advanceMonth(by value: Int) {
@@ -161,7 +173,9 @@ struct CalendarMonthView: View {
             task.lastModifiedDate = Date()
         }
         HapticManager.softImpact()
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        // See CalendarWeekView: a drag moves the deadline but not the notification.
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
@@ -176,7 +190,7 @@ private struct DayCell: View {
 
     var body: some View {
         VStack(spacing: 3) {
-            Text("\(Calendar.current.component(.day, from: date))")
+            Text(Calendar.current.component(.day, from: date), format: .number)
                 .font(.subheadline)
                 .fontWeight(isToday ? .bold : .regular)
                 .foregroundStyle(isSelected ? .white : (isToday ? .accentColor : .primary))
@@ -209,10 +223,12 @@ private struct DayCell: View {
         formatter.dateStyle = .medium
         var label = formatter.string(from: date)
         if taskCount > 0 {
-            label += ", \(taskCount) task\(taskCount == 1 ? "" : "s")"
+            label += String(localized: "calendar.month.cell.a11y.taskCount", defaultValue: ", \(taskCount) tasks",
+                             comment: "Calendar month cell accessibility label fragment appended after the date, stating how many tasks fall on this day. Leading comma-space continues the spoken label. The plural forms are in the catalog.")
         }
         if isToday {
-            label += ", today"
+            label += String(localized: "calendar.month.cell.a11y.today", defaultValue: ", today",
+                             comment: "Calendar month cell accessibility label fragment appended after the date to mark the current day. Leading comma-space continues the spoken label.")
         }
         return label
     }

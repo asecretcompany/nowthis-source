@@ -170,7 +170,10 @@ final class LoginFlowCoordinator: NSObject, ObservableObject,
 
         if !started {
             Self.logger.error("ASWebAuthSession failed to start")
-            state = .error("Could not open login page. Please try again.")
+            state = .error(String(
+                localized: "login.error.couldNotOpenBrowser",
+                defaultValue: "Could not open login page. Please try again.",
+                comment: "Shown on the Add Nextcloud screen when the in-app browser could not be opened to start sign-in."))
         }
     }
 

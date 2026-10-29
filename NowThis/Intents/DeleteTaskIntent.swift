@@ -33,12 +33,14 @@ struct DeleteTaskIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let container = try SharedModelContainer.create()
         let result = try await performWithContainer(container)
-        return .result(dialog: "\(result.dialog)")
+        return .result(dialog: IntentDialog(result.dialog))
     }
 
     /// Testable entry point that accepts an injected container.
     @MainActor
-    func performWithContainer(_ container: ModelContainer) async throws -> IntentDialogResult {
+    func performWithContainer(_ container: ModelContainer,
+                              store: any NotificationStore = SystemNotificationStore(),
+                              save: (() throws -> Void)? = nil) async throws -> IntentDialogResult {
         let context = container.mainContext
 
         let taskID = task.id
@@ -52,15 +54,21 @@ struct DeleteTaskIntent: AppIntent {
             throw IntentError.taskNotFound
         }
 
-        // Soft-delete for sync
-        taskItem.isDeletedLocally = true
-        taskItem.isDirty = true
-        taskItem.lastModifiedDate = Date()
-        try context.save()
+        // Soft-delete for sync — the whole subtree, so every row gets its own
+        // DELETE rather than being cascaded away with its parent.
+        let deletedIDs = TaskListHelpers.markDeleted(taskItem)
+        try ReminderSchedulingJournal.saveTaskChanges(in: context, save: save)
+        await ReminderScheduler.cancelReminders(for: deletedIDs, modelContext: context, store: store)
+        await ReminderScheduler.reconcileScheduledNotifications(modelContext: context,
+            store: store, policy: .background)
 
         // Reload widget timelines
         WidgetCenter.shared.reloadAllTimelines()
 
-        return IntentDialogResult(dialog: "Deleted \"\(task.title)\".")
+        let title = task.title
+        return IntentDialogResult(dialog: LocalizedStringResource(
+            "intent.dialog.deleteTask.deleted",
+            defaultValue: "Deleted \"\(title)\".",
+            comment: "Siri's spoken confirmation after deleting a task. The placeholder is the task's title; the quotation marks should follow the target language's own convention."))
     }
 }

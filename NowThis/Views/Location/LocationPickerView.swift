@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import SwiftData
 
 /// Location picker for setting a task's geofence location.
 ///
@@ -66,7 +67,7 @@ struct LocationPickerView: View {
                         selectResult(item)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name ?? "Unknown")
+                            Text(item.name ?? String(localized: "location.result.unnamed", defaultValue: "Unnamed location", comment: "Name shown for a MapKit search result that has no name; copy changed from the previous Unknown since the location is not unknown, it is simply unnamed"))
                                 .font(.subheadline)
                             if let address = item.placemark.formattedAddress {
                                 Text(address)
@@ -109,7 +110,8 @@ struct LocationPickerView: View {
                 HStack {
                     Label("Geofence Radius", systemImage: "circle.dashed")
                     Spacer()
-                    Text("\(Int(radius))m")
+                    Text(Measurement(value: radius, unit: UnitLength.meters),
+                         format: .measurement(width: .narrow))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

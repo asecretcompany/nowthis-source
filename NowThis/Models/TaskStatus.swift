@@ -13,10 +13,23 @@ enum TaskStatus: String, Codable, CaseIterable, Identifiable {
     /// A user-facing localized display name for this status.
     var displayName: String {
         switch self {
-        case .needsAction: return String(localized: "Needs Action")
-        case .inProcess:   return String(localized: "In Progress")
-        case .completed:   return String(localized: "Completed")
-        case .cancelled:   return String(localized: "Cancelled")
+        // One task's status, never a collection of them. The bare `Completed`
+        // key that used to be here read as the completed-tasks filter, and
+        // Spanish, French and Italian all shipped a plural for it while its
+        // three siblings stayed singular — so a single task's status picker
+        // offered "Pendiente / En curso / Completadas / Cancelada".
+        case .needsAction:
+            return String(localized: "status.needsAction", defaultValue: "Needs Action",
+                          comment: "Status of a SINGLE task: not started yet. Agrees with the word for task, which is feminine in Spanish, French and Italian. Also used as a Kanban column header, where the singular still reads correctly.")
+        case .inProcess:
+            return String(localized: "status.inProgress", defaultValue: "In Progress",
+                          comment: "Status of a SINGLE task: started but not finished. Agrees with the word for task, which is feminine in Spanish, French and Italian.")
+        case .completed:
+            return String(localized: "status.completed", defaultValue: "Completed",
+                          comment: "Status of a SINGLE task: finished. Singular — this labels one task, not the list of completed ones, which has its own key. Agrees with the word for task, which is feminine in Spanish, French and Italian.")
+        case .cancelled:
+            return String(localized: "status.cancelled", defaultValue: "Cancelled",
+                          comment: "Status of a SINGLE task: abandoned without being done. Agrees with the word for task, which is feminine in Spanish, French and Italian.")
         }
     }
 

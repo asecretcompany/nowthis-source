@@ -6,9 +6,29 @@ import Foundation
 /// date+time for dates with a specific time component.
 enum DueDateFormatter {
 
-    /// Appended to date-only badges so every due date reads as a time slot —
-    /// e.g. `"Jul 6 · All day"` sits alongside `"Jul 6 at 7:00 PM"`.
-    private static let allDaySuffix = " · All day"
+    /// The date-only badge, e.g. `"Jul 6 · All day"` beside `"Jul 6 at 7:00 PM"`.
+    ///
+    /// A **template**, not a suffix. `" · All day"` glued onto a locale-formatted date puts the
+    /// separator and the phrase in an order English chose, with no way for a translator to move
+    /// either — and the two shipped as English text appended to a correctly localized date, which
+    /// is the worst of both.
+    private static func allDayBadge(_ formattedDate: String) -> String {
+        String(localized: "dueDate.badge.allDay",
+               defaultValue: "\(formattedDate) · All day",
+               comment: "Due-date badge for a task due on a whole day rather than at a time. The placeholder is the already-formatted date; the middle dot is a visual separator and may be changed to whatever reads correctly.")
+    }
+
+    /// The spoken form of the same badge.
+    ///
+    /// Separate from ``allDayBadge(_:)`` because VoiceOver can announce `·` as "middle dot" at
+    /// higher punctuation verbosity, so the spoken label uses a comma while the badge keeps the
+    /// dot. Two renderings, therefore two keys — a translator changing one must not silently
+    /// change the other.
+    private static func allDaySpoken(_ formattedDate: String) -> String {
+        String(localized: "dueDate.a11y.allDay",
+               defaultValue: "\(formattedDate), All day",
+               comment: "VoiceOver reading of a due date for a task due on a whole day rather than at a time. The placeholder is the already-formatted date. Use a spoken separator here, not a punctuation glyph.")
+    }
 
     /// Formats a due date for display in the task row badge.
     ///
@@ -17,7 +37,7 @@ enum DueDateFormatter {
         if hasTimeComponent(date) {
             return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         } else {
-            return date.formatted(.dateTime.month(.abbreviated).day()) + allDaySuffix
+            return allDayBadge(date.formatted(.dateTime.month(.abbreviated).day()))
         }
     }
 
@@ -35,7 +55,7 @@ enum DueDateFormatter {
             // which also extracts the calendar day in UTC.
             var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
             style.timeZone = TimeZone(identifier: "UTC")!
-            return date.formatted(style) + allDaySuffix
+            return allDayBadge(date.formatted(style))
         } else {
             return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         }
@@ -54,7 +74,7 @@ enum DueDateFormatter {
             // visible day — local formatting would shift it (see `format`).
             var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
             style.timeZone = TimeZone(identifier: "UTC")!
-            return date.formatted(style) + ", All day"
+            return allDaySpoken(date.formatted(style))
         } else {
             return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         }

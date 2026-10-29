@@ -64,7 +64,11 @@ struct SyncFailureBanner: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(failure.message)
-        .accessibilityHint(isActionable ? "Double-tap to open Settings and fix your account." : "")
+        // An empty second branch is still a literal, and it extracted as the `""` key — one
+        // catalog entry shared by every empty string in the app. Hoisting both branches into
+        // named `Text` values keeps the literal out of the ternary: it is extracted at its own
+        // declaration, and the render site passes no literal at all.
+        .accessibilityHint(isActionable ? Self.actionableHint : Self.noHint)
         .accessibilityAddTraits(isActionable ? .isButton : [])
     }
 
@@ -81,6 +85,12 @@ struct SyncFailureBanner: View {
 
     /// Red for things the user must fix; muted orange for transient/server-side
     /// problems that resolve on their own.
+
+    /// Extracted at its declaration, so the render site's ternary holds no literal.
+    private static let actionableHint = Text("Double-tap to open Settings and fix your account.")
+    /// No hint. `verbatim` so the empty string never becomes the `""` catalog key.
+    private static let noHint = Text(verbatim: "")
+
     private var tint: Color {
         switch failure.category {
         case .authentication, .accessDenied, .configuration:

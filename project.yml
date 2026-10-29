@@ -1,4 +1,19 @@
 name: NowThis
+
+# Machine-specific settings (DEVELOPMENT_TEAM) come from Local.xcconfig, which is
+# git-ignored. Copy Local.xcconfig.template to Local.xcconfig before generating.
+# Keeping the team ID out of this file matters because project.yml is mirrored
+# verbatim to the public nowthis-source repository.
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+  Performance: Local.xcconfig
+
+configs:
+  Debug: debug
+  Release: release
+  Performance: release
+
 options:
   bundleIdPrefix: com.asecretcompany
   deploymentTarget:
@@ -6,16 +21,47 @@ options:
   xcodeVersion: "16.0"
   groupSortPosition: top
   generateEmptyDirectories: true
+  # Localization. English is the development language; every user-facing string is
+  # extracted to a String Catalog and the guards under NowThisTests/Localization
+  # assert the catalogs, the built bundle, and the store metadata stay in lockstep.
+  developmentLanguage: en
+  # NOTE: XcodeGen 2.45.4 has no way to declare knownRegions. A `knownRegions:` key here is
+  # accepted without error and silently ignored — the generated pbxproj still says
+  # `knownRegions = (Base, en)`. Tried and verified, 2026-07-24; do not re-add it believing
+  # it works. Languages added through Xcode's Localizations UI are destroyed by the next
+  # `xcodegen generate` for the same reason.
+  #
+  # We accept the reset. What matters is not knownRegions but whether the *built bundle*
+  # carries the non-English .lproj directories, which is asserted directly by
+  # LocalizationBundleGuardTests against real build output.
 
 settings:
+  configs:
+    Performance:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NOWTHIS_PERFORMANCE_FIXTURES"
   base:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Automatic
+    # Supplied by Local.xcconfig (git-ignored). Copy Local.xcconfig.template and set
+    # your own team ID there. Never hardcode it here: this file is mirrored verbatim
+    # to the public nowthis-source repository.
     DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
     GENERATE_INFOPLIST_FILE: "YES"
     PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis
-    MARKETING_VERSION: "1.0.4"
+    # Calendar versioning since 2026-07-27: yy.mm, with yy.mm.v for a mid-month fix,
+    # on a monthly release cadence. VersionSchemeGuardTests asserts the format and ties
+    # it to RELEASE_NOTES.md's top heading. The build number restarts with each release
+    # version — TestFlight orders the builds within a version by it.
+    MARKETING_VERSION: "26.10"
     CURRENT_PROJECT_VERSION: "15"
+    # String extraction. All four live here, at the project level, so a target cannot be added
+    # without them — NowThisWatch and NowThisWatchWidget previously had none, and every watch
+    # string would have shipped English in all five languages with a green build.
+    # LocalizationBuildSettingsGuardTests asserts they are here and nowhere else.
+    SWIFT_EMIT_LOC_STRINGS: "YES"               # emit .stringsdata from Swift
+    LOCALIZATION_PREFERS_STRING_CATALOGS: "YES" # .xcstrings, not .strings
+    LOCALIZED_STRING_CODE_COMMENTS: "YES"       # carry `comment:` into the catalogs
+    STRING_CATALOG_GENERATE_SYMBOLS: "YES"      # generated symbol accessors
 
 targets:
   NowThis:
@@ -33,8 +79,8 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_CFBundleDisplayName: NowThis
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
-        SWIFT_EMIT_LOC_STRINGS: "YES"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: Supporter2026 SupporterMidnight SupporterConfetti
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: "YES"
     entitlements:
@@ -46,6 +92,8 @@ targets:
           - $(AppIdentifierPrefix)com.asecretcompany.nowthis
     dependencies:
       - target: NowThisWidget
+        embed: true
+      - target: NowThisWatch
         embed: true
 
   NowThisTests:
@@ -62,6 +110,32 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/NowThis.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NowThis"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        # The one target that must NOT extract. settings.base reaches here too, and the
+        # localization guards feed themselves deliberately malformed fixtures ("", "123", "%@",
+        # a planted "To Do"). If this target extracted, those would become real catalog keys and
+        # every guard would start reporting on strings it wrote itself.
+        SWIFT_EMIT_LOC_STRINGS: "NO"
+        LOCALIZATION_PREFERS_STRING_CATALOGS: "NO"
+        LOCALIZED_STRING_CODE_COMMENTS: "NO"
+        STRING_CATALOG_GENERATE_SYMBOLS: "NO"
+    dependencies:
+      - target: NowThis
+      - sdk: StoreKitTest.framework
+
+  NowThisUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: NowThisUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        SWIFT_EMIT_LOC_STRINGS: "NO"
+        LOCALIZATION_PREFERS_STRING_CATALOGS: "NO"
+        LOCALIZED_STRING_CODE_COMMENTS: "NO"
+        STRING_CATALOG_GENERATE_SYMBOLS: "NO"
     dependencies:
       - target: NowThis
 
@@ -79,16 +153,105 @@ targets:
       - path: NowThis/Intents/CompleteTaskIntent.swift
       - path: NowThis/Intents/WidgetConfigurationIntent.swift
       - path: NowThis/Utilities/DueDateHelper.swift
+      # CompleteTaskIntent is this target's completion path, and a repeating task must
+      # advance to its next occurrence here exactly as it does in the app. Both files are
+      # Foundation-only, and the localized copy that used to sit in RecurrenceRule.swift
+      # now lives in RecurrenceRule+DisplayText.swift, which this target does not compile —
+      # see the note in that file.
+      - path: NowThis/Utilities/RecurrenceRule.swift
+      - path: NowThis/Utilities/TaskCompletionLogic.swift
+      # RecurrenceRule reads and writes RRULE's UNTIL through these two. Both are
+      # Foundation-only and hold no localized copy.
+      - path: NowThis/Parser/TaskPhotoAttachment.swift
+      - path: NowThis/Parser/ICalendarParser.swift
+      - path: NowThis/Parser/ICalendarSerializer.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.widget
         INFOPLIST_FILE: NowThisWidget/Info.plist
-        GENERATE_INFOPLIST_FILE: "NO"
+        # Inherits GENERATE_INFOPLIST_FILE: "YES" from settings.base, exactly as NowThis and
+        # NowThisWatch do. This target used to override it to "NO", and the generated keys it
+        # gave up included `CFBundleDevelopmentRegion`. Nothing else declared English: the
+        # checked-in Info.plist does not (LocalizationBuildSettingsGuardTests forbids it there)
+        # and this catalog emits no `en.lproj`, so the built .appex offered [de, es, fr, it, nl]
+        # and no English at all. iOS then resolved the reader's *next* preferred language —
+        # a phone set to English, then Spanish, got a Spanish widget beside an English app;
+        # English-only got German. Measured on the built product 2026-08-28 and now asserted by
+        # `LocalizationBundleGuardTests.everyBundleOffersTheDevelopmentLanguage`.
+        #
+        # Generation merges into INFOPLIST_FILE rather than replacing it — `NSExtension` and
+        # `NSExtensionPointIdentifier` survive, verified against the built .appex.
         INFOPLIST_KEY_CFBundleDisplayName: NowThis Widget
-        SWIFT_EMIT_LOC_STRINGS: "YES"
         SKIP_INSTALL: "YES"
     entitlements:
       path: NowThisWidget/NowThisWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.asecretcompany.nowthis
+
+  NowThisWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: NowThisWatch
+        excludes:
+          - "**/.DS_Store"
+      - path: NowThis/Watch/WatchPayloads.swift
+      - path: NowThis/Watch/WatchOverlayState.swift
+      - path: NowThis/Watch/WatchSnapshotStore.swift
+      - path: NowThis/App/AppConstants.swift
+      - path: NowThis/Utilities/DueDateHelper.swift
+      - path: NowThis/Utilities/DueDateFormatter.swift
+      - path: NowThis/Watch/WatchSmartList.swift
+      - path: NowThis/Utilities/ColorExtensions.swift
+      # The add screen's two pickers. Both are Foundation-only enums, and reusing them
+      # means the watch offers the words Settings already uses rather than a second
+      # vocabulary. Their `String(localized:)` keys extract into this target's own
+      # catalog — catalogs do not share keys — so each needs its five translations here.
+      - path: NowThis/Models/TaskPriority.swift
+      - path: NowThis/Utilities/DefaultDueDateRule.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.watchkitapp
+        INFOPLIST_KEY_WKApplication: "YES"
+        INFOPLIST_KEY_WKCompanionAppBundleIdentifier: com.asecretcompany.nowthis
+        INFOPLIST_KEY_CFBundleDisplayName: NowThis
+        GENERATE_INFOPLIST_FILE: "YES"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    entitlements:
+      path: NowThisWatch/NowThisWatch.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.asecretcompany.nowthis
+    dependencies:
+      - target: NowThisWatchWidget
+        embed: true
+
+  NowThisWatchWidget:
+    type: app-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: NowThisWatchWidget
+        excludes:
+          - "**/.DS_Store"
+      - path: NowThis/Watch/WatchPayloads.swift
+      - path: NowThis/Watch/WatchOverlayState.swift
+      - path: NowThis/Watch/WatchSnapshotStore.swift
+      - path: NowThis/Watch/WatchSmartList.swift
+      - path: NowThis/App/AppConstants.swift
+      - path: NowThis/Utilities/DueDateHelper.swift
+      - path: NowThis/Utilities/DueDateFormatter.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.watchkitapp.widget
+        INFOPLIST_FILE: NowThisWatchWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        SKIP_INSTALL: "YES"
+    entitlements:
+      path: NowThisWatchWidget/NowThisWatchWidget.entitlements
       properties:
         com.apple.security.application-groups:
           - group.com.asecretcompany.nowthis
@@ -99,12 +262,46 @@ schemes:
       targets:
         NowThis: all
         NowThisWidget: all
+        NowThisWatch: all
     run:
       config: Debug
+      storeKitConfiguration: NowThis/Store/NowThisStore.storekit
     test:
       config: Debug
       targets:
         - NowThisTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
+  NowThisPerformance:
+    build:
+      targets:
+        NowThis: all
+        NowThisUITests: [test]
+    run:
+      config: Performance
+    test:
+      config: Performance
+      targets:
+        - NowThisUITests
+    profile:
+      config: Performance
+
+  # Without this scheme the watch app cannot be run or screenshotted, which makes the
+  # pseudolocalization gate and the whole German rendering pass unrunnable. The app still
+  # *builds* as a dependency of NowThis, so extraction happens — it is looking at it that
+  # was blocked, and looking at it is the only check that catches the layout bug class.
+  NowThisWatch:
+    build:
+      targets:
+        NowThisWatch: all
+        NowThisWatchWidget: all
+    run:
+      config: Debug
     profile:
       config: Release
     analyze:

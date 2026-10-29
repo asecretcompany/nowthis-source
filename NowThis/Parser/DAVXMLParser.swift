@@ -1,189 +1,230 @@
 import Foundation
 
-/// Parses WebDAV/CalDAV XML responses (PROPFIND, REPORT).
-///
-/// Uses Foundation's `XMLParser` (SAX-style) to extract relevant data
-/// from CalDAV PROPFIND multi-status responses and calendar-multiget
-/// REPORT responses. Zero third-party dependencies.
+/// Parses complete DAV multistatus documents. Properties are committed only
+/// after their own propstat succeeds; response status and property status differ.
 final class DAVXMLParser: NSObject, XMLParserDelegate {
-
-    // MARK: - Parsed Output Types
-
-    /// A single resource from a DAV multi-status response.
     struct DAVResource {
-        var href: String = ""
-        var etag: String = ""
-        var calendarData: String = ""
-        var displayName: String = ""
-        var ctag: String = ""
-        var isCalendar: Bool = false
-        var isVTODOSupported: Bool = false
-        var calendarColor: String = ""
-        var currentUserPrincipal: String = ""
-        var calendarHomeSet: String = ""
-        var syncToken: String = ""
-        var statusCode: Int = 200
+        var href = ""
+        var etag = ""
+        var calendarData = ""
+        var displayName = ""
+        var ctag = ""
+        var isCalendar = false
+        var isVTODOSupported = false
+        var calendarColor = ""
+        var currentUserPrincipal = ""
+        var calendarHomeSet = ""
+        var syncToken = ""
+        var deletedAt = ""
+        var privileges: Set<String> = []
+        var supportsSyncCollection = false
+        var statusCode = 200
+        var responseStatusCode: Int?
+        /// Keys use expanded XML names so a foreign namespace cannot impersonate DAV.
+        var propertyStatusCodes: [String: Int] = [:]
+        var propstatStatusCodes: [Int] = []
+
+        func propertyStatus(_ name: String, namespace: String = "DAV:") -> Int? {
+            propertyStatusCodes["{\(namespace)}\(name)"]
+        }
     }
 
-    // MARK: - State
-
+    /// The report token is the direct child of multistatus, never a discovered property.
+    private(set) var syncToken = ""
     private var resources: [DAVResource] = []
-    private var currentResource: DAVResource?
-    private var currentElement = ""
-    private var currentText = ""
-    private var inResponse = false
-    private var inProp = false
-    private var inSupportedCalendarComponentSet = false
+    private var resource: DAVResource?
+    private var properties = DAVResource()
+    private var propertyNames: Set<String> = []
+    private var propstatStatus: Int?
+    private var invalidStructure = false
+    private var tokenCount = 0
+    private var rootIsMultistatus = false
 
-    // MARK: - Public API
+    private struct Element {
+        let name: String
+        let namespace: String
+        var text = ""
+        var key: String { "{\(namespace)}\(name)" }
+    }
+    private var elements: [Element] = []
 
-    /// Parses a CalDAV XML response body.
-    ///
-    /// - Parameter data: Raw XML data from the server.
-    /// - Returns: Array of parsed `DAVResource` entries.
-    func parse(data: Data) -> [DAVResource] {
+    func parse(data: Data) throws -> [DAVResource] {
+        let interval = PerformanceTrace.begin("DAVXML", bytes: data.count)
+        defer { PerformanceTrace.end("DAVXML", interval) }
         resources = []
-        currentResource = nil
-        currentElement = ""
-        currentText = ""
-        inResponse = false
-        inProp = false
-
+        resource = nil
+        elements = []
+        properties = DAVResource()
+        propertyNames = []
+        propstatStatus = nil
+        invalidStructure = false
+        tokenCount = 0
+        syncToken = ""
+        rootIsMultistatus = false
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldProcessNamespaces = true
-        parser.shouldReportNamespacePrefixes = false
-        parser.parse()
-
+        parser.shouldResolveExternalEntities = false
+        guard parser.parse(), rootIsMultistatus, !invalidStructure else {
+            throw CalDAVError.invalidResponse
+        }
         return resources
     }
 
-    /// Convenience: parse and return the first resource.
-    func parseFirst(data: Data) -> DAVResource? {
-        return parse(data: data).first
+    func parseFirst(data: Data) throws -> DAVResource? {
+        try parse(data: data).first
     }
 
-    // MARK: - XMLParserDelegate
-
-    func parser(
-        _ parser: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?,
-        attributes: [String: String] = [:]
-    ) {
-        let localName = elementName.components(separatedBy: ":").last ?? elementName
-        currentElement = localName
-        currentText = ""
-
-        switch localName {
-        case "response":
-            inResponse = true
-            currentResource = DAVResource()
-        case "prop":
-            inProp = true
-        case "supported-calendar-component-set":
-            inSupportedCalendarComponentSet = true
-        case "comp":
-            if inSupportedCalendarComponentSet {
-                let compName = attributes["name"] ?? ""
-                if compName.uppercased() == "VTODO" {
-                    currentResource?.isVTODOSupported = true
-                }
-            }
-        case "calendar", "vevent-collection":
-            if inProp {
-                currentResource?.isCalendar = true
-            }
-        default:
-            break
+    func parser(_ parser: XMLParser, didStartElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?,
+                attributes: [String: String] = [:]) {
+        let element = Element(name: elementName, namespace: namespaceURI ?? "")
+        if elements.isEmpty {
+            rootIsMultistatus = element.key == "{DAV:}multistatus"
         }
+        let parent = elements.last?.key
+        if element.key == "{DAV:}response" {
+            if parent != "{DAV:}multistatus" || resource != nil { invalidStructure = true }
+            resource = DAVResource()
+        } else if element.key == "{DAV:}propstat" {
+            if parent != "{DAV:}response" { invalidStructure = true }
+            properties = DAVResource()
+            propertyNames = []
+            propstatStatus = nil
+        }
+        if parent == "{DAV:}prop" { propertyNames.insert(element.key) }
+        let ancestors = elements.map(\.key)
+        if ancestors.contains("{DAV:}prop") {
+            if element.key == "{urn:ietf:params:xml:ns:caldav}comp",
+               ancestors.contains("{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set"),
+               attributes["name"]?.uppercased() == "VTODO" {
+                properties.isVTODOSupported = true
+            }
+            if ["{urn:ietf:params:xml:ns:caldav}calendar", "{urn:ietf:params:xml:ns:caldav}vevent-collection"].contains(element.key),
+               ancestors.contains("{DAV:}resourcetype") { properties.isCalendar = true }
+            if parent == "{DAV:}privilege", ancestors.contains("{DAV:}current-user-privilege-set"), element.namespace == "DAV:" {
+                properties.privileges.insert(element.name)
+            }
+            if element.key == "{DAV:}sync-collection", parent == "{DAV:}report",
+               ancestors.contains("{DAV:}supported-report-set") {
+                properties.supportsSyncCollection = true
+            }
+        }
+        elements.append(element)
     }
 
-    func parser(
-        _ parser: XMLParser,
-        didEndElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?
-    ) {
-        let localName = elementName.components(separatedBy: ":").last ?? elementName
-        let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        switch localName {
-        case "response":
-            if let resource = currentResource {
-                // Ensure we store the resource
-                resources.append(resource)
+    func parser(_ parser: XMLParser, didEndElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?) {
+        guard let element = elements.popLast() else { invalidStructure = true; return }
+        let text = element.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parent = elements.last?.key
+        switch element.key {
+        case "{DAV:}href":
+            if parent == "{DAV:}response" {
+                if resource?.href.isEmpty == false { invalidStructure = true }
+                resource?.href = text
+            } else if parent == "{DAV:}current-user-principal" {
+                properties.currentUserPrincipal = text
+            } else if parent == "{urn:ietf:params:xml:ns:caldav}calendar-home-set" {
+                properties.calendarHomeSet = text
             }
-            currentResource = nil
-            inResponse = false
-
-        case "href":
-            if inResponse {
-                currentResource?.href = trimmed
+        case "{DAV:}status":
+            let parts = text.split(whereSeparator: \.isWhitespace)
+            let code = parts.count >= 2 && parts[0].hasPrefix("HTTP/") ? Int(parts[1]) : nil
+            if parent == "{DAV:}propstat" {
+                if propstatStatus != nil { invalidStructure = true }
+                propstatStatus = code
+            } else if parent == "{DAV:}response" {
+                if resource?.responseStatusCode != nil { invalidStructure = true }
+                resource?.responseStatusCode = code
             }
-
-        case "getetag":
-            currentResource?.etag = trimmed
-                .replacingOccurrences(of: "\"", with: "")
-
-        case "calendar-data":
-            currentResource?.calendarData = trimmed
-
-        case "displayname":
-            currentResource?.displayName = trimmed
-
-        case "getctag":
-            currentResource?.ctag = trimmed
-
-        case "calendar-color":
-            currentResource?.calendarColor = trimmed
-
-        case "current-user-principal":
-            // The href is nested, handled via href in the principal context
-            break
-
-        case "calendar-home-set":
-            break
-
-        case "sync-token":
-            currentResource?.syncToken = trimmed
-
-        case "status":
-            // Parse status line like "HTTP/1.1 200 OK"
-            let parts = trimmed.components(separatedBy: " ")
-            if parts.count >= 2, let code = Int(parts[1]) {
-                currentResource?.statusCode = code
+            if code == nil { invalidStructure = true }
+        case "{DAV:}sync-token" where parent == "{DAV:}multistatus":
+            tokenCount += 1
+            if tokenCount > 1 { invalidStructure = true }
+            syncToken = text
+        case "{DAV:}propstat":
+            // Legacy parse callers accept an omitted status. Strict REPORT accounting
+            // uses propertyStatusCodes and rejects that unspecified status (zero).
+            let code = propstatStatus ?? 0
+            resource?.propstatStatusCodes.append(code)
+            for name in propertyNames where resource?.propertyStatusCodes[name] != 200 {
+                resource?.propertyStatusCodes[name] = code
             }
-
-        case "prop":
-            inProp = false
-
-        case "supported-calendar-component-set":
-            inSupportedCalendarComponentSet = false
-
+            if code == 0 || (200..<300).contains(code) { mergeProperties() }
+        case "{DAV:}response":
+            if var found = resource {
+                found.statusCode = found.responseStatusCode
+                    ?? (found.propstatStatusCodes.contains(where: { (200..<300).contains($0) }) ? 200 : found.propstatStatusCodes.first ?? 200)
+                resources.append(found)
+            }
+            resource = nil
         default:
-            break
-        }
-
-        // Special: handle nested href inside current-user-principal or calendar-home-set
-        if localName == "href" && !inResponse {
-            // This could be the user principal or calendar home
-            if !trimmed.isEmpty {
-                if resources.isEmpty {
-                    // Pre-response context — this is likely a top-level property
-                    var resource = DAVResource()
-                    resource.currentUserPrincipal = trimmed
-                    resource.calendarHomeSet = trimmed
-                    resources.append(resource)
+            if parent == "{DAV:}prop" {
+                switch element.key {
+                case "{DAV:}getetag": properties.etag = text.replacingOccurrences(of: "\"", with: "")
+                case "{urn:ietf:params:xml:ns:caldav}calendar-data": properties.calendarData = text
+                case "{DAV:}displayname": properties.displayName = text
+                case "{http://calendarserver.org/ns/}getctag": properties.ctag = text
+                case "{http://apple.com/ns/ical/}calendar-color": properties.calendarColor = text
+                case "{DAV:}sync-token": properties.syncToken = text
+                case "{http://nextcloud.com/ns}deleted-at": properties.deletedAt = text
+                default: break
                 }
             }
         }
+    }
 
-        currentElement = ""
+    private func mergeProperties() {
+        guard var found = resource else { return }
+        for key in propertyNames {
+            switch key {
+            case "{DAV:}getetag": found.etag = properties.etag
+            case "{urn:ietf:params:xml:ns:caldav}calendar-data": found.calendarData = properties.calendarData
+            case "{DAV:}displayname": found.displayName = properties.displayName
+            case "{http://calendarserver.org/ns/}getctag": found.ctag = properties.ctag
+            case "{DAV:}resourcetype": found.isCalendar = properties.isCalendar
+            case "{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set": found.isVTODOSupported = properties.isVTODOSupported
+            case "{http://apple.com/ns/ical/}calendar-color": found.calendarColor = properties.calendarColor
+            case "{DAV:}current-user-principal": found.currentUserPrincipal = properties.currentUserPrincipal
+            case "{urn:ietf:params:xml:ns:caldav}calendar-home-set": found.calendarHomeSet = properties.calendarHomeSet
+            case "{DAV:}sync-token": found.syncToken = properties.syncToken
+            case "{http://nextcloud.com/ns}deleted-at": found.deletedAt = properties.deletedAt
+            case "{DAV:}current-user-privilege-set": found.privileges = properties.privileges
+            case "{DAV:}supported-report-set": found.supportsSyncCollection = properties.supportsSyncCollection
+            default: break
+            }
+        }
+        resource = found
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        currentText += string
+        if !elements.isEmpty { elements[elements.count - 1].text += string }
     }
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let text = String(data: CDATABlock, encoding: .utf8) else { invalidStructure = true; return }
+        self.parser(parser, foundCharacters: text)
+    }
+
+    /// Only a DAV error precondition qualifies a 403 as an expired token.
+    static func isInvalidSyncTokenError(_ data: Data) -> Bool {
+        let delegate = SyncTokenErrorParser()
+        let parser = XMLParser(data: data)
+        parser.shouldProcessNamespaces = true
+        parser.shouldResolveExternalEntities = false
+        parser.delegate = delegate
+        return parser.parse() && delegate.found
+    }
+}
+
+private final class SyncTokenErrorParser: NSObject, XMLParserDelegate {
+    private var path: [String] = []
+    var found = false
+    func parser(_ parser: XMLParser, didStartElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?, attributes: [String: String] = [:]) {
+        path.append("{\(namespaceURI ?? "")}\(elementName)")
+        if path == ["{DAV:}error", "{DAV:}valid-sync-token"] { found = true }
+    }
+    func parser(_ parser: XMLParser, didEndElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?) { path.removeLast() }
 }

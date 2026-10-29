@@ -55,6 +55,56 @@ struct RetryPolicyTests {
         #expect(!policy.isRetryable(URLError(.notConnectedToInternet)))
     }
 
+    @Test("An exhausted app budget is never retried")
+    func cancelledDeadlineNeverRetries() async {
+        let recorder = CallRecorder()
+        await #expect(throws: BackgroundBudgetExhausted.self) {
+            try await withRetry(policy: .init(maxAttempts: 3, baseDelay: 0), sleep: { await recorder.recordSleep($0) }) { () -> String in
+                _ = await recorder.nextAttempt()
+                throw BackgroundBudgetExhausted()
+            }
+        }
+        #expect(await recorder.attempts == 1)
+        #expect(await recorder.sleeps.isEmpty)
+    }
+
+    @Test("Backoff that consumes the remaining app allowance stops without server deferral")
+    func budgetBoundsBackoff() async {
+        let recorder = CallRecorder()
+        let budget = BackgroundRunBudget(startedAt: ContinuousClock().now - .seconds(14))
+        await #expect(throws: BackgroundBudgetExhausted.self) {
+            try await withRetry(policy: .init(maxAttempts: 3, baseDelay: 2), runBudget: budget,
+                sleep: { await recorder.recordSleep($0) }) { () -> String in
+                _ = await recorder.nextAttempt()
+                throw CalDAVError.serverError(statusCode: 503)
+            }
+        }
+        #expect(await recorder.attempts == 1)
+        #expect(await recorder.sleeps.isEmpty)
+    }
+
+    @Test("A server Retry-After survives an app allowance too short to wait", arguments: [429, 503])
+    func serverDeferralSurvivesSharedBudget(status: Int) async {
+        let recorder = CallRecorder()
+        let budget = BackgroundRunBudget(startedAt: ContinuousClock().now - .seconds(14))
+        let instant = Date(timeIntervalSince1970: 2_000_000_000)
+        do {
+            _ = try await withRetry(policy: .init(maxAttempts: 3, baseDelay: 0), runBudget: budget,
+                now: { instant }, sleep: { await recorder.recordSleep($0) }) { () -> String in
+                _ = await recorder.nextAttempt()
+                if status == 429 { throw CalDAVError.rateLimited(retryAfter: 60) }
+                throw HTTPRetryError(statusCode: 503, retryAfter: 60)
+            }
+            Issue.record("Expected the server's requested retry deadline")
+        } catch let error as RetryDeferredError {
+            #expect(error.deadline == Date(timeIntervalSince1970: 2_000_000_060))
+        } catch {
+            Issue.record("Expected RetryDeferredError for an actual server delay, received \(error)")
+        }
+        #expect(await recorder.attempts == 1)
+        #expect(await recorder.sleeps.isEmpty)
+    }
+
     // MARK: - Backoff
 
     @Test("Backoff grows exponentially from the base delay")

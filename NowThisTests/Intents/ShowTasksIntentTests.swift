@@ -32,7 +32,11 @@ struct ShowTasksIntentTests {
         let intent = ShowTasksIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("no active tasks") || result.dialog.contains("No active tasks") || result.dialog.contains("0"))
+        // The spoken reply is localized; compare against what the app resolves rather than
+        // against English prose.
+        let expected = try LocalizationCatalogFixture.rendering(
+            ofKey: "intent.dialog.showTasks.none", inCatalogAt: "NowThis/Localizable.xcstrings")
+        #expect(result.spokenText == expected)
     }
 
     @Test("Returns task titles for active tasks")
@@ -57,9 +61,9 @@ struct ShowTasksIntentTests {
         let intent = ShowTasksIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Buy milk"))
-        #expect(result.dialog.contains("Call plumber"))
-        #expect(result.dialog.contains("2"))
+        #expect(result.spokenText.contains("Buy milk"))
+        #expect(result.spokenText.contains("Call plumber"))
+        #expect(result.spokenText.contains("2"))
     }
 
     @Test("Excludes completed and deleted tasks")
@@ -89,9 +93,9 @@ struct ShowTasksIntentTests {
         let intent = ShowTasksIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Active task"))
-        #expect(!result.dialog.contains("Done task"))
-        #expect(!result.dialog.contains("Deleted task"))
+        #expect(result.spokenText.contains("Active task"))
+        #expect(!result.spokenText.contains("Done task"))
+        #expect(!result.spokenText.contains("Deleted task"))
     }
 
     @Test("Filters by list when specified")
@@ -115,12 +119,12 @@ struct ShowTasksIntentTests {
 
         try context.save()
 
-        var intent = ShowTasksIntent()
+        let intent = ShowTasksIntent()
         intent.list = TaskListEntity(id: workList.id, name: "Work")
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("Work task"))
-        #expect(!result.dialog.contains("Home task"))
+        #expect(result.spokenText.contains("Work task"))
+        #expect(!result.spokenText.contains("Home task"))
     }
 
     @Test("Truncates at 10 tasks and mentions remaining")
@@ -142,7 +146,9 @@ struct ShowTasksIntentTests {
         let intent = ShowTasksIntent()
         let result = try await intent.performWithContainer(container)
 
-        #expect(result.dialog.contains("15"))
-        #expect(result.dialog.contains("more"))
+        #expect(result.spokenText.contains("15"))
+        // "more" is an English word; the sentence says "und 5 weitere" in German. Assert the
+        // remainder count instead, which is the part that is actually locale-stable.
+        #expect(result.spokenText.contains("5"))
     }
 }

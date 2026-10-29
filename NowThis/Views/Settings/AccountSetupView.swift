@@ -12,6 +12,7 @@ struct AccountSetupView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.syncCommands) private var syncCommands
 
     @State private var serverURL = ""
     @State private var connectionError: String?
@@ -108,6 +109,7 @@ struct AccountSetupView: View {
                         appPassword: appPassword
                     )
                     accountCreated = true
+                    syncCommands.syncAfterAccountAdded(modelContext)
                     dismiss()
                 } catch {
                     connectionError = error.localizedDescription
@@ -160,6 +162,7 @@ struct AccountSetupView: View {
                 )
                 password = "" // Clear from memory (SEC-01)
                 accountCreated = true
+                syncCommands.syncAfterAccountAdded(modelContext)
                 dismiss()
             } else {
                 connectionError = String(
@@ -251,7 +254,7 @@ private struct LoginFlowSection: View {
         } header: {
             Text("Sign In")
         } footer: {
-            Text("Opens your Nextcloud server in a browser. Log in and grant access — your credentials stay in the browser, never in this app.")
+            Text("Opens your Nextcloud server in a browser. Your Nextcloud password stays in the browser and never reaches this app; the server hands back a separate app password, which is stored in the iOS Keychain and can be revoked from Nextcloud at any time.")
         }
     }
 }

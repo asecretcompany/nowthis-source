@@ -33,3 +33,47 @@ struct BackgroundSyncManagerTests {
         #expect(manager.didSchedule == true, "scheduleBackgroundSync must attempt to submit a task request")
     }
 }
+
+@Suite("Background sync notification flush")
+struct BackgroundSyncNotificationFlushTests {
+    private enum Failure: Error { case partial }
+
+    @Test func servicesLocalWorkBeforePullAndFlushesCommittedProgressAfterFailure() async {
+        let events = BackgroundRunEvents()
+        let result = await BackgroundSyncManager.performRun(operation: {
+            await events.record("pull")
+            throw Failure.partial
+        }, flush: { await events.record("flush") })
+        #expect(!result)
+        #expect(await events.values == ["flush", "pull", "flush"])
+    }
+
+    @Test func expirationSkipsFreshFlush() async {
+        let events = BackgroundRunEvents()
+        let budget = BackgroundRunBudget()
+        let result = await BackgroundSyncManager.performRun(budget: budget, operation: {
+            await events.record("pull")
+            budget.expire()
+            throw CancellationError()
+        }, flush: { await events.record("flush") })
+        #expect(!result)
+        #expect(await events.values == ["flush", "pull"])
+    }
+
+    @Test func remoteCutoffPreservesLocalFlushAllowance() async {
+        let start = ContinuousClock().now
+        let budget = BackgroundRunBudget(startedAt: start, now: { start + .seconds(16) })
+        let events = BackgroundRunEvents()
+        let result = await BackgroundSyncManager.performRun(budget: budget, operation: {
+            await events.record("pull")
+            return true
+        }, flush: { await events.record("flush") })
+        #expect(!result)
+        #expect(await events.values == ["flush"])
+    }
+}
+
+private actor BackgroundRunEvents {
+    private(set) var values: [String] = []
+    func record(_ value: String) { values.append(value) }
+}

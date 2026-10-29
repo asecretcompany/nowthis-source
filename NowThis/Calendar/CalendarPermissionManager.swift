@@ -52,17 +52,29 @@ final class CalendarPermissionManager: ObservableObject {
     var statusDescription: String {
         switch authorizationStatus {
         case .notDetermined:
-            return "Not configured"
+            return String(localized: "calendarAccess.notDetermined",
+                          defaultValue: "Not configured",
+                          comment: "Apple Calendar access state in Settings: the app has not asked for permission yet.")
         case .restricted:
-            return "Restricted by device policy"
+            return String(localized: "calendarAccess.restricted",
+                          defaultValue: "Restricted by device policy",
+                          comment: "Apple Calendar access state in Settings: blocked by Screen Time or a mobile device management profile, so the user cannot grant it here.")
         case .denied:
-            return "Denied — tap to open Settings"
+            return String(localized: "calendarAccess.denied",
+                          defaultValue: "Denied in iOS Settings",
+                          comment: "Apple Calendar access state: the user refused. iOS Settings is the system app's own name.")
         case .fullAccess:
-            return "Full access granted"
+            return String(localized: "calendarAccess.full",
+                          defaultValue: "Full access granted",
+                          comment: "Apple Calendar access state in Settings: the app can read and write events.")
         case .writeOnly:
-            return "Write-only access"
+            return String(localized: "calendarAccess.writeOnly",
+                          defaultValue: "Write-only access",
+                          comment: "Apple Calendar access state in Settings: the app can add events but cannot read existing ones.")
         @unknown default:
-            return "Unknown"
+            return String(localized: "calendarAccess.unknown",
+                          defaultValue: "Unknown",
+                          comment: "Apple Calendar access state in Settings for a permission state this version of the app does not recognise.")
         }
     }
 }

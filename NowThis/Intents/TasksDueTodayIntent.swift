@@ -15,7 +15,7 @@ struct TasksDueTodayIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let container = try SharedModelContainer.create()
         let result = try await performWithContainer(container)
-        return .result(dialog: "\(result.dialog)")
+        return .result(dialog: IntentDialog(result.dialog))
     }
 
     /// Testable entry point that accepts an injected container.
@@ -39,12 +39,19 @@ struct TasksDueTodayIntent: AppIntent {
         }
 
         guard !dueTodayTasks.isEmpty else {
-            return IntentDialogResult(dialog: "Nothing due today! You're all clear.")
+            return IntentDialogResult(dialog: LocalizedStringResource(
+                "intent.dialog.dueToday.none",
+                defaultValue: "Nothing due today! You're all clear.",
+                comment: "Siri's spoken reply when nothing is due today."))
         }
 
         let count = dueTodayTasks.count
         let titles = dueTodayTasks.prefix(10).map { $0.title }.joined(separator: ", ")
-        let dialog = "You have \(count) task\(count == 1 ? "" : "s") due today: \(titles)."
+
+        let dialog = LocalizedStringResource(
+            "intent.dialog.dueToday",
+            defaultValue: "You have \(count) tasks due today: \(titles).",
+            comment: "Siri's spoken reply listing today's tasks. First placeholder is the count, second is the task titles joined with commas.")
 
         return IntentDialogResult(dialog: dialog)
     }

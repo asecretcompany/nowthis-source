@@ -23,7 +23,7 @@ struct SearchTasksIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let container = try SharedModelContainer.create()
         let result = try await performWithContainer(container)
-        return .result(dialog: "\(result.dialog)")
+        return .result(dialog: IntentDialog(result.dialog))
     }
 
     /// Testable entry point that accepts an injected container.
@@ -40,11 +40,16 @@ struct SearchTasksIntent: AppIntent {
         )
 
         let allTasks = try context.fetch(descriptor)
-        let lowerQuery = query.lowercased()
-        let matching = allTasks.filter { $0.title.lowercased().contains(lowerQuery) }
+        // Folds case and diacritics in the reader's language. This one feeds **spoken** Siri
+        // results, where the user's pronunciation is transcribed without accents more often than
+        // with them — "cherche café" arrives as "cafe" and must still match.
+        let matching = allTasks.filter { $0.title.localizedStandardContains(query) }
 
         guard !matching.isEmpty else {
-            return IntentDialogResult(dialog: "No tasks found matching \"\(query)\".")
+            return IntentDialogResult(dialog: LocalizedStringResource(
+                "intent.dialog.search.none",
+                defaultValue: "No tasks found matching \"\(query)\".",
+                comment: "Siri's spoken reply when a search matched nothing. The placeholder is what the user searched for; the quotation marks around it should follow the target language's own convention."))
         }
 
         let count = matching.count
@@ -52,12 +57,18 @@ struct SearchTasksIntent: AppIntent {
         let displayed = matching.prefix(maxDisplay)
         let titles = displayed.map { $0.title }.joined(separator: ", ")
 
-        var dialog: String
+        let dialog: LocalizedStringResource
         if count <= maxDisplay {
-            dialog = "Found \(count) task\(count == 1 ? "" : "s") matching \"\(query)\": \(titles)."
+            dialog = LocalizedStringResource(
+                "intent.dialog.search",
+                defaultValue: "Found \(count) tasks matching \"\(query)\": \(titles).",
+                comment: "Siri's spoken reply reading out every search hit. Placeholders in order: the count, the search text, the titles joined with commas.")
         } else {
             let remaining = count - maxDisplay
-            dialog = "Found \(count) tasks matching \"\(query)\": \(titles), and \(remaining) more."
+            dialog = LocalizedStringResource(
+                "intent.dialog.search.truncated",
+                defaultValue: "Found \(count) tasks matching \"\(query)\": \(titles), and \(remaining) more.",
+                comment: "Siri's spoken reply when a search matched more than it will read out. Placeholders in order: total count, search text, the titles read out, how many are left.")
         }
 
         return IntentDialogResult(dialog: dialog)

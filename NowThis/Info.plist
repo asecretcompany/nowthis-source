@@ -29,6 +29,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>NowThis uses the camera to add photos to your tasks. Synced photos are visible to everyone with access to the list.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>NowThis uses calendar access to show your tasks alongside your schedule and sync task due dates as calendar events.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

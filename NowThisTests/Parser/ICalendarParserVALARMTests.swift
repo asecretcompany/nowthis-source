@@ -170,12 +170,68 @@ struct ICalendarParserVALARMTests {
         let todo = try ICalendarParser.parseSingleVTODO(from: ics)
         #expect(todo?.alarmTriggerSeconds == 900)
     }
+
+    @Test("An invalid first alarm does not hide a later valid reminder", arguments: [
+        "P", "-PT", "-P1DT", "20261015T120000Z"
+    ])
+    func invalidAlarmDoesNotHideValidAlarm(trigger: String) throws {
+        let ics = """
+        BEGIN:VCALENDAR
+        BEGIN:VTODO
+        UID:recover-alarm
+        SUMMARY:Task with a usable reminder
+        DUE:20501015T120000Z
+        BEGIN:VALARM
+        TRIGGER:\(trigger)
+        ACTION:DISPLAY
+        END:VALARM
+        BEGIN:VALARM
+        TRIGGER:-PT15M
+        ACTION:DISPLAY
+        END:VALARM
+        END:VTODO
+        END:VCALENDAR
+        """
+
+        let todo = try ICalendarParser.parseSingleVTODO(from: ics)
+        #expect(todo?.alarmTriggerSeconds == 900)
+    }
 }
 
 // MARK: - Duration Parsing Tests
 
 @Suite("ICalendarParser Duration Parsing")
 struct ICalendarParserDurationTests {
+
+    @Test("An oversized server alarm does not crash duration parsing", arguments: [
+        "-P106751991167301D", "-P15250284452472W", "-PT2562047788015216H",
+        "-PT153722867280912931M", "-PT9223372036854775808S",
+        "-P106751991167300DT15H30M8S"
+    ])
+    func rejectsOverflowingDuration(duration: String) {
+        #expect(ICalendarParser.parseDurationToSeconds(duration) == nil)
+    }
+
+    @Test("The largest representable second offset remains valid")
+    func acceptsMaximumSeconds() {
+        #expect(ICalendarParser.parseDurationToSeconds("-PT9223372036854775807S") == Int.max)
+    }
+
+    @Test("Truncated and out-of-order durations are not converted to reminders", arguments: [
+        "P", "PT", "P1", "P1DT", "PT1", "PT1H30", "PT1H1H", "PT1M1H",
+        "P1W1D", "P1DT1DT1H", "PT1HT1M", "P1D2D", "PT1.5H", "PT１H"
+    ])
+    func rejectsMalformedDuration(duration: String) {
+        #expect(ICalendarParser.parseDurationToSeconds(duration) == nil)
+    }
+
+    @Test("Valid zero, week and compound durations keep their offsets", arguments: [
+        ("P0D", 0), ("-P2W", 1_209_600), ("-P1DT2H3M4S", 93_784),
+        ("PT30S", 30), ("-PT1H0M20S", 3_620)
+    ])
+    func supportedDurationForms(duration: String, seconds: Int) {
+        #expect(ICalendarParser.parseDurationToSeconds(duration) == seconds)
+    }
 
     @Test("Parse -PT15M to 900 seconds")
     func parsePT15M() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Observation
 
 /// Displays tasks for a selected sidebar item — either a smart list filter
 /// or a specific user task list.
@@ -15,11 +16,27 @@ struct TaskListView: View {
 
     let selection: SidebarSelection
     @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var syncScheduler: SyncScheduler
-    static let activeTasksPredicate = #Predicate<TaskItem> { !$0.isDeletedLocally }
-    @Query(filter: Self.activeTasksPredicate) private var allTasks: [TaskItem]
+    @Environment(\.syncCommands) private var syncCommands
+    /// Fetches only what this screen can ever show: live roots, and — for a
+    /// specific list — only that list's roots. The `#Predicate` excludes
+    /// subtasks (`parentTask != nil`), soft-deleted tasks, and — for a list
+    /// selection — tasks belonging to other lists. It does not exclude
+    /// completed tasks: the Completed smart list and the show-completed
+    /// toggle both still need those in `allTasks`. Doing this filter in the
+    /// `#Predicate` means SwiftData does it once, at fetch time, instead of
+    /// the view redoing it two or three times per render and per add.
+    static func taskQueryPredicate(for selection: SidebarSelection) -> Predicate<TaskItem> {
+        switch selection {
+        case .taskList(let listID):
+            return #Predicate<TaskItem> { !$0.isDeletedLocally && $0.parentTask == nil && $0.taskList?.id == listID }
+        default:
+            return #Predicate<TaskItem> { !$0.isDeletedLocally && $0.parentTask == nil }
+        }
+    }
+    @State private var allTasks: [TaskItem] = []
+    @State private var queryRevision: UInt64 = 0
     @State private var showingQuickAdd = false
-    @State private var selectedTask: TaskItem?
+    @State private var selectedTask: SelectedTask?
     @State private var searchText = ""
     @AppStorage("taskSortOption") private var activeSort: TaskSortOption = .dueDate
     @AppStorage("taskSortDirection") private var sortDirection: SortDirection = .ascending
@@ -28,11 +45,28 @@ struct TaskListView: View {
 
     @AppStorage("upcomingGrouping") private var upcomingGrouping = "weekly"
 
+    @AppStorage("tabBarVisible") private var visibleTabsJSON = ""
+    @SceneStorage("selectedTabToken") private var selectedTabToken = AppTab.tasks.token
+    @SceneStorage("sidebarSelection") private var sidebarSelectionKey = "smart:Today"
+    /// A destination the title menu can't reach by selecting a tab: a Board,
+    /// Calendar or Matrix the user has hidden. See ``resolveJump(to:visible:)``.
+    @State private var presentedHiddenTab: AppTab?
+
     @State private var inlineTaskTitle = ""
     @FocusState private var inlineFieldFocused: Bool
     /// Per-entry due-date override chosen from the add bar's chip. `nil` uses the
     /// resolved contextual/default rule.
     @State private var inlineDueOverride: DefaultDueDateRule?
+
+    /// Selection scopes the replaceable query reader, preserving this screen's state.
+    init(selection: SidebarSelection) {
+        self.selection = selection
+    }
+
+    private var queryListID: String? {
+        if case .taskList(let id) = selection { return id }
+        return nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,30 +87,40 @@ struct TaskListView: View {
                     } else {
                         SectionedTaskListContent(
                             sections: sections,
-                            onSelect: { selectedTask = $0 },
+                            onSelect: { selectedTask = SelectedTask($0) },
                             showGroupingToggle: currentSmartList == .upcoming,
                             grouping: $upcomingGrouping
                         )
                     }
-                } else if displayedTasks.isEmpty {
-                    tappableEmptyState
                 } else {
-                    TasksListContent(
-                        tasks: displayedTasks,
-                        manualReorder: activeSort == .manually,
-                        activeSort: activeSort,
-                        ascending: sortDirection.isAscending,
-                        onSelect: { selectedTask = $0 },
-                        onMove: moveTasks,
-                        onMoveSubtasks: moveSubtasks,
-                        onTapEmptyArea: focusInlineField
-                    )
+                    let tasks = displayedTasks
+                    if tasks.isEmpty {
+                        tappableEmptyState
+                    } else {
+                        TasksListContent(
+                            tasks: tasks,
+                            dataRevision: queryRevision,
+                            manualReorder: activeSort == .manually,
+                            activeSort: activeSort,
+                            ascending: sortDirection.isAscending,
+                            onSelect: { selectedTask = SelectedTask($0) },
+                            onMove: moveTasks,
+                            onMoveSubtasks: moveSubtasks,
+                            onTapEmptyArea: focusInlineField
+                        )
+                    }
                 }
             }
             .refreshable {
-                await syncScheduler.syncNow(modelContext: modelContext)
+                await syncCommands.syncNow(modelContext)
             }
         }
+        .background(InboundQueryReader(
+            descriptor: FetchDescriptor(predicate: Self.taskQueryPredicate(for: selection)),
+            scope: selection.encoded, listID: queryListID) {
+                allTasks = $0
+                queryRevision &+= 1
+            })
         .safeAreaInset(edge: .bottom) {
             InlineAddBar(
                 title: $inlineTaskTitle,
@@ -89,15 +133,185 @@ struct TaskListView: View {
             )
         }
         .navigationTitle(title)
-        .searchable(text: $searchText, prompt: "Search tasks…")
+        // Required for `.toolbarTitleMenu` below to actually produce a tappable
+        // menu at all — verified by hand on this SDK (iOS 26.5 simulator): under
+        // `.automatic`/`.large` the title renders as inert text (confirmed via
+        // `idb ui describe-point`: role `AXHeading`, no actions, no visible
+        // chevron, unresponsive to tap and long-press); switching to `.inline`
+        // is what makes the system draw the chevron and expose the title as an
+        // `AXButton` ("<title>, Actions Menu"). This also matches every other
+        // screen's title style (Board, Calendar, Matrix, Journal all use
+        // `.inline` already) — Tasks was the one outlier.
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu {
+            let visible = AppTab.decodeVisible(from: visibleTabsJSON)
+            // All five, always — a smart list that is also a tab is still a
+            // reasonable thing to pick from here.
+            ForEach(SmartList.allCases) { smart in
+                Button {
+                    jump(to: .smart(smart), visible: visible)
+                } label: {
+                    Label(smart.displayName, systemImage: smart.icon)
+                }
+            }
+            let hiddenPresentations = AppTab.titleMenuHiddenPresentations(visible: visible)
+            if !hiddenPresentations.isEmpty {
+                Divider()
+                ForEach(hiddenPresentations) { tab in
+                    Button {
+                        jump(to: tab, visible: visible)
+                    } label: {
+                        Label(tab.displayName, systemImage: tab.icon)
+                    }
+                }
+            }
+        }
+        // Verified by hand: selecting a hidden Board/Calendar/Matrix from the
+        // title menu set `selectedTabToken` to a tab that isn't in the
+        // `TabView`, and `MainTabView.resolveSelection` silently clamped it back
+        // to the first visible tab — the jump did nothing. Presenting the hidden
+        // destination as a sheet from here (instead of trying to select it as a
+        // tab) is the fix; see ``jump(to:visible:)`` and ``hiddenDestination(for:)``.
+        //
+        // No `NavigationStack` around the destination. Board, Calendar and Matrix each open on
+        // one of their own, so wrapping them here put a second navigation bar in the sheet — the
+        // nesting `-[UINavigationBar layoutSubviews]` asserts on, and the reason the sheet showed
+        // "Done" beside the Board's segmented control with the Board's own title dropped. Each
+        // branch of ``hiddenDestination(for:)`` now carries exactly one container and its own way
+        // out; see `NavigationContainerGuardTests`.
+        .sheet(item: $presentedHiddenTab) { tab in
+            hiddenDestination(for: tab)
+        }
+        // `.always` — not the default `.automatic`. Under `.automatic` the search
+        // field is a *collapsible* navigation-bar drawer, and this screen ends up
+        // with two pull-down affordances stacked on one gesture: the drawer, owned
+        // by the navigation bar above `FilterBar`, and the `List`'s refresh control
+        // below it. Verified by hand on the iPhone 17 simulator (iOS 26.5): with the
+        // drawer collapsed, one pull reveals it *and* starts the refresh, and the two
+        // render in each other's slots — the spinner appears in the drawer band above
+        // the filter chips while the search field is pushed down inside the list,
+        // above the first row. `.always` pins the drawer open, so a pull can only
+        // mean refresh and the spinner stays at the top of the list where it belongs.
+        //
+        // It also stops the field vanishing outright: collapsed, it is not merely
+        // scrolled out of view but absent from the accessibility hierarchy
+        // (confirmed via `idb ui describe-all` — no search element at all), so
+        // search was unreachable by VoiceOver until the user happened to pull down.
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Search tasks…")
         .toolbar { TaskListToolbar(onAdd: { showingQuickAdd = true }) }
         .sheet(isPresented: $showingQuickAdd) {
             QuickAddView(defaultList: defaultTaskList, defaultSmartList: currentSmartList)
         }
-        .sheet(item: $selectedTask) { task in
+        .sheet(item: $selectedTask) { selection in
             NavigationStack {
-                TaskDetailView(task: task)
+                TaskDetailView(task: selection.task)
             }
+        }
+    }
+
+    /// Where a title-menu tap on a destination should route to. Pure and
+    /// stateless so the routing rules are testable without a view — the same
+    /// move `MainTabView.resolveSelection` makes for tab-selection clamping.
+    enum TitleMenuJump: Equatable {
+        /// `tab` is in the bar — pinned, or one the user chose. Select it directly.
+        case selectTab(AppTab)
+        /// `list` has no tab of its own, so the pinned Tasks tab hosts it —
+        /// write the sidebar selection and switch to Tasks.
+        case showInTasksTab(SmartList)
+        /// Nothing in the bar can host this destination — present it as a sheet.
+        /// Only a hidden Board, Calendar or Matrix ever reaches here.
+        case presentSheet(AppTab)
+
+        /// Whether applying this jump must close an open hidden-destination
+        /// sheet. Picking a tab from inside the sheet used to write
+        /// `selectedTabToken` and leave the sheet up, so the tab changed
+        /// invisibly behind it and nothing appeared to happen.
+        var dismissesPresentedSheet: Bool {
+            switch self {
+            case .selectTab, .showInTasksTab: return true
+            case .presentSheet: return false
+            }
+        }
+    }
+
+    /// Resolves a title-menu tap into a ``TitleMenuJump``.
+    ///
+    /// Order matters: a tab that is in the bar always wins (rule 1), even if it
+    /// is itself a `.smart` case — only *then* does the Tasks-tab fallback
+    /// (rule 2) apply. `.tasks` is pinned, so rule 2 always has a host and no
+    /// smart list can reach rule 3; the old `visible.first { $0 == .tasks } ??
+    /// visible.first` fallback could silently misroute a smart-list pick to
+    /// whatever tab was first — Board, say. Only a hidden presentation falls
+    /// through to the sheet (rule 3).
+    static func resolveJump(to tab: AppTab, visible: [AppTab]) -> TitleMenuJump {
+        if tab.isPinned || visible.contains(tab) {
+            return .selectTab(tab)
+        }
+        if case .smart(let list) = tab {
+            return .showInTasksTab(list)
+        }
+        return .presentSheet(tab)
+    }
+
+    /// Jumps to a destination from the title menu by applying
+    /// ``resolveJump(to:visible:)`` to view state.
+    @MainActor
+    private func jump(to tab: AppTab, visible: [AppTab]) {
+        let route = Self.resolveJump(to: tab, visible: visible)
+        if route.dismissesPresentedSheet { presentedHiddenTab = nil }
+        switch route {
+        case .selectTab(let tab):
+            selectedTabToken = tab.token
+        case .showInTasksTab(let list):
+            // A deliberate choice made after launch, so "Open App To" must not
+            // reapply over it when the Tasks tab first appears.
+            SidebarStartupOverride.consume()
+            sidebarSelectionKey = SidebarSelection.smart(list).encoded
+            selectedTabToken = AppTab.tasks.token
+        case .presentSheet(let tab):
+            presentedHiddenTab = tab
+        }
+    }
+
+    /// The screen shown in the hidden-destination sheet.
+    ///
+    /// Only `.board`, `.calendar` and `.matrix` are reachable — the three
+    /// screens `ContentView` alone constructs, which is why hiding one needs a
+    /// route back at all. `.smart` is here because a `.smart` sheet is still
+    /// the shape `ContentView` builds, though ``resolveJump(to:visible:)`` now
+    /// sends every smart list to the pinned Tasks tab instead.
+    @ViewBuilder
+    private func hiddenDestination(for tab: AppTab) -> some View {
+        switch tab {
+        case .board:
+            KanbanBoardView().refreshOnInboundSync()
+        case .calendar:
+            CalendarContainerView().refreshOnInboundSync()
+        case .matrix:
+            EisenhowerMatrixView().refreshOnInboundSync()
+        case .smart(let list):
+            // Matches `ContentView.destination(for:)`'s `.smart` case:
+            // `TaskListView` supplies no navigation container of its own, so this branch is the
+            // one that has to — and, being the container, the one that carries the way out.
+            NavigationStack {
+                TaskListView(selection: .smart(list))
+                    .refreshOnInboundSync()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { presentedHiddenTab = nil }
+                        }
+                    }
+            }
+        case .tasks, .settings:
+            // Both are pinned, so `resolveJump` selects them as tabs and neither
+            // can arrive here. `.tasks` used to, presenting `MainShellView` — a
+            // `NavigationSplitView` nested inside a navigation container, which
+            // renders its sidebar and never pushes. Lists, Tags, Saved Filters
+            // and Journals were all unreachable through it.
+            EmptyView()
         }
     }
 
@@ -105,27 +319,45 @@ struct TaskListView: View {
 
     private var title: String {
         switch selection {
-        case .smart(let smart): return smart.rawValue
+        // `rawValue` is the **persisted** token: `@AppStorage` stores it and
+        // `SidebarSelection.decode` parses it back on launch. Rendering it as the navigation
+        // title meant all five smart-list screens showed the stored identifier, so they shipped
+        // English whatever the catalog said — and localizing `rawValue` to fix that would lose
+        // the user's sidebar selection on a language change. `displayName` is the separate
+        // user-facing label that exists for exactly this reason.
+        case .smart(let smart): return smart.displayName
         case .taskList(let listID):
             let targetID = listID
             let p = #Predicate<TaskList> { $0.id == targetID }
             var desc = FetchDescriptor<TaskList>(predicate: p)
             desc.fetchLimit = 1
-            return (try? modelContext.fetch(desc))?.first?.name ?? "Tasks"
+            return (try? modelContext.fetch(desc))?.first?.name ?? String(
+                localized: "tasks.title.list",
+                defaultValue: "Tasks",
+                comment: "Navigation title fallback shown when a selected list's name cannot be resolved from the store.")
         case .savedFilter(let filterID):
             let targetID = filterID
             let p = #Predicate<SavedFilter> { $0.id == targetID }
             var desc = FetchDescriptor<SavedFilter>(predicate: p)
             desc.fetchLimit = 1
-            return (try? modelContext.fetch(desc))?.first?.name ?? "Filter"
+            return (try? modelContext.fetch(desc))?.first?.name ?? String(
+                localized: "tasks.title.filter",
+                defaultValue: "Filter",
+                comment: "Navigation title fallback shown when a selected saved filter's name cannot be resolved from the store.")
         case .tag(let tagID):
             let targetID = tagID
             let p = #Predicate<Tag> { $0.id == targetID }
             var desc = FetchDescriptor<Tag>(predicate: p)
             desc.fetchLimit = 1
-            return (try? modelContext.fetch(desc))?.first?.name ?? "Tag"
+            return (try? modelContext.fetch(desc))?.first?.name ?? String(
+                localized: "tasks.title.tag",
+                defaultValue: "Tag",
+                comment: "Navigation title fallback shown when a selected tag's name cannot be resolved from the store.")
         case .journals:
-            return "Journals"
+            return String(
+                localized: "tasks.title.journals",
+                defaultValue: "Journals",
+                comment: "Navigation title shown when the Journals section is selected in the sidebar.")
         }
     }
 
@@ -134,18 +366,48 @@ struct TaskListView: View {
         return nil
     }
 
-    /// Pipeline: all tasks → non-deleted → root only → smart/list filter
-    /// → search → priority → completed → sort
+    /// Live roots from `allTasks` — non-deleted, root-only, and (for a
+    /// `.taskList` selection) list-scoped, all via `taskQueryPredicate` in the
+    /// `@Query`, then the liveness guard applied here.
+    ///
+    /// The liveness check comes first, and this is the boundary where it has to
+    /// happen: every filter downstream dereferences the task, `ForEach` reads
+    /// its `id` to diff identity before any row body runs, and `moveTasks`
+    /// indexes back into this same array. An account delete cascades tasks
+    /// away on the main context, so one invalidated task here traps the whole
+    /// screen.
+    ///
+    /// Both guards are needed, and in this order. `liveTasks` reads only
+    /// `persistentModelID` and catches the task the `SyncEngine` hard-deleted on
+    /// its background context — still attached to *this* context, so
+    /// `modelContext` is non-nil and only the store knows it is gone.
+    /// `modelContext != nil` then catches the main-context delete that has been
+    /// made but not yet saved, where the model is detached while its row is
+    /// still on disk. Neither signal subsumes the other.
+    ///
+    /// Shared by `displayedTasks` and `createInlineTask()` so this rationale —
+    /// and the order the two guards run in — lives in exactly one place.
+    private var liveRoots: [TaskItem] {
+        TaskListHelpers.liveTasks(allTasks, in: modelContext,
+            matching: FetchDescriptor(predicate: Self.taskQueryPredicate(for: selection)))
+            .filter { $0.modelContext != nil }
+    }
+
+    /// Pipeline: live roots (already non-deleted, root-only, and — for a
+    /// `.taskList` selection — list-scoped, via `taskQueryPredicate`) →
+    /// smart/saved-filter/tag filter → search → priority → completed → sort
     private var displayedTasks: [TaskItem] {
-        // isDeletedLocally is already filtered by @Query predicate
-        var result = allTasks.filter { $0.parentTask == nil }
+        // isDeletedLocally, parentTask == nil, and (for `.taskList`) the list
+        // scope are already filtered by `taskQueryPredicate` in the @Query.
+        // See `liveRoots` for the liveness-guard rationale.
+        var result = liveRoots
 
         // Smart list, task list, or saved filter
         switch selection {
         case .smart(let smart):
             result = filterForSmartList(smart, from: result)
-        case .taskList(let listID):
-            result = result.filter { $0.taskList?.id == listID }
+        case .taskList:
+            break // The query already scoped this to the selected list's roots.
         case .savedFilter(let filterID):
             result = applyCustomFilter(filterID, to: result)
         case .tag(let tagID):
@@ -154,14 +416,20 @@ struct TaskListView: View {
             return [] // Journals handled by JournalListView
         }
 
-        // Full-text search
+        // Full-text search.
+        //
+        // `localizedStandardContains` rather than `.lowercased().contains` — it folds case *and*
+        // diacritics the way the reader's language does. Typing "grusse" finds "Grüße", "cafe"
+        // finds "café", and Turkish's dotted and dotless I stop being two different letters.
+        // `lowercased()` does none of that: it is not locale-aware, and it leaves every accent in
+        // place, so a French user could not find their own task by typing it without the accent.
         if !searchText.isEmpty {
-            let query = searchText.lowercased()
+            let query = searchText
             result = result.filter { task in
-                task.title.lowercased().contains(query)
-                    || (task.descriptionText?.lowercased().contains(query) ?? false)
-                    || (task.locationName?.lowercased().contains(query) ?? false)
-                    || task.tags.contains(where: { $0.name.lowercased().contains(query) })
+                task.title.localizedStandardContains(query)
+                    || (task.descriptionText?.localizedStandardContains(query) ?? false)
+                    || (task.locationName?.localizedStandardContains(query) ?? false)
+                    || task.tags.contains(where: { $0.name.localizedStandardContains(query) })
             }
         }
 
@@ -258,17 +526,22 @@ struct TaskListView: View {
         }
     }
 
-    private var defaultTaskList: TaskList? {
-        if case .taskList(let listID) = selection {
-            let targetID = listID
-            let listPredicate = #Predicate<TaskList> { $0.id == targetID }
-            var desc = FetchDescriptor<TaskList>(predicate: listPredicate)
-            desc.fetchLimit = 1
-            return (try? modelContext.fetch(desc))?.first
-        }
-        var desc = FetchDescriptor<TaskList>()
+    /// The list currently in view, if the selection names one. `nil` for smart
+    /// lists, tags, saved filters and journals — where the user's default applies.
+    private var selectedTaskList: TaskList? {
+        guard case .taskList(let listID) = selection else { return nil }
+        let targetID = listID
+        let listPredicate = #Predicate<TaskList> { $0.id == targetID }
+        var desc = FetchDescriptor<TaskList>(predicate: listPredicate)
         desc.fetchLimit = 1
         return (try? modelContext.fetch(desc))?.first
+    }
+
+    /// The list a new task would land in. Read during `body` (see
+    /// ``inlineEffectiveRule``), so it uses the non-persisting resolver — the
+    /// adoption write happens in ``createInlineTask()``.
+    private var defaultTaskList: TaskList? {
+        NewTaskDefaults.resolveList(explicit: selectedTaskList, in: modelContext)
     }
 
     private func createInlineTask() {
@@ -276,11 +549,20 @@ struct TaskListView: View {
         guard !trimmed.isEmpty else { return }
 
         let task = TaskItem(title: trimmed, priority: .none)
-        task.taskList = defaultTaskList
+        task.taskList = NewTaskDefaults.resolveListAdopting(explicit: selectedTaskList, in: modelContext)
 
         // Place new tasks above existing ones (and, via completed-at-bottom,
         // above done items) and give them a manual order to push to the server.
-        task.manualSortOrder = TaskListHelpers.topSortOrder(forInsertingInto: displayedTasks)
+        //
+        // Computed from `liveRoots` rather than `displayedTasks` — a superset
+        // (it skips the smart/saved-filter/tag/search/priority/completed
+        // narrowing `displayedTasks` applies), but a superset is fine here:
+        // `topSortOrder` only needs the *minimum* sort order among the
+        // candidates, and including more roots can only push that minimum
+        // lower, so the new task still lands above every visible row. Reusing
+        // `displayedTasks`' own filters would mean recomputing the whole
+        // pipeline a third time just to answer this one question.
+        task.manualSortOrder = TaskListHelpers.topSortOrder(forInsertingInto: liveRoots)
 
         // Apply the resolved due-date + reminder defaults so the task stays
         // visible in the view that created it and honors per-list/global settings.
@@ -288,12 +570,14 @@ struct TaskListView: View {
 
         task.isDirty = true
         modelContext.insert(task)
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
         if task.reminderOffset != nil {
             ReminderScheduler.requestPermissionIfNeeded()
-            ReminderScheduler.scheduleReminder(for: task)
         }
-        syncScheduler.syncAfterChange(modelContext: modelContext)
+        // Unconditional — see QuickAddView. The inline row's default rule can hand the task a
+        // due date with no reminder, which is precisely the case that scheduled nothing.
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
+        syncCommands.syncAfterChange(modelContext)
         HapticManager.success()
 
         inlineTaskTitle = ""
@@ -323,7 +607,10 @@ struct TaskListView: View {
 
     /// Label for the add bar's due-date chip reflecting the effective rule.
     private var inlineDueChipLabel: String {
-        inlineEffectiveRule == .none ? "No date" : inlineEffectiveRule.displayName
+        inlineEffectiveRule == .none ? String(
+            localized: "tasks.inlineAdd.due.noDate",
+            defaultValue: "No date",
+            comment: "Label on the inline add bar's due-date chip when no due-date rule is set for the next task being created.") : inlineEffectiveRule.displayName
     }
 
     /// The due-date rule that will apply to the next inline task: the per-entry
@@ -353,10 +640,12 @@ struct TaskListView: View {
     /// so the change mirrors into Nextcloud (X-APPLE-SORT-ORDER).
     private func moveTasks(from source: IndexSet, to destination: Int) {
         var reordered = displayedTasks
+        guard source.allSatisfy({ $0 < reordered.count }),
+              (0...reordered.count).contains(destination) else { return }
         reordered.move(fromOffsets: source, toOffset: destination)
         TaskListHelpers.assignManualOrder(reordered)
-        try? modelContext.save()
-        syncScheduler.syncAfterChange(modelContext: modelContext)
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        syncCommands.syncAfterChange(modelContext)
         HapticManager.softImpact()
     }
 
@@ -365,34 +654,42 @@ struct TaskListView: View {
     /// off the same display order the rows render in, so the new order mirrors
     /// into Nextcloud (X-APPLE-SORT-ORDER) exactly like the root list.
     private func moveSubtasks(of parent: TaskItem, from source: IndexSet, to destination: Int) {
-        var reordered = TaskListHelpers.orderedSubtasks(
+        var reordered = TaskListHelpers.orderedSubtasksIfLive(
             of: parent,
             by: activeSort,
             ascending: sortDirection.isAscending
         )
+        // An invalidated parent yields no children, but the offsets came from the
+        // rows that were on screen a moment ago — moving them would trade a
+        // SwiftData trap for an index-out-of-range one.
+        guard source.allSatisfy({ $0 < reordered.count }), destination <= reordered.count
+        else { return }
         reordered.move(fromOffsets: source, toOffset: destination)
         TaskListHelpers.assignManualOrder(reordered)
-        try? modelContext.save()
-        syncScheduler.syncAfterChange(modelContext: modelContext)
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        syncCommands.syncAfterChange(modelContext)
         HapticManager.softImpact()
     }
 
     // MARK: - Sectioned Occurrences (Upcoming / Overdue)
 
-    /// Expands recurring tasks into individual occurrences and groups by time period.
+    /// Groups each task's current occurrence by time period.
     private var sectionedOccurrences: [TaskSection] {
         guard let smartList = currentSmartList,
               (smartList == .upcoming || smartList == .overdue) else { return [] }
 
-        // Start from all root, non-deleted, non-completed tasks
-        var baseTasks = allTasks.filter { $0.parentTask == nil && $0.status != .completed }
+        // Start from all live, non-completed tasks — the query's `#Predicate`
+        // already scoped `allTasks` to non-deleted roots. Liveness first, for
+        // the same reason as `displayedTasks`: the reads below would trap on a
+        // task an account delete has already cascaded away.
+        var baseTasks = liveRoots.filter { $0.status != .completed }
 
-        // Apply search filter
+        // Apply search filter. See the note on the other search above: folding is
+        // `localizedStandardContains`, not `lowercased()`.
         if !searchText.isEmpty {
-            let query = searchText.lowercased()
             baseTasks = baseTasks.filter { task in
-                task.title.lowercased().contains(query)
-                    || (task.descriptionText?.lowercased().contains(query) ?? false)
+                task.title.localizedStandardContains(searchText)
+                    || (task.descriptionText?.localizedStandardContains(searchText) ?? false)
             }
         }
 
@@ -404,54 +701,15 @@ struct TaskListView: View {
         // Deduplicate by UID
         baseTasks = TaskListHelpers.deduplicateByUID(baseTasks)
 
-        let now = Date()
         let cal = Calendar.current
-        var occurrences: [TaskOccurrence] = []
+        let occurrences = TaskListHelpers.occurrences(
+            from: baseTasks, smartList: smartList, now: Date()
+        )
 
         if smartList == .upcoming {
-            // Upcoming: 4 weeks out
-            let cutoff = cal.date(byAdding: .day, value: 28, to: now) ?? now
-
-            for task in baseTasks {
-                guard let due = task.dueDate, due >= now else { continue }
-
-                // The task's own due date (if within window)
-                if due <= cutoff {
-                    occurrences.append(TaskOccurrence(task: task, occurrenceDate: due))
-                }
-
-                // Expand recurring occurrences
-                if let rrule = task.recurrenceRule,
-                   let rule = RecurrenceRule.parse(rrule) {
-                    let futureDates = rule.nextDates(after: due, through: cutoff)
-                    for date in futureDates {
-                        occurrences.append(TaskOccurrence(task: task, occurrenceDate: date))
-                    }
-                }
-            }
-
-            occurrences.sort { $0.occurrenceDate < $1.occurrenceDate }
             return groupOccurrences(occurrences, by: upcomingGrouping == "weekly" ? .weekOfYear : .month, calendar: cal)
-
         } else {
             // Overdue: group by month going back
-            for task in baseTasks {
-                guard let due = task.dueDate else { continue }
-                guard DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly) else { continue }
-
-                occurrences.append(TaskOccurrence(task: task, occurrenceDate: due))
-
-                // Expand missed recurring occurrences between original due and now
-                if let rrule = task.recurrenceRule,
-                   let rule = RecurrenceRule.parse(rrule) {
-                    let missedDates = rule.nextDates(after: due, through: now, limit: 12)
-                    for date in missedDates where DueDateHelper.isOverdue(dueDate: date, isDateOnly: task.isDueDateOnly) {
-                        occurrences.append(TaskOccurrence(task: task, occurrenceDate: date))
-                    }
-                }
-            }
-
-            occurrences.sort { $0.occurrenceDate < $1.occurrenceDate }
             return groupOccurrences(occurrences, by: .month, calendar: cal)
         }
     }
@@ -472,20 +730,25 @@ struct TaskListView: View {
             }
         }
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-
+        // Fixed `dateFormat` patterns ("MMM d", "MMM d, yyyy", "MMMM yyyy") hardcode English's
+        // month-before-day order and an en-dash join. In de, es, fr, it and nl the day comes
+        // first, and each language has its own range separator and its own idea of whether the
+        // year is repeated on both sides. `Date.FormatStyle` and its interval form know all of
+        // that; a pattern string knows none of it. These were the only display-facing fixed
+        // patterns in the repository — the other nine formatters are ICS protocol and must keep
+        // their patterns and their `en_US_POSIX` locale.
         return grouped.keys.sorted().map { key in
             if component == .weekOfYear {
                 let end = calendar.date(byAdding: .day, value: 6, to: key) ?? key
-                let df = DateFormatter()
-                df.dateFormat = "MMM d"
-                formatter.dateFormat = "MMM d, yyyy"
-                let label = "\(df.string(from: key)) – \(formatter.string(from: end))"
+                // `..<` needs a strictly ascending range; `end` is six days on, so the only way
+                // it can equal `key` is the `date(byAdding:)` failure above.
+                let label = end > key
+                    ? (key..<end).formatted(.interval.year().month(.abbreviated).day())
+                    : key.formatted(.dateTime.year().month(.abbreviated).day())
                 return TaskSection(title: label, occurrences: grouped[key] ?? [])
             } else {
-                formatter.dateFormat = "MMMM yyyy"
-                return TaskSection(title: formatter.string(from: key), occurrences: grouped[key] ?? [])
+                return TaskSection(title: key.formatted(.dateTime.year().month(.wide)),
+                                   occurrences: grouped[key] ?? [])
             }
         }
     }
@@ -495,6 +758,7 @@ struct TaskListView: View {
 
 private struct TasksListContent: View {
     let tasks: [TaskItem]
+    let dataRevision: UInt64
     /// True when sorting Manually — enables long-press drag-to-reorder and
     /// disables drag-to-reparent so the two gestures don't conflict.
     let manualReorder: Bool
@@ -512,17 +776,19 @@ private struct TasksListContent: View {
 
     var body: some View {
         List {
+            // Keep the original root ForEach and root move offsets. Constructing
+            // a root group reads no relationships; only an appearing row activates it.
             ForEach(tasks) { task in
-                RecursiveTaskRow(
+                TaskRootHierarchyContent(
                     task: task,
-                    depth: 0,
+                    rootID: task.id,
+                    dataRevision: dataRevision,
                     manualReorder: manualReorder,
                     activeSort: activeSort,
                     ascending: ascending,
                     onSelect: onSelect,
                     onReparent: reparentTask,
-                    onMoveSubtasks: onMoveSubtasks,
-                    enableReparentDrag: !manualReorder
+                    onMoveSubtasks: onMoveSubtasks
                 )
                 .listRowSeparator(.hidden)
                 .transition(.asymmetric(
@@ -557,7 +823,7 @@ private struct TasksListContent: View {
         child.lastModifiedDate = Date()
         child.isDirty = true
         HapticManager.softImpact()
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
     }
 }
 
@@ -609,11 +875,13 @@ private struct SectionedTaskListContent: View {
             ForEach(sections) { section in
                 Section {
                     ForEach(section.occurrences) { occurrence in
-                        TaskRowView(task: occurrence.task) {
-                            onSelect(occurrence.task)
+                        if let data = TaskRowData(task: occurrence.task) {
+                            TaskRowView(data: data, task: occurrence.task) {
+                                onSelect(occurrence.task)
+                            }
+                            .accessibilityLabel("\(data.title), due \(occurrence.occurrenceDate.formatted(date: .abbreviated, time: .omitted))")
+                            .listRowSeparator(.hidden)
                         }
-                        .accessibilityLabel("\(occurrence.task.title), due \(occurrence.occurrenceDate.formatted(date: .abbreviated, time: .omitted))")
-                        .listRowSeparator(.hidden)
                     }
                 } header: {
                     Text(section.title)
@@ -628,84 +896,182 @@ private struct SectionedTaskListContent: View {
     }
 }
 
-/// Recursively renders a task and its subtasks with visual nesting.
-///
-/// Each depth level adds 24pt indentation. Subtasks are shown in a
-/// collapsible group with a chevron toggle. Supports drag-to-indent
-/// (drop onto a task to make it a child) and drag-out to un-indent.
-/// Supports infinite nesting per the TRD requirements.
-private struct RecursiveTaskRow: View {
+/// A root and a single flat descendant ForEach, regardless of hierarchy depth.
+/// Cached rows let List resolve group structure without faulting offscreen roots.
+private struct TaskRootHierarchyContent: View {
     let task: TaskItem
-    let depth: Int
-    /// True when the list is sorting Manually — enables subtask drag-to-reorder.
-    var manualReorder: Bool = false
-    /// The active sort/direction so subtasks render in the same order as roots.
-    var activeSort: TaskSortOption = .dueDate
-    var ascending: Bool = true
+    let rootID: String
+    let dataRevision: UInt64
+    let manualReorder: Bool
+    let activeSort: TaskSortOption
+    let ascending: Bool
     let onSelect: (TaskItem) -> Void
-    var onReparent: ((TaskItem, TaskItem?) -> Void)?
-    /// Reorders this task's children when one is dragged in manual-sort mode.
-    var onMoveSubtasks: ((TaskItem, IndexSet, Int) -> Void)?
-    /// Drag-to-reparent is disabled while the list is in manual-reorder mode
-    /// so it doesn't conflict with the long-press drag-to-reorder gesture.
-    var enableReparentDrag: Bool = true
+    let onReparent: (TaskItem?, TaskItem?) -> Void
+    let onMoveSubtasks: (TaskItem, IndexSet, Int) -> Void
 
-    @State private var isExpanded = true
-
-    /// Subtasks in the same display order as the root list — completed pinned to
-    /// the bottom, the active sort (incl. manual order) honored — instead of the
-    /// arbitrary SwiftData relationship order.
-    private var orderedSubtasks: [TaskItem] {
-        TaskListHelpers.orderedSubtasks(of: task, by: activeSort, ascending: ascending)
-    }
+    private typealias Hierarchy = TaskListHierarchyProjection<TaskItem, String>
+    @State private var hierarchyState = TaskListRootHierarchyState<TaskItem, String>()
+    /// Owned by the root group, surviving an ancestor collapse and reorder.
+    @State private var collapsedTaskIDs: Set<String> = []
+    @State private var visibleTaskIDs: Set<String> = []
+    @State private var projectionSort: TaskSortOption?
+    @State private var projectionAscending: Bool?
+    @State private var projectionTaskIdentity: ObjectIdentifier?
 
     var body: some View {
-        // A Group (not a VStack) so the task and each subtask are separate List
-        // rows — that's what lets the subtask ForEach (in `SubtaskRows`) own an
-        // `.onMove` for sibling reordering, while a parent's whole subtree still
-        // moves together when the parent row is dragged.
-        Group {
-            taskRow
-            if isExpanded && !orderedSubtasks.isEmpty {
-                SubtaskRows(
-                    parent: task,
-                    subtasks: orderedSubtasks,
-                    depth: depth + 1,
-                    manualReorder: manualReorder,
-                    activeSort: activeSort,
-                    ascending: ascending,
-                    onSelect: onSelect,
-                    onReparent: onReparent,
-                    onMoveSubtasks: onMoveSubtasks,
-                    enableReparentDrag: enableReparentDrag
-                )
+        hierarchyRows
+            .onChange(of: activeSort) { _, _ in configurationChanged() }
+            .onChange(of: ascending) { _, _ in configurationChanged() }
+            .onChange(of: ObjectIdentifier(task)) { _, _ in configurationChanged() }
+            .onChange(of: dataRevision) { _, value in
+                hierarchyState.receiveRevision(value)
+                if !visibleTaskIDs.isEmpty { activateHierarchy() }
+            }
+    }
+
+    @ViewBuilder
+    private var hierarchyRows: some View {
+        rootRow
+        descendantRows
+    }
+
+    private var rootRow: some View {
+        TaskHierarchyRow(task: task, depth: 0,
+            hasChildren: hierarchyState.projection?.rows.first?.hasChildren ?? false,
+            isExpanded: expansion(for: rootID), activeSort: activeSort,
+            ascending: ascending, onSelect: onSelect,
+            onReparent: { child, parent in onReparent(child, parent) },
+            enableReparentDrag: !manualReorder)
+            .onAppear { rowAppeared(rootID) }
+            .onDisappear { visibleTaskIDs.remove(rootID) }
+    }
+
+    private var descendantRows: some View {
+        let rows: [Hierarchy.Row] = Array(hierarchyState.projection?.rows.dropFirst() ?? [])
+        return ForEach(rows) { entry in
+            TaskHierarchyRow(task: entry.node, depth: entry.depth,
+                hasChildren: entry.hasChildren, isExpanded: expansion(for: entry.id),
+                activeSort: activeSort, ascending: ascending, onSelect: onSelect,
+                onReparent: { child, parent in onReparent(child, parent) },
+                enableReparentDrag: !manualReorder)
+                .listRowSeparator(.hidden)
+                .onAppear { rowAppeared(entry.id) }
+                .onDisappear { visibleTaskIDs.remove(entry.id) }
+        }
+        .onMove(perform: manualReorder ? { source, destination in
+            moveDescendants(from: source, to: destination)
+        } : nil)
+    }
+
+    private func expansion(for id: String) -> Binding<Bool> {
+        Binding(get: { !collapsedTaskIDs.contains(id) }, set: { expanded in
+            if expanded { collapsedTaskIDs.remove(id) }
+            else { collapsedTaskIDs.insert(id) }
+            invalidateHierarchy()
+        })
+    }
+
+    private func rowAppeared(_ id: String) {
+        visibleTaskIDs.insert(id)
+        hierarchyState.receiveRevision(dataRevision)
+        configurationChanged()
+        activateHierarchy()
+    }
+
+    private func configurationChanged() {
+        guard projectionSort != activeSort || projectionAscending != ascending
+            || projectionTaskIdentity != ObjectIdentifier(task) else { return }
+        invalidateHierarchy()
+    }
+
+    private func invalidateHierarchy() {
+        hierarchyState.invalidate()
+        // Offscreen roots retain their cached structure and defer all model reads.
+        if !visibleTaskIDs.isEmpty { activateHierarchy() }
+    }
+
+    private func activateHierarchy() {
+        guard hierarchyState.needsRefresh else { return }
+        projectionSort = activeSort
+        projectionAscending = ascending
+        projectionTaskIdentity = ObjectIdentifier(task)
+        let collapsed = collapsedTaskIDs
+        let sort = activeSort
+        let direction = ascending
+        hierarchyState.activate {
+            // Relationships and sort fields observed during this root's walk
+            // invalidate only its cache. Defer the callback until the mutation
+            // has finished; Observation invokes onChange before the write.
+            withObservationTracking {
+                Hierarchy(roots: [task], collapsedIDs: collapsed,
+                    isVisible: { $0.modelContext != nil && !$0.isDeletedLocally },
+                    id: { $0.id }, orderedChildren: { parent in
+                        TaskListHelpers.sortedWithCompletedLast(
+                            parent.subtasks.filter { $0.modelContext != nil && !$0.isDeletedLocally },
+                            by: sort, ascending: direction)
+                    })
+            } onChange: {
+                Task { @MainActor in invalidateHierarchy() }
             }
         }
     }
 
-    /// This task's own row, with drag-to-indent enabled outside manual mode.
+    private func moveDescendants(from source: IndexSet, to destination: Int) {
+        // This ForEach omits the root; the cached projection includes it.
+        guard let move = hierarchyState.projection?.move(
+            from: IndexSet(source.map { $0 + 1 }), to: destination + 1),
+            let parent = move.parent else { return }
+        onMoveSubtasks(parent, move.source, move.destination)
+    }
+}
+
+/// One lazily instantiated task row. Descendants are separate rows in the flat List.
+/// Chevron, drag and row actions keep their existing behavior. Visual indentation
+/// stops at four levels while the projection preserves the full hierarchy depth.
+private struct TaskHierarchyRow: View {
+    let task: TaskItem
+    let depth: Int
+    let hasChildren: Bool
+    @Binding var isExpanded: Bool
+    var activeSort: TaskSortOption = .dueDate
+    var ascending: Bool = true
+    let onSelect: (TaskItem) -> Void
+    var onReparent: ((TaskItem, TaskItem?) -> Void)?
+    /// Disabled in manual mode so reparenting does not conflict with reorder.
+    var enableReparentDrag: Bool = true
+
+    var body: some View {
+        // A fixed outer container gives List one row per identity, so it can
+        // defer row snapshots instead of resolving a conditional row count.
+        HStack(spacing: 0) {
+            // Establish liveness before chevron, content or drag reads.
+            if let data = TaskRowData(task: task) {
+                taskRow(data: data)
+            }
+        }
+    }
+
     @ViewBuilder
-    private var taskRow: some View {
+    private func taskRow(data: TaskRowData) -> some View {
         if enableReparentDrag {
-            paddedRow
-                .draggable(task.id) // Enable drag-to-indent
+            paddedRow(data: data)
+                .draggable(task.id)
                 .dropDestination(for: String.self) { droppedIDs, _ in
-                    guard let droppedID = droppedIDs.first,
+                    guard task.modelContext != nil,
+                          let droppedID = droppedIDs.first,
                           droppedID != task.id,
                           let droppedTask = findTask(id: droppedID) else { return false }
                     onReparent?(droppedTask, task)
                     return true
                 }
         } else {
-            paddedRow
+            paddedRow(data: data)
         }
     }
 
-    /// The task's own row (chevron + content), indented for its depth.
-    private var paddedRow: some View {
+    private func paddedRow(data: TaskRowData) -> some View {
         HStack(spacing: 4) {
-            // Collapse/expand chevron
-            if !orderedSubtasks.isEmpty {
+            if hasChildren {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         isExpanded.toggle()
@@ -721,69 +1087,26 @@ private struct RecursiveTaskRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(isExpanded ? "Collapse subtasks" : "Expand subtasks")
             } else {
-                // Spacer to align rows without subtasks
                 Color.clear.frame(width: 16, height: 16)
             }
 
-            TaskRowView(task: task) {
+            TaskRowView(data: data, task: task) {
                 onSelect(task)
             }
         }
-        .padding(.leading, CGFloat(depth) * 24)
+        .padding(.leading, CGFloat(TaskListHierarchyLayout.visualDepth(depth)) * 24)
     }
 
-    /// Traverses the hierarchy to find a task by ID.
+    /// Retains the existing drop lookup within this task's direct children.
     private func findTask(id: String) -> TaskItem? {
+        guard task.modelContext != nil else { return nil }
         if task.id == id { return task }
-        for subtask in orderedSubtasks {
-            if subtask.id == id { return subtask }
+        for subtask in TaskListHelpers.orderedSubtasksIfLive(
+            of: task, by: activeSort, ascending: ascending
+        ) {
+            if subtask.modelContext != nil && subtask.id == id { return subtask }
         }
         return nil
-    }
-}
-
-/// Renders one parent's subtasks as sibling List rows with a `.onMove` reorder.
-///
-/// This lives in its own `View` struct — not a computed property of
-/// `RecursiveTaskRow` — on purpose: it makes the `ForEach` content the *nominal*
-/// `RecursiveTaskRow` type instead of a self-referential opaque type. Attaching
-/// `.onMove` (a `DynamicViewContent` modifier) inside the recursive view itself
-/// makes the type-checker try to fully expand the recursion and bail out with
-/// "failed to produce diagnostic"; the struct boundary breaks that cycle.
-private struct SubtaskRows: View {
-    let parent: TaskItem
-    let subtasks: [TaskItem]
-    let depth: Int
-    let manualReorder: Bool
-    let activeSort: TaskSortOption
-    let ascending: Bool
-    let onSelect: (TaskItem) -> Void
-    var onReparent: ((TaskItem, TaskItem?) -> Void)?
-    var onMoveSubtasks: ((TaskItem, IndexSet, Int) -> Void)?
-    let enableReparentDrag: Bool
-
-    /// Reorder handler — `nil` outside manual mode so the rows aren't draggable.
-    private var moveHandler: ((IndexSet, Int) -> Void)? {
-        guard manualReorder else { return nil }
-        return { onMoveSubtasks?(parent, $0, $1) }
-    }
-
-    var body: some View {
-        ForEach(subtasks) { subtask in
-            RecursiveTaskRow(
-                task: subtask,
-                depth: depth,
-                manualReorder: manualReorder,
-                activeSort: activeSort,
-                ascending: ascending,
-                onSelect: onSelect,
-                onReparent: onReparent,
-                onMoveSubtasks: onMoveSubtasks,
-                enableReparentDrag: enableReparentDrag
-            )
-            .listRowSeparator(.hidden)
-        }
-        .onMove(perform: moveHandler)
     }
 }
 
@@ -823,31 +1146,74 @@ private struct SmartListEmptyState: View {
 
     private var emptyTitle: String {
         switch smartList {
-        case .today: return "All Clear Today"
-        case .upcoming: return "Nothing Upcoming"
-        case .overdue: return "Nothing Overdue"
-        case .all: return "No Tasks"
-        case .completed: return "No Completed Tasks"
+        case .today: return String(
+            localized: "tasks.empty.today.title",
+            defaultValue: "All Clear Today",
+            comment: "ContentUnavailableView heading shown for the Today smart list when there are no tasks due today.")
+        case .upcoming: return String(
+            localized: "tasks.empty.upcoming.title",
+            defaultValue: "Nothing Upcoming",
+            comment: "ContentUnavailableView heading shown for the Upcoming smart list when there are no tasks due in its window.")
+        case .overdue: return String(
+            localized: "tasks.empty.overdue.title",
+            defaultValue: "Nothing Overdue",
+            comment: "ContentUnavailableView heading shown for the Overdue smart list when there are no overdue tasks.")
+        case .all: return String(
+            localized: "tasks.empty.all.title",
+            defaultValue: "No Tasks",
+            comment: "ContentUnavailableView heading shown for the All smart list when there are no tasks at all.")
+        case .completed: return String(
+            localized: "tasks.empty.completed.title",
+            defaultValue: "No Completed Tasks",
+            comment: "ContentUnavailableView heading shown for the Completed smart list when there are no completed tasks.")
         }
     }
 
     private var emptyDescription: String {
         switch smartList {
-        case .today: return "You have no tasks due today. Enjoy your day!"
-        case .upcoming: return "No tasks due in the next 7 days."
-        case .overdue: return "Great job — you're all caught up!"
-        case .all: return "Tap the + button to add your first task."
-        case .completed: return "Completed tasks will appear here."
+        case .today: return String(
+            localized: "tasks.empty.today.description",
+            defaultValue: "You have no tasks due today. Enjoy your day!",
+            comment: "ContentUnavailableView description shown for the Today smart list when there are no tasks due today.")
+        case .upcoming: return String(
+            localized: "empty.upcoming", defaultValue: "No tasks due in the next four weeks.",
+            comment: "Empty state for the Upcoming smart list. Four weeks is the list's actual window (28 days); do not change the number without changing TaskListView's cutoff.")
+        case .overdue: return String(
+            localized: "tasks.empty.overdue.description",
+            defaultValue: "Great job — you're all caught up!",
+            comment: "ContentUnavailableView description shown for the Overdue smart list when there are no overdue tasks.")
+        case .all: return String(
+            localized: "tasks.empty.all.description",
+            defaultValue: "Tap the + button to add your first task.",
+            comment: "ContentUnavailableView description shown for the All smart list when there are no tasks at all; the plus sign refers to the toolbar's add button icon and must stay a literal plus sign.")
+        case .completed: return String(
+            localized: "tasks.empty.completed.description",
+            defaultValue: "Completed tasks will appear here.",
+            comment: "ContentUnavailableView description shown for the Completed smart list when there are no completed tasks.")
         }
     }
 }
 
 private struct GenericEmptyState: View {
     var body: some View {
+        // These two literals are identical to `SmartListEmptyState`'s `.all` case. Written as
+        // literals they extract correctly — but as *separate* English-as-key entries, so the same
+        // sentence would be translated twice and could drift between two empty states the user
+        // sees in the same session. Referencing the explicit keys instead keeps it one string.
         ContentUnavailableView {
-            Label("No Tasks", systemImage: "checkmark.circle")
+            Label {
+                Text(verbatim: String(
+                    localized: "tasks.empty.all.title",
+                    defaultValue: "No Tasks",
+                    comment: "ContentUnavailableView heading shown for the All smart list when there are no tasks at all."))
+            } icon: {
+                Image(systemName: "checkmark.circle")
+            }
         } description: {
-            Text("Tap the + button to add your first task.")
+            Text(verbatim: String(
+                localized: "tasks.empty.all.description",
+                defaultValue: "Tap the + button to add your first task.",
+                comment: "ContentUnavailableView body shown for the All smart list when there are no tasks at all. The + is the toolbar add button's icon and must stay a literal plus sign."))
         }
     }
 }
@@ -863,7 +1229,9 @@ private struct TaskListToolbar: ToolbarContent {
                 Image(systemName: "plus.circle.fill")
                     .font(.title3)
             }
-            .accessibilityLabel("Add task")
+            .accessibilityLabel(String(localized: "tasks.a11y.addTask",
+                                       defaultValue: "Add task",
+                                       comment: "VoiceOver label for the toolbar button that opens the new-task sheet. Spoken, not shown — sentence case, unlike the visible 'Add Task' button and Shortcuts action of the same name."))
         }
     }
 }

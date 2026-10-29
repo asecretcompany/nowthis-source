@@ -103,6 +103,74 @@ struct ICalendarSerializerDueStartTests {
         #expect(ics.contains("DTSTART:"))
     }
 
+    // MARK: - An all-day DUE is the end of its day, not the start of it
+
+    /// The reported loss. An all-day due date is stored as midnight UTC
+    /// carrying a calendar date, so an instant comparison put every timed start
+    /// on that day *after* the deadline. The PUT dropped `DTSTART`, and because
+    /// the next inbound apply takes the remote as the truth, the start date the
+    /// user had set was then erased locally too.
+    ///
+    /// Turning on Due Date and Start Date in the same sitting reaches this: the
+    /// due date defaults to today, and if the user makes it All Day, every
+    /// start time they can pick is on or after midnight.
+    @Test("A timed start on the day an all-day task is due survives")
+    func timedStartOnAllDayDueDay_emitsStart() {
+        let day = makeDate(year: 2026, month: 6, day: 9, hour: 0)
+        let start = makeDate(year: 2026, month: 6, day: 9, hour: 14)
+
+        let ics = ICalendarSerializer.serialize(
+            uid: "test-uid",
+            summary: "Task",
+            dueDate: day,
+            startDate: start,
+            isDueDateOnly: true
+        )
+
+        #expect(ics.contains("DUE;VALUE=DATE:"))
+        #expect(ics.contains("DTSTART:"), "the task is due at the end of the 9th, so 14:00 is before it")
+    }
+
+    /// The rule still has to bite. A start on the *following* day is genuinely
+    /// after the deadline and must stay suppressed.
+    @Test("A timed start after the day an all-day task is due is still dropped")
+    func timedStartAfterAllDayDueDay_omitsStart() {
+        let day = makeDate(year: 2026, month: 6, day: 9, hour: 0)
+        let start = makeDate(year: 2026, month: 6, day: 10, hour: 9)
+
+        let ics = ICalendarSerializer.serialize(
+            uid: "test-uid",
+            summary: "Task",
+            dueDate: day,
+            startDate: start,
+            isDueDateOnly: true
+        )
+
+        #expect(ics.contains("DUE;VALUE=DATE:"))
+        #expect(!ics.contains("DTSTART"))
+    }
+
+    /// Locks in the behaviour this change relies on rather than introduces: a
+    /// timed `DTSTART` beside an all-day `DUE` is a shape the app already sends
+    /// whenever the start falls on an earlier day, so extending it to the due
+    /// day itself adds no new kind of payload for the server to reject.
+    @Test("A timed start before an all-day due is emitted, as it already was")
+    func timedStartBeforeAllDayDueDay_emitsStart() {
+        let day = makeDate(year: 2026, month: 6, day: 10, hour: 0)
+        let start = makeDate(year: 2026, month: 6, day: 9, hour: 14)
+
+        let ics = ICalendarSerializer.serialize(
+            uid: "test-uid",
+            summary: "Task",
+            dueDate: day,
+            startDate: start,
+            isDueDateOnly: true
+        )
+
+        #expect(ics.contains("DUE;VALUE=DATE:"))
+        #expect(ics.contains("DTSTART:"))
+    }
+
     @Test("Date-only DTSTART equal to date-only DUE omits DTSTART")
     func dateOnlyStartEqualsDue_omitsStart() {
         let sameDate = makeDate(year: 2026, month: 6, day: 9)

@@ -44,7 +44,9 @@ struct InlineAddBar: View {
                     .onSubmit {
                         onSubmit()
                     }
-                    .accessibilityLabel("Quick add task")
+                    .accessibilityLabel(String(localized: "inlineAdd.a11y.quickAdd",
+                                               defaultValue: "Quick add task",
+                                               comment: "VoiceOver label for the inline title field beneath the tasks on screen. Spoken, not shown — sentence case, unlike the visible 'Quick Add Task' Shortcuts action of the same name."))
                     .accessibilityHint("Type a task title and press return to add it to the current list")
 
                 if !title.isEmpty {
@@ -55,7 +57,9 @@ struct InlineAddBar: View {
                             .foregroundStyle(.blue)
                             .font(.title3)
                     }
-                    .accessibilityLabel("Add task")
+                    .accessibilityLabel(String(localized: "tasks.a11y.addTask",
+                                               defaultValue: "Add task",
+                                               comment: "VoiceOver label for the submit button on the inline add bar. Spoken, not shown — sentence case, unlike the visible 'Add Task' button and Shortcuts action of the same name."))
                 }
 
                 Button {
@@ -70,10 +74,7 @@ struct InlineAddBar: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
-        .background(.regularMaterial, in: Rectangle())
-        .overlay(alignment: .top) {
-            Divider()
-        }
+        .modifier(InlineAddBarBackground())
         .animation(.easeInOut(duration: 0.2), value: isFocused.wrappedValue)
     }
 
@@ -106,6 +107,22 @@ struct InlineAddBar: View {
             .accessibilityHint("Choose the due date applied to the task you're adding")
 
             Spacer()
+        }
+    }
+}
+
+/// Liquid Glass on iOS 26+, so the bar follows the Liquid Glass Tint Amount setting like the
+/// system bars around it (with the regular material + top hairline fallback on iOS 18–25).
+private struct InlineAddBarBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Rectangle())
+        } else {
+            content
+                .background(.regularMaterial, in: Rectangle())
+                .overlay(alignment: .top) {
+                    Divider()
+                }
         }
     }
 }

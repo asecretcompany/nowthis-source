@@ -69,6 +69,37 @@ struct SyncFailureTests {
         #expect(SyncFailure.from(CalDAVError.rateLimited(retryAfter: 5))?.category == .busy)
     }
 
+    @Test("Sync error details retain the actual HTTP response code, including wrapped and retry errors")
+    func retainsHTTPStatusForSupport() {
+        let cases: [(any Error, Int)] = [
+            (CalDAVError.serverError(statusCode: 400), 400),
+            (CalDAVError.serverError(statusCode: 413), 413),
+            (CalDAVError.serverError(statusCode: 500), 500),
+            (SyncError.calDAVError(.serverError(statusCode: 503)), 503),
+            (HTTPRetryError(statusCode: 502, retryAfter: 10), 502),
+            (CalDAVError.unauthorized, 401),
+            (CalDAVError.forbidden, 403),
+            (CalDAVError.notFound, 404),
+            (CalDAVError.conflict(etag: "private-etag"), 412),
+            (CalDAVError.rateLimited(retryAfter: 5), 429)
+        ]
+        for (error, status) in cases {
+            #expect(SyncFailure.from(error)?.httpStatusCode == status)
+        }
+    }
+
+    @Test("Errors without an HTTP response do not invent a status or reveal private system details")
+    func nonHTTPFailureHasNoStatus() {
+        let privateError = NSError(domain: "private-server.example", code: 503,
+            userInfo: [NSLocalizedDescriptionKey: "private username and task content"])
+        for error: any Error in [privateError, URLError(.timedOut), CalDAVError.invalidResponse] {
+            let failure = SyncFailure.from(error)
+            #expect(failure?.httpStatusCode == nil)
+            #expect(failure?.message.contains("private") == false)
+        }
+        #expect(SyncFailure.from(CancellationError()) == nil)
+    }
+
     // MARK: - Configuration
 
     @Test("Discovery and addressing failures map to configuration (actionable)")
@@ -115,6 +146,7 @@ struct SyncFailureTests {
     // MARK: - Banner visibility logic
 
     @Test("Banner shows for a fresh failure, hides once dismissed")
+    @MainActor
     func bannerVisibility() {
         let failure = SyncFailure.from(CalDAVError.unauthorized)
         #expect(SyncFailureBanner.isVisible(failure: failure, dismissed: nil) == true)
@@ -123,6 +155,7 @@ struct SyncFailureTests {
     }
 
     @Test("A new, different failure reappears after a prior dismissal")
+    @MainActor
     func differentFailureReappears() {
         let dismissed = SyncFailure.from(CalDAVError.unauthorized)
         let fresh = SyncFailure.from(CalDAVError.forbidden)

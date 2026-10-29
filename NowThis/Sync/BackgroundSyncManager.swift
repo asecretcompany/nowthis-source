@@ -1,4 +1,5 @@
 import BackgroundTasks
+import Foundation
 import SwiftData
 import WidgetKit
 import os
@@ -10,9 +11,10 @@ import os
 /// schedules the next refresh request.
 ///
 /// Usage:
-/// 1. Call `registerBackgroundTask()` in the app's `init()` (before scene loads)
-/// 2. Call `scheduleBackgroundSync()` when the app enters the background
-final class BackgroundSyncManager {
+/// 1. Register during UIKit's launch callback, before scene connection.
+/// 2. Configure the store after it opens, including successful recovery retries.
+/// 3. Call `scheduleBackgroundSync()` when the app enters the background.
+final class BackgroundSyncManager: @unchecked Sendable {
 
     /// The BGTaskScheduler task identifier. Must match the value in Info.plist's
     /// `BGTaskSchedulerPermittedIdentifiers` array.
@@ -26,6 +28,8 @@ final class BackgroundSyncManager {
     /// The shared SyncEngine instance — must be the same actor instance used
     /// by the foreground SyncScheduler so the `isRunning` gate works.
     private var syncEngine: SyncEngine?
+    private let storeLock = NSLock()
+    private var configuredStore: ModelContainer?
 
     /// True when the background sync handler uses a background `ModelContext`
     /// instead of `mainContext`. Testable flag for crash fix verification.
@@ -33,27 +37,36 @@ final class BackgroundSyncManager {
 
     /// True after `scheduleBackgroundSync()` has attempted to submit a task request.
     /// Will be `true` even if the OS rejects the submission (e.g., in simulator).
-    private(set) var didSchedule = false
+    private var scheduled = false
+    var didSchedule: Bool { storeLock.withLock { scheduled } }
 
     /// The last error from `BGTaskScheduler.submit()`, if any.
     /// Nil on success or before the first scheduling attempt.
-    private(set) var lastSchedulingError: Error?
+    private var schedulingError: Error?
+    var lastSchedulingError: Error? { storeLock.withLock { schedulingError } }
 
     /// Registers the background refresh task handler with `BGTaskScheduler`.
     ///
-    /// Must be called during app initialization, before the first scene connects.
-    /// The handler performs a sync using the provided `ModelContainer` and
-    /// schedules the next background refresh upon completion.
-    func registerBackgroundTask(modelContainer: ModelContainer, syncEngine: SyncEngine) {
-        self.syncEngine = syncEngine
+    /// Register before launch finishes, even if store opening will be deferred.
+    /// A delivery without an opened store fails safely without accessing SQLite.
+    func registerBackgroundTask(syncEngine: SyncEngine) {
+        storeLock.withLock { self.syncEngine = syncEngine }
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.taskIdentifier,
             using: nil
         ) { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else { return }
-            self?.handleBackgroundSync(refreshTask, modelContainer: modelContainer)
+            guard let self else { refreshTask.setTaskCompleted(success: false); return }
+            // Capture the one budget at handler entry, before resubmission or store access.
+            let budget = BackgroundRunBudget()
+            self.handleBackgroundSync(refreshTask, budget: budget)
         }
         logger.info("Registered background sync task: \(Self.taskIdentifier)")
+    }
+
+    /// Attach an opened store without registering another launch handler on Retry.
+    func configureStore(modelContainer: ModelContainer) {
+        storeLock.withLock { configuredStore = modelContainer }
     }
 
     /// Schedules a `BGAppRefreshTaskRequest` for the next background sync window.
@@ -64,89 +77,140 @@ final class BackgroundSyncManager {
         let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: Self.minimumInterval)
 
-        didSchedule = true
-        lastSchedulingError = nil
+        storeLock.withLock { scheduled = true; schedulingError = nil }
 
         do {
             try BGTaskScheduler.shared.submit(request)
             logger.info("Scheduled background sync (earliest: +\(Int(Self.minimumInterval))s)")
         } catch {
-            lastSchedulingError = error
+            storeLock.withLock { schedulingError = error }
             logger.error("Failed to schedule background sync: \(error.localizedDescription)")
         }
     }
 
-    /// Handles the background sync when iOS fires the `BGAppRefreshTask`.
-    ///
-    /// Uses `Task.detached` with a fresh `ModelContext` to avoid blocking
-    /// the main thread — fixing the `0x8BADF00D` watchdog crash.
-    private func handleBackgroundSync(
-        _ task: BGAppRefreshTask,
-        modelContainer: ModelContainer
-    ) {
-        // Schedule the next refresh before starting work
-        scheduleBackgroundSync()
+    /// Recover local scheduling first. A remote cutoff cancels only remote admission;
+    /// final expiration closes both phases and never admits a fresh flush.
+    static func performRun(
+        budget: BackgroundRunBudget = BackgroundRunBudget(),
+        operation: @escaping @Sendable () async throws -> Bool,
+        flush: @escaping @Sendable () async -> Void
+    ) async -> Bool {
+        await BackgroundRunBudget.$current.withValue(budget) {
+            do { try budget.checkFinalAdmission() } catch { return false }
+            await flush()
+            do { try budget.checkRemoteAdmission() } catch { return false }
+            let completed = await performRemote(budget: budget, operation: operation)
+            do { try budget.checkFinalAdmission() } catch { return false }
+            await flush()
+            do { try budget.checkFinalAdmission() } catch { return false }
+            return completed
+        }
+    }
 
-        let syncTask = Task.detached { [syncEngine = self.syncEngine] in
-            guard let syncEngine else { return }
-            let context = ModelContext(modelContainer)
-            let keychainManager = KeychainManager()
-
-            let accounts = try context.fetch(FetchDescriptor<ServerAccount>())
-
-            // Snapshot account data to avoid cross-thread @Model access
-            struct AccountSnapshot {
-                let id: String
-                let username: String
-                let serverBaseURL: String
+    private static func performRemote(budget: BackgroundRunBudget,
+        operation: @escaping @Sendable () async throws -> Bool) async -> Bool {
+        let result = BackgroundRunResult()
+        let remote = Task {
+            await BackgroundRunBudget.$phase.withValue(.remote) {
+                let completed: Bool
+                do { try budget.checkRemoteAdmission(); completed = try await operation() }
+                catch { completed = false }
+                budget.whenDrained { result.resolve(completed) }
             }
-            let snapshots = accounts
-                .filter { $0.mode == .nextcloud }
-                .map { AccountSnapshot(id: $0.id, username: $0.username, serverBaseURL: $0.serverBaseURL) }
+        }
+        let timer = Task {
+            do { try await Task.sleep(until: budget.remoteCutoff, clock: .continuous) }
+            catch { return }
+            budget.stopRemote()
+            remote.cancel()
+            budget.whenDrained { result.resolve(false) }
+        }
+        let completed = await withTaskCancellationHandler {
+            await result.value()
+        } onCancel: {
+            budget.expire()
+            remote.cancel()
+            budget.whenDrained { result.resolve(false) }
+        }
+        timer.cancel()
+        return completed
+    }
 
-            for snapshot in snapshots {
-                try Task.checkCancellation()
-
-                guard let password = try await keychainManager.retrieve(for: snapshot.id) else {
-                    continue
+    /// Runs the eligible remote accounts under the delivery's existing allowance.
+    static func performAccounts(accountIDs: [String], modelContainer: ModelContainer,
+        budget: BackgroundRunBudget,
+        operation: @escaping @Sendable (String) async throws -> Bool) async throws -> Bool {
+        try await BackgroundRunBudget.$current.withValue(budget) {
+            try await BackgroundRunBudget.$phase.withValue(.remote) {
+                try budget.checkRemoteAdmission()
+                var completed = true
+                let ordered = try budget.withCriticalSection {
+                    let context = ModelContext(modelContainer); context.autosaveEnabled = false
+                    let cursor = try BackgroundSyncCursor.load(scope: "accounts", in: context)
+                    return BackgroundSyncCursor.rotated(accountIDs, after: cursor)
                 }
-
-                let credentials = CalDAVClient.Credentials(
-                    username: snapshot.username,
-                    password: password
-                )
-
-                let syncWindowMonths = SyncPreferences.windowMonths()
-
-                try await syncEngine.performBackgroundSync(
-                    accountID: snapshot.id,
-                    serverBaseURL: snapshot.serverBaseURL,
-                    credentials: credentials,
-                    modelContainer: modelContainer,
-                    syncWindowMonths: syncWindowMonths
-                )
-            }
-
-            // Background pull finished — refresh widgets so server-side changes
-            // appear without waiting for the widget's own timeline refresh.
-            if !snapshots.isEmpty {
-                WidgetCenter.shared.reloadAllTimelines()
+                for id in ordered {
+                    try budget.checkRemoteAdmission()
+                    try budget.withCriticalSection {
+                        let context = ModelContext(modelContainer); context.autosaveEnabled = false
+                        try BackgroundSyncCursor.recordAttempt(id: id, scope: "accounts", in: context)
+                    }
+                    if try await operation(id) == false { completed = false }
+                }
+                return completed
             }
         }
+    }
 
-        // If iOS revokes our time, cancel the sync cleanly
-        task.expirationHandler = {
-            syncTask.cancel()
-        }
-
+    private func handleBackgroundSync(_ task: BGAppRefreshTask, budget: BackgroundRunBudget) {
+        let delivery = BackgroundDeliveryCoordinator(budget: budget, resubmit: { [self] in
+            scheduleBackgroundSync()
+        })
+        // Install before start: expiration can arrive before the worker handle exists.
+        task.expirationHandler = { delivery.expire() }
         nonisolated(unsafe) let bgTask = task
-        Task.detached {
-            do {
-                try await syncTask.value
-                bgTask.setTaskCompleted(success: true)
-            } catch {
-                bgTask.setTaskCompleted(success: false)
-            }
-        }
+        delivery.start(operation: { [self] budget in
+            guard let modelContainer = storeLock.withLock({ configuredStore }) else { return false }
+            let syncEngine = storeLock.withLock { self.syncEngine }
+            return await Self.performRun(budget: budget, operation: {
+                guard let syncEngine else { return false }
+                let keychainManager = KeychainManager()
+                struct AccountSnapshot: Sendable {
+                    let id: String
+                    let username: String
+                    let serverBaseURL: String
+                }
+                let snapshots = try budget.withCriticalSection {
+                    let context = ModelContext(modelContainer)
+                    return try context.fetch(FetchDescriptor<ServerAccount>())
+                        .filter { $0.mode == .nextcloud }
+                        .map { AccountSnapshot(id: $0.id, username: $0.username, serverBaseURL: $0.serverBaseURL) }
+                }
+                let byID = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
+                let completed = try await Self.performAccounts(accountIDs: snapshots.map(\.id),
+                    modelContainer: modelContainer, budget: budget) { id in
+                    guard let snapshot = byID[id] else { return true }
+                    try budget.checkRemoteAdmission()
+                    guard let password = try await keychainManager.retrieve(for: snapshot.id) else { return true }
+                    try budget.checkRemoteAdmission()
+                    let credentials = CalDAVClient.Credentials(username: snapshot.username, password: password)
+                    let outcome = await syncEngine.performBackgroundSyncOutcome(
+                        accountID: snapshot.id, serverBaseURL: snapshot.serverBaseURL,
+                        credentials: credentials, modelContainer: modelContainer,
+                        syncWindowMonths: SyncPreferences.windowMonths(), reconcileNotifications: false, runBudget: budget)
+                    if outcome.status == .cancelled { throw CancellationError() }
+                    return outcome.status == .completed
+                }
+                if !snapshots.isEmpty { WidgetCenter.shared.reloadAllTimelines() }
+                try budget.checkRemoteAdmission()
+                return completed
+            }, flush: {
+                // Local-only accounts receive the same prompt-free recovery pass.
+                await ReminderScheduler.reconcileNow(modelContainer: modelContainer,
+                    policy: ReminderReconcilePolicy(allowsPermissionPrompt: false, deadline: budget.finalCutoff))
+            })
+        }, completion: { success in
+            bgTask.setTaskCompleted(success: success)
+        })
     }
 }

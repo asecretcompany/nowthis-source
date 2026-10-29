@@ -90,7 +90,7 @@ private struct SortChip: View {
                 Button {
                     withAnimation { activeSort = option }
                 } label: {
-                    Label(option.rawValue, systemImage: option.icon)
+                    Label(option.displayName, systemImage: option.icon)
                 }
             }
 
@@ -106,13 +106,13 @@ private struct SortChip: View {
             }
         } label: {
             FilterChipView(
-                label: activeSort.rawValue,
+                label: activeSort.displayName,
                 icon: sortDirection.icon,
                 isActive: activeSort != .dueDate,
                 action: {}
             )
         }
-        .accessibilityLabel("Sort by \(activeSort.rawValue), \(sortDirection.rawValue)")
+        .accessibilityLabel("Sort by \(activeSort.displayName), \(sortDirection.displayName)")
     }
 }
 
@@ -123,7 +123,7 @@ private struct CompletedChip: View {
 
     var body: some View {
         FilterChipView(
-            label: "Done",
+            label: String(localized: "filter.chip.completed", defaultValue: "Completed", comment: "Label on the filter chip that toggles whether completed tasks are shown in the list and board filter bars"),
             icon: showCompleted ? "eye.fill" : "eye.slash",
             isActive: showCompleted
         ) {

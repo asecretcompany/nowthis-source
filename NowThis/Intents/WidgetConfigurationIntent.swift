@@ -9,7 +9,7 @@ import SwiftData
 struct SelectListsIntent: WidgetConfigurationIntent {
 
     static let title: LocalizedStringResource = "Select Lists"
-    static let description = IntentDescription("Choose which task lists to show in the widget.")
+    static let description = IntentDescription("Choose which lists to show in the widget.")
 
     /// The lists to display. Empty = show all lists.
     @Parameter(title: "Lists", default: [])
@@ -28,6 +28,14 @@ struct SelectListsIntent: WidgetConfigurationIntent {
     ///   - showOverdue: When true, include overdue tasks alongside today's.
     ///   - container: The SwiftData container to query.
     /// - Returns: Filtered tasks and a display name for the widget header.
+    /// Header shown when a task's own list cannot be resolved. Was the bare literal `"Tasks"`,
+    /// which never entered a catalog and so read as English in the widget in every language.
+    static var fallbackListName: String {
+        String(localized: "widget.header.fallback",
+               defaultValue: "Tasks",
+               comment: "Widget header used when the selected list can no longer be found. A generic noun, not the name of any list.")
+    }
+
     @MainActor
     static func fetchFilteredTasks(
         listIDs: [String],
@@ -98,18 +106,21 @@ struct SelectListsIntent: WidgetConfigurationIntent {
                 priority: task.priority,
                 dueDate: task.dueDate,
                 isDueDateOnly: task.isDueDateOnly,
-                listName: task.taskList?.name ?? "Tasks"
+                listName: task.taskList?.name ?? Self.fallbackListName
             )
         }
 
         // Compute display name
         let displayName: String
         if filterIDs.isEmpty {
-            displayName = "All Lists"
+            displayName = String(
+                localized: "widget.header.allLists",
+                defaultValue: "All Lists",
+                comment: "Widget header when the widget is not filtered to particular lists.")
         } else if filterIDs.count == 1 {
             displayName = widgetTasks.first?.listName
                 ?? tasks.first?.taskList?.name
-                ?? "Tasks"
+                ?? Self.fallbackListName
         } else {
             // Fetch the actual list names for the selected IDs
             let listDescriptor = FetchDescriptor<TaskList>()
@@ -131,14 +142,15 @@ struct SelectListsIntent: WidgetConfigurationIntent {
 /// `TaskListEntity` to avoid pulling CreateTaskIntent into the widget target.
 struct WidgetListEntity: AppEntity {
 
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Task List"
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "List"
     static let defaultQuery = WidgetListEntityQuery()
 
     var id: String
     var name: String
 
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(name)")
+        // `stringLiteral:` and not `"\(name)"` — see `TaskListEntity` in CreateTaskIntent.swift.
+        DisplayRepresentation(title: LocalizedStringResource(stringLiteral: name))
     }
 }
 

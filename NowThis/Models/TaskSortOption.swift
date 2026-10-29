@@ -18,6 +18,43 @@ enum TaskSortOption: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// User-facing label. The rawValue is persisted in `@AppStorage` (`TaskListView`)
+    /// and must stay English.
+    var displayName: String {
+        switch self {
+        case .dueDate:
+            return String(localized: "sort.dueDate", defaultValue: "Due Date",
+                          comment: "Sort option: order tasks by when they are due.")
+        case .startDate:
+            return String(localized: "sort.startDate", defaultValue: "Start Date",
+                          comment: "Sort option: order tasks by when work on them may begin.")
+        case .priority:
+            return String(localized: "sort.priority", defaultValue: "Priority",
+                          comment: "Sort option: order tasks by High/Medium/Low priority.")
+        case .title:
+            return String(localized: "sort.title", defaultValue: "Title",
+                          comment: "Sort option: order tasks alphabetically by name.")
+        case .createdDate:
+            return String(localized: "sort.created", defaultValue: "Created",
+                          comment: "Sort option: order tasks by when they were created. Past participle used as a label, not a sentence.")
+        case .modifiedDate:
+            return String(localized: "sort.modified", defaultValue: "Modified",
+                          comment: "Sort option: order tasks by when they were last changed. Past participle used as a label.")
+        case .completedDate:
+            return String(localized: "sort.completedDate", defaultValue: "Completed Date",
+                          comment: "Sort option: order tasks by when they were completed.")
+        case .tags:
+            return String(localized: "sort.tags", defaultValue: "Tags",
+                          comment: "Sort option: order tasks by their first tag.")
+        case .relevance:
+            return String(localized: "sort.relevance", defaultValue: "Relevance",
+                          comment: "Sort option: a combined score of priority and how soon a task is due.")
+        case .manually:
+            return String(localized: "sort.manually", defaultValue: "Manually",
+                          comment: "Sort option: the order the user dragged tasks into. Adverb answering 'sorted how?'.")
+        }
+    }
+
     /// SF Symbol for the sort option.
     var icon: String {
         switch self {
@@ -131,6 +168,18 @@ enum SortDirection: String, CaseIterable {
     case descending = "Descending"
 
     var isAscending: Bool { self == .ascending }
+
+    /// User-facing label. The rawValue is persisted in `@AppStorage` and must stay English.
+    var displayName: String {
+        switch self {
+        case .ascending:
+            return String(localized: "sort.direction.ascending", defaultValue: "Ascending",
+                          comment: "Sort direction: smallest or earliest first.")
+        case .descending:
+            return String(localized: "sort.direction.descending", defaultValue: "Descending",
+                          comment: "Sort direction: largest or latest first.")
+        }
+    }
 
     var icon: String {
         switch self {

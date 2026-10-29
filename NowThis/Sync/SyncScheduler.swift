@@ -3,6 +3,28 @@ import SwiftData
 import WidgetKit
 import os
 
+/// The fields a sync pass needs from a `ServerAccount`, copied out of the model.
+///
+/// A sync loop awaits the keychain and then a multi-second network round trip per
+/// account, and `AccountManager.removeAccount` deletes on the **main** context.
+/// Holding the `ServerAccount` itself across those suspensions means a delete
+/// that lands mid-sync invalidates it, and the next `account.displayName` read
+/// traps in SwiftData. Values can't be invalidated.
+struct SyncAccount: Equatable, Sendable {
+    let id: String
+    let displayName: String
+    let serverBaseURL: String
+    let username: String
+
+    /// Reads every field up front, on the caller's actor, before any `await`.
+    init(account: ServerAccount) {
+        self.id = account.id
+        self.displayName = account.displayName
+        self.serverBaseURL = account.serverBaseURL
+        self.username = account.username
+    }
+}
+
 /// Manages periodic and on-demand sync scheduling.
 ///
 /// Coordinates with `SyncEngine` to trigger syncs at appropriate times:
@@ -29,14 +51,13 @@ final class SyncScheduler: ObservableObject {
     /// cancelled — cancellation is not a failure).
     @Published var lastSyncFailure: SyncFailure?
 
-    /// Bumped (to a fresh value) only when a sync's inbound pull actually created
-    /// or updated local tasks. Task-list views key their content `.id` off this
-    /// (see `refreshOnInboundSync()`) to force a fresh `@Query` fetch, because a
-    /// `@Query` bound to the main context does not re-emit when the sync engine's
-    /// background context commits new rows to the shared store. Gating on real
-    /// inbound changes keeps routine/push-only syncs from needlessly rebuilding
-    /// the list (which would reset scroll, expansion, and selection).
+    /// Compatibility signal for consumers such as the Watch. Screens use scoped query revisions.
     @Published private(set) var dataRefreshToken = UUID()
+
+    /// Collections the server holds in its trash, found during the last sync. Surfaced once by
+    /// `TrashedListsNotice` so a user who can see a list on the server understands why it did
+    /// not arrive here, instead of it silently going missing.
+    @Published private(set) var trashedListsFound: [TrashedList] = []
 
     // MARK: - Dependencies
 
@@ -49,11 +70,27 @@ final class SyncScheduler: ObservableObject {
     /// pulled from the server (e.g. a task completed on another device) appear
     /// in the widget without waiting for its own 15-minute timeline refresh.
     /// Injectable for testing.
+    let progressState = SyncProgressState()
+    private var progressListener: Task<Void, Never>?
+
     private let onWidgetReload: @MainActor () -> Void
+    private let onNotificationFlush: @MainActor (ModelContext) async -> Void
+    private weak var spotlightModelContext: ModelContext?
+    private weak var spotlightIndexer: SpotlightIndexer?
 
     private var syncTimer: Timer?
     private var debounceTask: Task<Void, Never>?
     private var foregroundSyncTask: Task<Void, Never>?
+    private var runnerTask: Task<Void, Never>?
+    private var needsFollowup = false
+    private var pendingAccountSync = false
+    private var isForeground = true
+    private var changeListener: Task<Void, Never>?
+    private var changeFlush: Task<Void, Never>?
+    private var pendingChange: SyncChange?
+    @Published private(set) var unscopedRefreshRevision: UInt64 = 0
+    @Published private(set) var latestCommittedChange: SyncChange?
+    @Published private(set) var listRevisions: [String: UInt64] = [:]
     private let logger = Logger(subsystem: "com.nowthis", category: "sync-scheduler")
 
     /// Tracks accounts whose credentials the server rejected (401), so automatic
@@ -75,30 +112,146 @@ final class SyncScheduler: ObservableObject {
     init(
         syncEngine: SyncEngine = SyncEngine(),
         keychainManager: KeychainManager = KeychainManager(),
-        onWidgetReload: @escaping @MainActor () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
+        onWidgetReload: @escaping @MainActor () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
+        onNotificationFlush: @escaping @MainActor (ModelContext) async -> Void = {
+            await ReminderScheduler.reconcileNow(modelContext: $0)
+        }
     ) {
         self.syncEngine = syncEngine
         self.keychainManager = keychainManager
         self.onWidgetReload = onWidgetReload
+        self.onNotificationFlush = onNotificationFlush
+        progressListener = Task { [weak self, syncEngine] in
+            let stream = await syncEngine.progressUpdates()
+            for await progress in stream {
+                guard let self, !Task.isCancelled else { return }
+                if let progress { self.progressState.apply(progress) }
+                else { self.progressState.clear() }
+            }
+        }
+        changeListener = Task { [weak self, syncEngine] in
+            let stream = await syncEngine.changes()
+            for await change in stream {
+                guard let self, !Task.isCancelled else { return }
+                self.queueCommittedChange(change)
+            }
+        }
+    }
+
+    /// Bind the app's existing indexer before store services start. The same instance observes
+    /// local saves and receives committed background changes through this scheduler's stream.
+    func configureSpotlight(modelContext: ModelContext, indexer: SpotlightIndexer) {
+        spotlightModelContext = modelContext
+        spotlightIndexer = indexer
+    }
+
+    private func queueCommittedChange(_ change: SyncChange) {
+        if let pending = pendingChange {
+            pendingChange = SyncChange(revision: max(pending.revision, change.revision),
+                accountIDs: pending.accountIDs.union(change.accountIDs),
+                listIDs: pending.listIDs.union(change.listIDs),
+                changedIDs: pending.changedIDs.union(change.changedIDs),
+                deletedIDs: pending.deletedIDs.union(change.deletedIDs), kind: change.kind)
+        } else { pendingChange = change }
+        guard changeFlush == nil else { return }
+        changeFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self?.flushCommittedChanges()
+        }
+    }
+
+    private func flushCommittedChanges() {
+        changeFlush?.cancel(); changeFlush = nil
+        guard let change = pendingChange else { return }
+        pendingChange = nil
+        guard change.revision > (latestCommittedChange?.revision ?? 0) else { return }
+        for id in change.listIDs { listRevisions[id] = change.revision }
+        latestCommittedChange = change
+        dataRefreshToken = UUID()
+        if let spotlightModelContext, let spotlightIndexer {
+            spotlightIndexer.requestReindex(modelContext: spotlightModelContext)
+        }
     }
 
     // MARK: - Public API
+
+    /// Starts the first pull after account setup has saved metadata and credentials.
+    /// Login is an explicit request: it must bypass the foreground throttle and
+    /// must not get lost behind a run that already captured its account list.
+    func syncAfterAccountAdded(modelContext: ModelContext) {
+        pendingAccountSync = true
+        guard isForeground else { return }
+        if isSyncing { needsFollowup = true; return }
+        debounceTask?.cancel()
+        debounceTask = nil
+        nonisolated(unsafe) let context = modelContext
+        startTrackedTask {
+            await self.syncNow(modelContext: context)
+        }
+    }
 
     /// Triggers a sync for all Nextcloud accounts.
     ///
     /// - Parameter modelContext: The SwiftData model context.
     func syncNow(modelContext: ModelContext) async {
-        guard !isSyncing else { return }
-
+        if let runnerTask { await runnerTask.value; return }
+        // Reserve ownership synchronously before any actor hop.
         isSyncing = true
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                self.needsFollowup = false
+                await self.performSyncRun(modelContext: modelContext)
+            } while self.needsFollowup && !Task.isCancelled
+            self.runnerTask = nil
+            self.isSyncing = false
+            // Foreground return can arrive before a cancelled runner finishes
+            // its cleanup. Start the saved login request once ownership is free.
+            if self.pendingAccountSync && self.isForeground {
+                self.syncAfterAccountAdded(modelContext: modelContext)
+            }
+        }
+        runnerTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+    }
+
+    private func performSyncRun(modelContext: ModelContext) async {
+        let servicingAccountSync = pendingAccountSync
+        pendingAccountSync = false
+        defer {
+            if servicingAccountSync && Task.isCancelled { pendingAccountSync = true }
+        }
+
+        // A background pull may have committed rows to the shared store while the app was away.
+        // It runs in the BGTask with no `@Published` to bump, so it leaves its inbound-change
+        // signal on the engine both paths share. Take it here, before the network work: those
+        // rows are already stored, so showing them must not wait on this sync — or depend on it
+        // succeeding. Nor can the sync below make up for it, since the background pull stored the
+        // new etags and this one will therefore find nothing changed.
+        if await syncEngine.consumePendingInboundRefresh() {
+            dataRefreshToken = UUID()
+            unscopedRefreshRevision &+= 1
+        }
+
         lastError = nil
         lastSyncFailure = nil
 
         do {
+            // Materialize the accounts before the first suspension point. The loop
+            // below awaits the keychain and then a multi-second network sync, and
+            // `AccountManager.removeAccount` deletes on the main context — so a
+            // delete landing mid-sync would invalidate a `ServerAccount` this loop
+            // still holds, and the next property read would trap in SwiftData.
             let accounts = try modelContext.fetch(FetchDescriptor<ServerAccount>())
-            let nextcloudAccounts = accounts.filter { $0.mode == .nextcloud }
+            let nextcloudAccounts = accounts
+                .filter { $0.mode == .nextcloud }
+                .map(SyncAccount.init(account:))
 
             var inboundChanged = false
+            var trashedFound: [TrashedList] = []
 
             for account in nextcloudAccounts {
                 try Task.checkCancellation()
@@ -134,10 +287,22 @@ final class SyncScheduler: ObservableObject {
                         serverBaseURL: account.serverBaseURL,
                         credentials: credentials,
                         modelContainer: modelContext.container,
-                        syncWindowMonths: syncWindowMonths
+                        syncWindowMonths: syncWindowMonths,
+                        reconcileNotifications: false
                     ) {
                         inboundChanged = true
                     }
+                    trashedFound.append(contentsOf: await syncEngine.lastTrashedLists)
+                    if await syncEngine.lastMovePermissionDenied {
+                        // A move was undone locally; the lists have to show it.
+                        inboundChanged = true
+                        lastSyncFailure = SyncFailure(
+                            category: .accessDenied,
+                            message: SyncFailure.accessDeniedMessage
+                        )
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch CalDAVError.unauthorized {
                     // Pause this account so we don't keep hammering the server with
                     // a credential it has already rejected.
@@ -145,17 +310,31 @@ final class SyncScheduler: ObservableObject {
                     recordAuthFailure(
                         message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."))
                     logger.error("Auth rejected (401) — pausing sync for account until re-auth")
+                } catch {
+                    if Task.isCancelled { throw CancellationError() }
+                    if let failure = SyncFailure.from(error) {
+                        lastSyncFailure = failure
+                        lastError = failure.message
+                    }
+                    // Other accounts may be healthy; retain this account's failure and continue.
+                }
+                let outcome = await syncEngine.lastOutcome
+                if outcome.status == .partial, let failure = outcome.failures.first {
+                    lastSyncFailure = failure; lastError = failure.message
                 }
             }
 
-            lastSyncDate = Date()
+            if lastSyncFailure == nil { lastSyncDate = Date() }
+
+            // De-duplicated by href: two accounts could in principle report the same collection
+            // path, and the user should not be shown the same row twice.
+            var seenHrefs: Set<String> = []
+            trashedListsFound = trashedFound.filter { seenHrefs.insert($0.href).inserted }
 
             // Only force the task-list views to re-query when the pull actually
             // brought in new/changed tasks — otherwise the visible list would
             // rebuild (and lose scroll/expansion/selection) on every routine sync.
-            if inboundChanged {
-                dataRefreshToken = UUID()
-            }
+            if inboundChanged { flushCommittedChanges() }
 
             // Sync succeeded — refresh widgets so server-side changes appear.
             onWidgetReload()
@@ -169,7 +348,17 @@ final class SyncScheduler: ObservableObject {
             }
         }
 
-        isSyncing = false
+        // Committed changes carry durable tickets. A canceled foreground run may no
+        // longer own an assertion; the next local recovery pass services those tickets.
+        progressState.clear()
+        if !Task.isCancelled { await onNotificationFlush(modelContext) }
+
+        let unconsumed = await syncEngine.consumePendingInboundRefresh()
+        if pendingChange != nil { flushCommittedChanges() }
+        else if unconsumed, latestCommittedChange == nil {
+            dataRefreshToken = UUID()
+            unscopedRefreshRevision &+= 1
+        }
     }
 
     /// Records an authentication failure for an account so it surfaces in the
@@ -187,6 +376,7 @@ final class SyncScheduler: ObservableObject {
     /// Uses a 2-second debounce to coalesce rapid changes (e.g., checking
     /// off multiple tasks in sequence) into a single server round-trip.
     func syncAfterChange(modelContext: ModelContext) {
+        if isSyncing { needsFollowup = true; return }
         debounceTask?.cancel()
         debounceTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(changeDebounceInterval))
@@ -204,9 +394,10 @@ final class SyncScheduler: ObservableObject {
     /// Enforces a 30-second minimum interval to avoid overwhelming the
     /// server during rapid app switching.
     func syncOnForeground(modelContext: ModelContext) {
+        isForeground = true
         guard !isSyncing else { return }
 
-        if let lastSync = lastSyncDate,
+        if !pendingAccountSync, let lastSync = lastSyncDate,
            Date().timeIntervalSince(lastSync) < foregroundMinInterval {
             logger.debug("Skipping foreground sync — last sync \(Int(Date().timeIntervalSince(lastSync)))s ago")
             return
@@ -231,7 +422,8 @@ final class SyncScheduler: ObservableObject {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                await self.syncNow(modelContext: ctx)
+                guard !self.isSyncing else { return }
+                self.startTrackedTask { await self.syncNow(modelContext: ctx) }
             }
         }
     }
@@ -249,10 +441,13 @@ final class SyncScheduler: ObservableObject {
     /// Call this when the app enters the background to prevent the watchdog
     /// from killing the process due to blocked main-thread work.
     func cancelInflightSync() {
+        isForeground = false
         debounceTask?.cancel()
         debounceTask = nil
         foregroundSyncTask?.cancel()
         foregroundSyncTask = nil
+        runnerTask?.cancel()
+        needsFollowup = false
         stopAutoSync()
     }
 
@@ -266,6 +461,8 @@ final class SyncScheduler: ObservableObject {
 
     deinit {
         MainActor.assumeIsolated {
+            changeListener?.cancel()
+            progressListener?.cancel(); changeFlush?.cancel(); runnerTask?.cancel()
             syncTimer?.invalidate()
         }
     }

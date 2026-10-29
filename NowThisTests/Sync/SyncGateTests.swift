@@ -32,7 +32,7 @@ struct SyncGateTests {
 
         // Call performFullSync with a non-existent account — it will return
         // early (account not found), but the gate should still reset.
-        try? await engine.performFullSync(
+        _ = try? await engine.performFullSync(
             accountID: "nonexistent-account",
             serverBaseURL: "https://invalid.example.com",
             credentials: CalDAVClient.Credentials(username: "x", password: "x"),
@@ -99,7 +99,7 @@ struct SyncGateTests {
             modelContainer: container
         )
 
-        await firstSync.value
+        _ = await firstSync.value
 
         // After both complete, gate must be clear
         let inProgress = await engine.isSyncInProgress

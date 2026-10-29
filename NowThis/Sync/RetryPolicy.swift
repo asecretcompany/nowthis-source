@@ -11,6 +11,25 @@ import Foundation
 /// foregrounding the app.
 struct RetryPolicy: Sendable {
 
+    /// Accepts delta-seconds or an HTTP-date. Server delays are never capped.
+    static func retryAfter(_ value: String?, now: Date) -> TimeInterval? {
+        guard let value else { return nil }
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }),
+           let seconds = TimeInterval(text), seconds.isFinite {
+            return seconds
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.isLenient = false
+        for format in ["EEE, dd MMM yyyy HH:mm:ss 'GMT'", "EEEE, dd-MMM-yy HH:mm:ss 'GMT'", "EEE MMM d HH:mm:ss yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: text) { return max(0, date.timeIntervalSince(now)) }
+        }
+        return nil
+    }
+
     /// Total number of attempts, including the first. `3` == 1 initial try + 2 retries.
     let maxAttempts: Int
 
@@ -23,13 +42,16 @@ struct RetryPolicy: Sendable {
     /// Returns whether `error` is transient and therefore worth retrying.
     func isRetryable(_ error: Error) -> Bool {
         // Never retry a cancelled task — cancellation is intentional.
-        if error is CancellationError { return false }
+        if error is CancellationError || error is BackgroundBudgetExhausted { return false }
 
+        if let responseError = error as? HTTPRetryError {
+            return responseError.statusCode == 429 || ((500...599).contains(responseError.statusCode) && responseError.statusCode != 507)
+        }
         if let calDAVError = error as? CalDAVError {
             switch calDAVError {
             case .serverError(let statusCode):
                 // 5xx (500/502/503/504 …) are transient server-side failures.
-                return (500...599).contains(statusCode)
+                return (500...599).contains(statusCode) && statusCode != 507
             case .rateLimited:
                 return true
             case .networkError(let underlying):
@@ -47,6 +69,8 @@ struct RetryPolicy: Sendable {
     /// Returns the delay for the given retry attempt, respecting `Retry-After` from 429s.
     func delay(forRetry retryIndex: Int, error: Error? = nil) -> TimeInterval {
         guard retryIndex > 0 else { return 0 }
+
+        if let responseError = error as? HTTPRetryError, let delay = responseError.retryAfter { return delay }
 
         // Respect the server's Retry-After header for rate-limited responses
         if let calDAVError = error as? CalDAVError,
@@ -86,20 +110,56 @@ struct RetryPolicy: Sendable {
 /// backoff) propagates immediately.
 func withRetry<T>(
     policy: RetryPolicy = .default,
-    sleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+    deadline: Date? = nil,
+    runBudget: BackgroundRunBudget? = nil,
+    now: @Sendable () -> Date = { Date() },
+    jitter: @Sendable (TimeInterval) -> TimeInterval = { $0 },
+    sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
     operation: @Sendable () async throws -> T
 ) async throws -> T {
     var attempt = 1
     while true {
+        try BackgroundBudgetExhausted.checkAdmission(runBudget)
+        if let deadline, now() >= deadline { throw RetryDeferredError(deadline: now()) }
         do {
             return try await operation()
         } catch {
             let isLastAttempt = attempt >= policy.maxAttempts
+            try BackgroundBudgetExhausted.checkAdmission(runBudget)
             if isLastAttempt || !policy.isRetryable(error) {
                 throw error
             }
-            try await sleep(policy.delay(forRetry: attempt, error: error))
+            let delay = policy.delay(forRetry: attempt, error: error)
+            let serverDelay: TimeInterval?
+            if case CalDAVError.rateLimited(let retryAfter) = error { serverDelay = retryAfter }
+            else { serverDelay = (error as? HTTPRetryError)?.retryAfter }
+            let wait = serverDelay ?? max(0, jitter(delay))
+            let retryDeadline = now().addingTimeInterval(wait)
+            if let runBudget, wait >= BackgroundBudgetExhausted.remainingSeconds(runBudget) {
+                // An explicit server delay remains authoritative across deliveries;
+                // only our own policy backoff is app-budget exhaustion.
+                if serverDelay != nil { throw RetryDeferredError(deadline: retryDeadline) }
+                throw BackgroundBudgetExhausted()
+            }
+            if let deadline, retryDeadline >= deadline {
+                throw RetryDeferredError(deadline: retryDeadline)
+            }
+            try await DeadlineRequestExecutor.perform(deadline: runBudget?.remoteCutoff) {
+                try await sleep(wait)
+            }
             attempt += 1
         }
     }
+}
+
+/// The coordinator can schedule a later run without violating Retry-After.
+struct RetryDeferredError: Error, Sendable {
+    let deadline: Date
+}
+
+/// Retains Retry-After on transient HTTP failures such as a 503. Without a
+/// header, existing callers continue to receive CalDAVError.serverError.
+struct HTTPRetryError: Error, Sendable {
+    let statusCode: Int
+    let retryAfter: TimeInterval?
 }

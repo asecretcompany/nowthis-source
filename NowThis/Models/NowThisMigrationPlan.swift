@@ -32,6 +32,7 @@ enum SchemaV2: VersionedSchema {
     static var models: [any PersistentModel.Type] {
         [
             TaskItem.self,
+            TaskPhoto.self,
             TaskList.self,
             JournalEntry.self,
             Tag.self,

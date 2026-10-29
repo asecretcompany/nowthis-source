@@ -51,7 +51,7 @@ struct SyncPushDetectionTests {
         ).first!
 
         let engine = SyncEngine()
-        let dirtyUIDs = await engine.testFindDirtyTasks(for: fetchedList, modelContext: bgContext)
+        let dirtyUIDs = engine.testFindDirtyTasks(for: fetchedList, modelContext: bgContext)
 
         #expect(dirtyUIDs.count == 1, "Should find exactly 1 dirty task")
         #expect(dirtyUIDs.first == "dirty-uid")
@@ -86,7 +86,7 @@ struct SyncPushDetectionTests {
         ).first!
 
         let engine = SyncEngine()
-        let deletedUIDs = await engine.testFindDeletedTasks(for: fetchedList, modelContext: bgContext)
+        let deletedUIDs = engine.testFindDeletedTasks(for: fetchedList, modelContext: bgContext)
 
         #expect(deletedUIDs.count == 1, "Should find exactly 1 deleted task")
         #expect(deletedUIDs.first == "deleted-uid")
@@ -117,7 +117,7 @@ struct SyncPushDetectionTests {
         ).first!
 
         let engine = SyncEngine()
-        let dirtyUIDs = await engine.testFindDirtyTasks(for: fetchedList, modelContext: bgContext)
+        let dirtyUIDs = engine.testFindDirtyTasks(for: fetchedList, modelContext: bgContext)
 
         #expect(dirtyUIDs.isEmpty, "Deleted+dirty tasks should not appear in findDirtyTasks")
     }

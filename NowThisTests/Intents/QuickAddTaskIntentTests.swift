@@ -21,6 +21,14 @@ struct QuickAddTaskIntentTests {
         )
     }
 
+    /// Clears both the current and legacy keys. `UserDefaults` is shared across the
+    /// whole test host, and the resolver now *writes* the list it adopts — so a test
+    /// that failed midway used to leave its choice behind for whatever ran next.
+    private func clearStoredList() {
+        UserDefaults.standard.removeObject(forKey: TaskDefaultsPreferences.defaultListIDKey)
+        UserDefaults.standard.removeObject(forKey: TaskDefaultsPreferences.legacySiriListIDKey)
+    }
+
     @Test("Parses title and clock time into a timed, non-all-day task")
     @MainActor
     func createsTimedTask() async throws {
@@ -29,9 +37,10 @@ struct QuickAddTaskIntentTests {
         let inbox = TaskList(serverURL: "", name: "Inbox", colorHex: "#FF0000")
         context.insert(inbox)
         try context.save()
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Buy milk tomorrow at 5pm"
         let result = try await intent.performWithContainer(container)
 
@@ -44,7 +53,7 @@ struct QuickAddTaskIntentTests {
         #expect(Calendar.current.component(.hour, from: due) == 17)
         #expect(task.taskList?.id == inbox.id)
         #expect(task.isDirty == true)
-        #expect(result.dialog.contains("Buy milk"))
+        #expect(result.spokenText.contains("Buy milk"))
     }
 
     @Test("Bare keyword date creates an all-day (date-only) task")
@@ -55,9 +64,10 @@ struct QuickAddTaskIntentTests {
         let inbox = TaskList(serverURL: "", name: "Inbox", colorHex: "#FF0000")
         context.insert(inbox)
         try context.save()
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Submit report tomorrow"
         _ = try await intent.performWithContainer(container)
 
@@ -78,17 +88,16 @@ struct QuickAddTaskIntentTests {
         context.insert(grocery)
         context.insert(work)
         try context.save()
-        UserDefaults.standard.set(work.id, forKey: "defaultSiriListID")
+        TaskDefaultsPreferences.setDefaultListID(work.id)
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Order coffee"
         _ = try await intent.performWithContainer(container)
 
         let tasks = try context.fetch(FetchDescriptor<TaskItem>())
         let task = try #require(tasks.first)
         #expect(task.taskList?.id == work.id)
-
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
     }
 
     @Test("Falls back to first alphabetical list when no default configured")
@@ -101,9 +110,10 @@ struct QuickAddTaskIntentTests {
         context.insert(alpha)
         context.insert(beta)
         try context.save()
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Water plants"
         _ = try await intent.performWithContainer(container)
 
@@ -116,9 +126,10 @@ struct QuickAddTaskIntentTests {
     @MainActor
     func throwsWithoutLists() async throws {
         let container = try makeContainer()
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Homeless task"
         await #expect(throws: IntentError.self) {
             _ = try await intent.performWithContainer(container)
@@ -133,9 +144,10 @@ struct QuickAddTaskIntentTests {
         let inbox = TaskList(serverURL: "", name: "Inbox", colorHex: "#FF0000")
         context.insert(inbox)
         try context.save()
-        UserDefaults.standard.removeObject(forKey: "defaultSiriListID")
+        clearStoredList()
+        defer { clearStoredList() }
 
-        var intent = QuickAddTaskIntent()
+        let intent = QuickAddTaskIntent()
         intent.text = "Pay rent !high @finance tomorrow"
         _ = try await intent.performWithContainer(container)
 

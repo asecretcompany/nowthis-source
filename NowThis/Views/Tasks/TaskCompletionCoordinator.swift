@@ -46,11 +46,7 @@ final class TaskCompletionCoordinator: ObservableObject {
 
         if task.status == .completed {
             // Un-complete: immediate, no animation
-            task.status = .needsAction
-            task.completedDate = nil
-            task.percentComplete = 0
-            task.lastModifiedDate = Date()
-            task.isDirty = true
+            TaskCompletionLogic.markUncompleted(task)
             isAnimating = false
             onWidgetReload()
             onStatusChanged()
@@ -62,29 +58,16 @@ final class TaskCompletionCoordinator: ObservableObject {
                 try? await Task.sleep(for: .seconds(self?.animationDelay ?? 0.8))
                 guard !Task.isCancelled else { return }
 
-                // Check for recurring task — advance to next occurrence
-                if let rrule = task.recurrenceRule,
-                   let rule = RecurrenceRule.parse(rrule),
-                   let currentDue = task.dueDate,
-                   let nextDue = rule.nextDate(after: currentDue) {
-                    // Reset to next occurrence instead of completing
-                    task.dueDate = nextDue
-                    task.status = .needsAction
-                    task.completedDate = nil
-                    task.percentComplete = 0
-                    if let startDate = task.startDate {
-                        let offset = nextDue.timeIntervalSince(currentDue)
-                        task.startDate = startDate.addingTimeInterval(offset)
-                    }
-                } else {
-                    // Non-recurring: mark complete normally
-                    task.status = .completed
-                    task.completedDate = Date()
-                    task.percentComplete = 100
+                // The animation delay is a real window: an account delete lands on
+                // the main context and cascades this task away, and completing —
+                // or reading the title of — an invalidated model traps in
+                // SwiftData. Drop the pending completion and stop the animation.
+                guard task.modelContext != nil else {
+                    self?.isAnimating = false
+                    return
                 }
 
-                task.lastModifiedDate = Date()
-                task.isDirty = true
+                TaskCompletionLogic.markCompleted(task)
                 self?.isAnimating = false
                 IntentDonationManager.donateCompleteTask(title: task.title)
                 self?.onWidgetReload()

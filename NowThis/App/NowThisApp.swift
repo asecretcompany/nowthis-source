@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SwiftData
 import CoreSpotlight
 import os
@@ -16,96 +17,42 @@ struct NowThisApp: App {
         category: "ModelContainer"
     )
 
-    /// The shared model container for all SwiftData models.
-    /// Uses the App Group container for cross-target data sharing.
-    /// Falls back to the default container if the App Group is unavailable
-    /// (e.g., in test hosts or CI environments).
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema(SchemaV2.models)
+    @UIApplicationDelegateAdaptor(StoreLaunchDelegate.self) private var storeLaunchDelegate
 
-        // Pre-create the Application Support directory inside the App Group container.
-        // SwiftData/CoreData expects this directory to exist but iOS does not
-        // auto-create it for App Group containers, causing noisy error logs on first launch.
-        if let groupURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppConstants.appGroupID
-        ) {
-            let supportDir = groupURL.appendingPathComponent("Library/Application Support")
-            if !FileManager.default.fileExists(atPath: supportDir.path) {
-                try? FileManager.default.createDirectory(
-                    at: supportDir,
-                    withIntermediateDirectories: true
-                )
-            }
-        }
+    private static func makeStoreOpenCoordinator() -> StoreOpenCoordinator<ModelContainer, StoreOpenFailure> {
+        StoreOpenCoordinator(protect: { open in
+            StoreOpenBackgroundTask().perform(open: open)
+        }) {
+            do {
+                if let fixture = try PerformanceLaunchFixture.openIfRequested() { return .success(fixture) }
+            } catch { return .failure(StoreOpenFailure(message: error.localizedDescription)) }
+            let schema = Schema(SchemaV2.models)
 
-        let config = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            groupContainer: .identifier(AppConstants.appGroupID)
-        )
-
-        // Primary: App Group container
-        do {
-            return try ModelContainer(
-                for: schema,
-                configurations: [config]
-            )
-        } catch {
-            logger.error("ModelContainer init failed: \(error.localizedDescription)")
-            backupStoreFiles()
-        }
-
-        // Retry after backing up the old store
-        do {
-            return try ModelContainer(
-                for: schema,
-                configurations: [config]
-            )
-        } catch {
-            logger.error("Retry failed: \(error.localizedDescription)")
-        }
-
-        // Last resort: default container (no App Group)
-        do {
-            return try ModelContainer(for: schema)
-        } catch {
-            fatalError(
-                "Could not create ModelContainer: \(error.localizedDescription)"
-            )
-        }
-    }()
-
-    /// Backs up SQLite store files to a `.backup` directory so user data is
-    /// preserved for potential manual recovery after a migration failure.
-    private static func backupStoreFiles() {
-        guard let groupURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppConstants.appGroupID
-        ) else { return }
-
-        let supportDir = groupURL.appendingPathComponent("Library/Application Support")
-        let fm = FileManager.default
-        let extensions = ["sqlite", "sqlite-wal", "sqlite-shm"]
-
-        // Create timestamped backup directory
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let backupDir = supportDir.appendingPathComponent(
-            "backup-\(formatter.string(from: Date()))"
-        )
-        try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
-
-        do {
-            let files = try fm.contentsOfDirectory(at: supportDir, includingPropertiesForKeys: nil)
-            for file in files {
-                let ext = file.pathExtension
-                if extensions.contains(ext) || file.lastPathComponent.hasSuffix(".store") {
-                    let dest = backupDir.appendingPathComponent(file.lastPathComponent)
-                    try fm.moveItem(at: file, to: dest)
-                    logger.info("Backed up \(file.lastPathComponent) to \(backupDir.lastPathComponent)")
+            // SwiftData/CoreData expects the App Group support directory to exist.
+            if let groupURL = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: AppConstants.appGroupID
+            ) {
+                let supportDirectory = groupURL.appendingPathComponent("Library/Application Support")
+                if !FileManager.default.fileExists(atPath: supportDirectory.path) {
+                    try? FileManager.default.createDirectory(
+                        at: supportDirectory,
+                        withIntermediateDirectories: true
+                    )
                 }
             }
-        } catch {
-            logger.error("Backup failed: \(error.localizedDescription)")
+
+            let configuration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: false,
+                groupContainer: .identifier(AppConstants.appGroupID)
+            )
+
+            do {
+                return .success(try ModelContainer(for: schema, configurations: [configuration]))
+            } catch {
+                logger.error("ModelContainer open failed: \(error.localizedDescription)")
+                return .failure(StoreOpenFailure(message: error.localizedDescription))
+            }
         }
     }
 
@@ -123,13 +70,39 @@ struct NowThisApp: App {
     /// flag prevents concurrent syncs from creating duplicate tasks.
     private static let sharedSyncEngine = SyncEngine()
 
+    /// Purchased support ownership and its deadline-aware, idempotent listener.
+    private let proEntitlement = ProEntitlement()
+    private let appIconController = AppIconController()
+
+    /// iOS side of the phone-mirror to the watch companion app: pushes
+    /// `WatchSnapshot`s down and applies `WatchEdit`s back via `WatchEditApplier`.
+    private var watchBridge: WatchBridge? { storeLaunchDelegate.watchBridge }
+
     init() {
-        _syncScheduler = StateObject(wrappedValue: SyncScheduler(syncEngine: Self.sharedSyncEngine))
-        UNUserNotificationCenter.current().delegate = notificationDelegate
-        backgroundSyncManager.registerBackgroundTask(
-            modelContainer: sharedModelContainer,
-            syncEngine: Self.sharedSyncEngine
-        )
+        let coordinator = Self.makeStoreOpenCoordinator()
+        let scheduler = SyncScheduler(syncEngine: Self.sharedSyncEngine)
+        _syncScheduler = StateObject(wrappedValue: scheduler)
+
+        // SwiftUI constructs App before UIKit has finished launching. Prepare only;
+        // open under protection in didFinishLaunching, before scene connection.
+        storeLaunchDelegate.prepare(coordinator: coordinator, onLaunch: { [backgroundSyncManager] in
+            backgroundSyncManager.registerBackgroundTask(syncEngine: Self.sharedSyncEngine)
+        }, onOpened: {
+            [proEntitlement, appIconController, notificationDelegate, spotlightIndexer, backgroundSyncManager] modelContainer in
+            let bridge = WatchBridge(
+                entitlement: proEntitlement,
+                syncScheduler: scheduler,
+                modelContainer: modelContainer
+            )
+            UNUserNotificationCenter.current().delegate = notificationDelegate
+            spotlightIndexer.startObserving(modelContext: modelContainer.mainContext)
+            scheduler.configureSpotlight(modelContext: modelContainer.mainContext, indexer: spotlightIndexer)
+            backgroundSyncManager.configureStore(modelContainer: modelContainer)
+            proEntitlement.start()
+            appIconController.start(entitlement: proEntitlement)
+            bridge.activate()
+            return bridge
+        })
     }
 
     /// Shared sync scheduler for change-triggered and foreground syncs.
@@ -140,8 +113,14 @@ struct NowThisApp: App {
 
     @Environment(\.scenePhase) private var scenePhase
 
+    private func retryStoreOpen() {
+        storeLaunchDelegate.retry()
+    }
+
     var body: some Scene {
         WindowGroup {
+            if let modelContainer = storeLaunchDelegate.storeOpenState?.container,
+               let watchBridge {
             ContentView(deepLinkTaskID: $deepLinkTaskID)
                 .onOpenURL { url in
                     handleDeepLink(url)
@@ -154,16 +133,17 @@ struct NowThisApp: App {
                 .task {
                     // Badge count is fast — do it immediately
                     await ReminderScheduler.updateBadgeCount(
-                        modelContext: sharedModelContainer.mainContext
+                        modelContext: modelContainer.mainContext
                     )
-                    // Sync first — it will refresh reminders on completion
+                    // Local recovery must not depend on successful CalDAV execution.
+                    await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
                     syncScheduler.syncOnForeground(
-                        modelContext: sharedModelContainer.mainContext
+                        modelContext: modelContainer.mainContext
                     )
                     // Defer Spotlight reindex (non-blocking)
                     Task {
                         await spotlightIndexer.reindexAll(
-                            modelContext: sharedModelContainer.mainContext
+                            modelContext: modelContainer.mainContext
                         )
                     }
                 }
@@ -177,23 +157,43 @@ struct NowThisApp: App {
                     }
                 }
                 .environmentObject(syncScheduler)
+                .environment(syncScheduler.progressState)
+                .environment(\.syncCommands, syncScheduler.commands)
+                .environmentObject(watchBridge)
+                .environment(proEntitlement)
+                .environment(appIconController)
                 .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
-                        syncScheduler.syncOnForeground(
-                            modelContext: sharedModelContainer.mainContext
-                        )
                         Task {
-                            await ReminderScheduler.updateBadgeCount(
-                                modelContext: sharedModelContainer.mainContext
-                            )
+                            await proEntitlement.refresh()
+                            try? await appIconController.reconcileOwnership(proEntitlement.ownedCollectionIDs)
+                        }
+                        Task {
+                            await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
+                            syncScheduler.syncOnForeground(modelContext: modelContainer.mainContext)
                         }
                     } else if newPhase == .background {
+                        // Acquire synchronously while the scene callback still owns execution.
+                        let assertion = ReminderBackgroundAssertion()
+                        assertion.start {
+                            await ReminderScheduler.reconcileNow(modelContainer: modelContainer,
+                                policy: ReminderReconcilePolicy(allowsPermissionPrompt: false,
+                                    deadline: assertion.budget.finalCutoff))
+                        }
                         syncScheduler.cancelInflightSync()
                         backgroundSyncManager.scheduleBackgroundSync()
                     }
                 }
+                .modelContainer(modelContainer)
+            } else if let message = storeLaunchDelegate.storeOpenState?.recoveryMessage {
+                StoreRecoveryView(errorMessage: message) {
+                    retryStoreOpen()
+                }
+            } else {
+                ProgressView()
+                    .accessibilityLabel(Text("NowThis"))
+            }
         }
-        .modelContainer(sharedModelContainer)
     }
 
     // MARK: - Deep Link Handling

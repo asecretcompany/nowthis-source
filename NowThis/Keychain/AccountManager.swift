@@ -36,7 +36,12 @@ final class AccountManager: Observable {
     /// - Parameter displayName: The user-facing name for the vault. Defaults to "Vault".
     /// - Returns: The created `ServerAccount`.
     @discardableResult
-    func createVaultAccount(displayName: String = "Vault") throws -> ServerAccount {
+    func createVaultAccount(
+        displayName: String = String(
+            localized: "account.vault.defaultName",
+            defaultValue: "Vault",
+            comment: "Default name of a local-only account, shown in Settings under Accounts. The feature is called Vault Mode, which is itself translated.")
+    ) throws -> ServerAccount {
         let account = ServerAccount(vaultDisplayName: displayName)
         modelContext.insert(account)
 
@@ -236,11 +241,20 @@ final class AccountManager: Observable {
         // removing an account can't destroy work that exists nowhere else.
         try preserveUnsyncedTasks(of: account)
 
+        // A task moved into one of these lists from another account still owes that
+        // account a DELETE of its old copy. Rescued tasks above keep theirs; the rest
+        // go with the cascade, so leave the DELETE behind as a tombstone.
+        for list in account.taskLists {
+            TaskListHelpers.settlePendingMoves(beforeDeleting: list, in: modelContext)
+        }
+
         // Remove Keychain entry (idempotent — safe for Vault accounts too)
         try await keychainManager.delete(for: account.id)
 
+        try SyncImportCheckpoint.removeAccount(accountID, in: modelContext)
         modelContext.delete(account)
-        try modelContext.save()
+        try ReminderSchedulingJournal.saveTaskChanges(in: modelContext, needsRecovery: true)
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 
     /// Moves the account's never-synced tasks into a local Vault "Recovered Tasks"
@@ -290,11 +304,15 @@ final class AccountManager: Observable {
             modelContext.insert(vault)
         }
 
-        let recoveryName = String(localized: "Recovered Tasks")
-        if let existing = vault.taskLists.first(where: { $0.name == recoveryName }) {
+        // Identified by a stable sentinel, never by its (localized, user-renameable) name.
+        if let existing = vault.taskLists.first(where: { $0.isRecoveryList }) {
             return existing
         }
-        let list = TaskList(serverURL: "", name: recoveryName, colorHex: "#007AFF")
+        let recoveryName = String(
+            localized: "recovery.list.name", defaultValue: "Recovered Tasks",
+            comment: "Name of the local list holding tasks rescued from a removed account. Display only — the list is identified internally by a fixed marker.")
+        let list = TaskList(serverURL: TaskList.recoveryListServerURL,
+                            name: recoveryName, colorHex: "#007AFF")
         list.account = vault
         modelContext.insert(list)
         return list

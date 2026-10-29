@@ -108,15 +108,18 @@ struct KanbanCardView: View {
     private var cardAccessibilityLabel: String {
         var parts = [data.title]
         if data.priority != .none {
-            parts.append("\(data.priority.displayName) priority")
+            parts.append(String(localized: "kanban.card.a11y.priority", defaultValue: "\(data.priority.displayName) priority",
+                                 comment: "Kanban card accessibility label fragment appended after the task title, stating its priority; the interpolated value is the already-localized priority name (e.g. High, Medium, Low)."))
         }
         if let due = data.dueDate {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .full
-            parts.append("due \(formatter.localizedString(for: due, relativeTo: Date()))")
+            parts.append(String(localized: "kanban.card.a11y.due", defaultValue: "due \(formatter.localizedString(for: due, relativeTo: Date()))",
+                                 comment: "Kanban card accessibility label fragment appended mid-label (lowercase, not sentence-initial), stating the due date; the interpolated value is a system-localized relative date string, e.g. 'in 3 days'."))
         }
         if data.status == .completed {
-            parts.append("completed")
+            parts.append(String(localized: "kanban.card.a11y.completed", defaultValue: "completed",
+                                 comment: "Kanban card accessibility label fragment appended mid-label to mark the task complete; lowercase because it is appended mid-label, not sentence-initial."))
         }
         return parts.joined(separator: ", ")
     }

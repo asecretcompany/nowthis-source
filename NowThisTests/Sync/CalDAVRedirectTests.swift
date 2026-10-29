@@ -30,6 +30,16 @@ struct CalDAVRedirectTests {
         return request
     }
 
+    @Test("Redirect rebuilding preserves the clamped request allowance")
+    func preservesTimeoutAllowance() {
+        var original = originalRequest()
+        original.timeoutInterval = 0.25
+        var proposed = proposedRequest(url: "https://cloud.example.com/new/path/")
+        proposed.timeoutInterval = 60
+        let result = CalDAVClient.makeRedirectRequest(from: original, proposed: proposed)
+        #expect(result.timeoutInterval == 0.25)
+    }
+
     @Test("Redirected request preserves the no-cache policy")
     func preservesCachePolicy() {
         let result = CalDAVClient.makeRedirectRequest(

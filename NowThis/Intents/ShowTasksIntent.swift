@@ -23,7 +23,7 @@ struct ShowTasksIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let container = try SharedModelContainer.create()
         let result = try await performWithContainer(container)
-        return .result(dialog: "\(result.dialog)")
+        return .result(dialog: IntentDialog(result.dialog))
     }
 
     /// Testable entry point that accepts an injected container.
@@ -50,8 +50,19 @@ struct ShowTasksIntent: AppIntent {
         }
 
         guard !tasks.isEmpty else {
-            let scope = list?.name ?? "NowThis"
-            return IntentDialogResult(dialog: "You have no active tasks in \(scope).")
+            // Two complete sentences rather than one template with an "in %@" tail. The tail
+            // used to fall back to the product name — "You have no active tasks in NowThis." —
+            // which reads as though NowThis were one list among several.
+            if let name = list?.name {
+                return IntentDialogResult(dialog: LocalizedStringResource(
+                    "intent.dialog.showTasks.noneInList",
+                    defaultValue: "You have no active tasks in \(name).",
+                    comment: "Siri's spoken reply when the list the user named has no active tasks. The placeholder is that list's name."))
+            }
+            return IntentDialogResult(dialog: LocalizedStringResource(
+                "intent.dialog.showTasks.none",
+                defaultValue: "You have no active tasks.",
+                comment: "Siri's spoken reply when no list was named and nothing is active anywhere."))
         }
 
         let count = tasks.count
@@ -59,12 +70,18 @@ struct ShowTasksIntent: AppIntent {
         let displayed = tasks.prefix(maxDisplay)
         let titles = displayed.map { $0.title }.joined(separator: ", ")
 
-        var dialog: String
+        let dialog: LocalizedStringResource
         if count <= maxDisplay {
-            dialog = "You have \(count) active task\(count == 1 ? "" : "s"): \(titles)."
+            dialog = LocalizedStringResource(
+                "intent.dialog.showTasks",
+                defaultValue: "You have \(count) active tasks: \(titles).",
+                comment: "Siri's spoken reply listing every active task. First placeholder is the count, second is the titles joined with commas.")
         } else {
             let remaining = count - maxDisplay
-            dialog = "You have \(count) active tasks. Here are the first \(maxDisplay): \(titles), and \(remaining) more."
+            dialog = LocalizedStringResource(
+                "intent.dialog.showTasks.truncated",
+                defaultValue: "You have \(count) active tasks. Here are the first \(maxDisplay): \(titles), and \(remaining) more.",
+                comment: "Siri's spoken reply when there are too many tasks to read out. Placeholders in order: total count, how many are read out, the titles, how many are left.")
         }
 
         return IntentDialogResult(dialog: dialog)

@@ -21,10 +21,18 @@ enum DefaultDueDateRule: String, CaseIterable, Identifiable, Sendable {
     /// User-facing label for settings pickers.
     var displayName: String {
         switch self {
-        case .none: return "None"
-        case .today: return "Today"
-        case .tomorrow: return "Tomorrow"
-        case .nextWeek: return "Next Week"
+        case .none:
+            return String(localized: "defaultDueDate.none", defaultValue: "None",
+                          comment: "New-task default due date: do not set one. Answers 'Default due date: ?'.")
+        case .today:
+            return String(localized: "defaultDueDate.today", defaultValue: "Today",
+                          comment: "New-task default due date: today.")
+        case .tomorrow:
+            return String(localized: "defaultDueDate.tomorrow", defaultValue: "Tomorrow",
+                          comment: "New-task default due date: tomorrow.")
+        case .nextWeek:
+            return String(localized: "defaultDueDate.nextWeek", defaultValue: "Next Week",
+                          comment: "New-task default due date: one week from today.")
         }
     }
 

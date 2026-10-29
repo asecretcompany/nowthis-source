@@ -30,22 +30,37 @@ struct JournalEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                titleSection
-                contentSection
-                if let entry = existingEntry {
-                    LinkedTasksSection(entry: entry, onLinkTask: { showingTaskPicker = true })
-                }
+        // The entry can be deleted (by a sync, or with its account) while this
+        // editor is open; reading an invalidated model traps in SwiftData.
+        // Bindings rule out a value snapshot here, so leave instead.
+        if let entry = existingEntry, entry.modelContext == nil {
+            Color.clear
+                .onAppear { dismiss() }
+        } else {
+            editor
+        }
+    }
+
+    // No `NavigationStack` here. Two of this editor's three hosts push it — the journal list and a
+    // task's Linked Journals — onto a stack that already supplies one, and on iOS 18 the second
+    // container put a second navigation bar in the window, the state `-[UINavigationBar
+    // layoutSubviews]` aborts on. The one host that presents it, the journal list's new-entry
+    // sheet, supplies the container instead. Guarded by `NavigationContainerGuardTests`.
+    private var editor: some View {
+        Form {
+            titleSection
+            contentSection
+            if let entry = existingEntry {
+                LinkedTasksSection(entry: entry, onLinkTask: { showingTaskPicker = true })
             }
-            .navigationTitle(existingEntry == nil ? "New Entry" : "Edit Entry")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
-            .onAppear { loadExisting() }
-            .sheet(isPresented: $showingTaskPicker) {
-                if let entry = existingEntry {
-                    TaskPickerSheet(entry: entry)
-                }
+        }
+        .navigationTitle(existingEntry == nil ? "New Entry" : "Edit Entry")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbarContent }
+        .onAppear { loadExisting() }
+        .sheet(isPresented: $showingTaskPicker) {
+            if let entry = existingEntry {
+                TaskPickerSheet(entry: entry)
             }
         }
     }
@@ -82,7 +97,7 @@ struct JournalEditorView: View {
             if showPreview {
                 // Markdown rendered view
                 ScrollView {
-                    Text(LocalizedStringKey(content))
+                    Text(JournalMarkdown.render(content))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 8)
                 }
@@ -155,7 +170,10 @@ private struct LinkedTasksSection: View {
                         .lineLimit(1)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(task.title), \(task.status.displayName)")
+                .accessibilityLabel(String(
+                    localized: "journal.linkedTask.a11y",
+                    defaultValue: "\(task.title), \(task.status.displayName)",
+                    comment: "VoiceOver label for a task linked to a journal entry. First placeholder is the user-entered title, second is the already-localized status name. Both are data — what is translatable here is the separator and the order."))
             }
 
             Button(action: onLinkTask) {
@@ -180,10 +198,17 @@ private struct TaskPickerSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    /// Liveness at the array boundary. `ForEach` reads each task's `id` to diff
+    /// identity before any row body runs, and the picker can be open while a sync
+    /// or an account delete cascades tasks away on the main context.
+    private var liveTasks: [TaskItem] {
+        allTasks.filter { $0.modelContext != nil }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                ForEach(allTasks) { task in
+                ForEach(liveTasks) { task in
                     TaskPickerRow(
                         task: task,
                         isLinked: isLinked(task),

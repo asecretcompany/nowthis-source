@@ -377,7 +377,13 @@ private struct TestConnectionSection: View {
                 }
             }
             .disabled(isTesting)
-            .accessibilityLabel(isTesting ? "Testing connection" : "Test connection")
+            .accessibilityLabel(isTesting
+                                ? String(localized: "account.a11y.testingConnection",
+                                         defaultValue: "Testing connection",
+                                         comment: "VoiceOver label while the server connectivity check is running.")
+                                : String(localized: "account.a11y.testConnection",
+                                         defaultValue: "Test connection",
+                                         comment: "VoiceOver label for the button that checks server connectivity. Spoken, not shown — sentence case, unlike the visible 'Test Connection' button."))
             .accessibilityHint("Double tap to verify server connectivity")
 
             if let result = testResult {
@@ -434,7 +440,13 @@ private struct SaveSection: View {
                     .fill(hasChanges ? .blue : .gray.opacity(0.4))
             )
             .disabled(!hasChanges || isSaving)
-            .accessibilityLabel(isSaving ? "Saving changes" : "Save changes")
+            .accessibilityLabel(isSaving
+                                ? String(localized: "account.a11y.savingChanges",
+                                         defaultValue: "Saving changes",
+                                         comment: "VoiceOver label while the account edits are being written.")
+                                : String(localized: "account.a11y.saveChanges",
+                                         defaultValue: "Save changes",
+                                         comment: "VoiceOver label for the button that saves account edits. Spoken, not shown — sentence case, unlike the visible 'Save Changes' button."))
             .accessibilityHint(hasChanges ? "Double tap to save your account changes" : "Make changes to enable saving")
 
             if let error = saveError {
@@ -470,9 +482,9 @@ private struct SyncInfoSection: View {
             }
 
             HStack {
-                Text("Task Lists")
+                Text("Lists")
                 Spacer()
-                Text("\(account.taskLists.count)")
+                Text(account.taskLists.count, format: .number)
                     .foregroundStyle(.secondary)
             }
         }
@@ -498,8 +510,10 @@ private struct DangerZoneSection: View {
                     Spacer()
                 }
             }
-            .accessibilityLabel("Delete account")
-            .accessibilityHint("Double tap to permanently delete this account and all its data")
+            .accessibilityLabel(String(localized: "account.a11y.delete",
+                                       defaultValue: "Delete account",
+                                       comment: "VoiceOver label for the button that removes this account from the device. Spoken, not shown — sentence case, unlike the visible 'Delete Account' button."))
+            .accessibilityHint("Double tap to remove this account from this device")
             .confirmationDialog(
                 "Delete this account?",
                 isPresented: $showConfirmation,
@@ -510,7 +524,7 @@ private struct DangerZoneSection: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will permanently delete the account, all task lists, and all tasks. This action cannot be undone.")
+                Text("This removes the account and its lists from this device. Tasks that have never reached the server are moved to a Recovered Tasks list so you keep them; everything already synced stays on your server. This can't be undone here.")
             }
         } header: {
             Text("Danger Zone")

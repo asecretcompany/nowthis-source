@@ -1,19 +1,39 @@
 import SwiftUI
 import SwiftData
+import os
 
 /// Full-featured task editor with all VTODO fields.
 ///
 /// Decomposed into focused sub-views per section so that each `body` stays
 /// under 50 lines and the type-checker keeps up with the nesting.
 struct TaskDetailView: View {
+    private static let logger = Logger(subsystem: "com.nowthis", category: "task-detail")
 
     @Bindable var task: TaskItem
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     @EnvironmentObject private var syncScheduler: SyncScheduler
     @State private var showingAddSubtask = false
+    @State private var selectedPhoto: TaskPhotoSelection?
+    @StateObject private var photoEditor = TaskPhotoEditorState()
 
     var body: some View {
+        // An open detail view outlives the task it edits: deleting an account
+        // cascades ServerAccount → TaskList → TaskItem on the main context, and
+        // the next body evaluation would read an invalidated model and trap in
+        // SwiftData (`BackingData.swift:249`). Unlike a row, this view can't
+        // render from a value snapshot — its sections hold two-way `$task`
+        // bindings — so it checks liveness and leaves instead.
+        if task.modelContext == nil {
+            Color.clear
+                .onAppear { dismiss() }
+        } else {
+            editor
+        }
+    }
+
+    private var editor: some View {
         Form {
             TitleSection(task: task)
             StatusSection(task: task)
@@ -21,6 +41,9 @@ struct TaskDetailView: View {
             DetailsSection(task: task)
             TagsSection(task: task)
             NotesSection(task: task)
+            TaskPhotosSection(task: task, onSelectPhoto: { photoID in
+                selectedPhoto = TaskPhotoSelection(id: photoID)
+            }, editor: photoEditor)
             SubtasksSection(
                 task: task,
                 onAddSubtask: { showingAddSubtask = true }
@@ -38,21 +61,61 @@ struct TaskDetailView: View {
                 AddToCalendarButton(task: task)
             }
         }
-        .onChange(of: task.title) { _, _ in markDirty() }
-        .onChange(of: task.status) { _, _ in markDirty() }
+        .onChange(of: task.title) { _, _ in reminderEditDidChange() }
+        .onChange(of: task.status) { _, _ in reminderEditDidChange() }
+        // Present outside the Form: recycled section cells must not own the viewer.
+        .sheet(item: $selectedPhoto) { selection in
+            TaskPhotoViewer(task: task, photoID: selection.id)
+        }
+        .sheet(isPresented: $photoEditor.showingCamera, onDismiss: { photoEditor.cancelCamera() }) {
+            TaskPhotoCamera(onCapture: photoEditor.captured,
+                onCancel: photoEditor.cancelCamera, onFailure: photoEditor.cameraFailed)
+                .ignoresSafeArea()
+        }
+        .alert("Photo Error", isPresented: Binding(
+            get: { photoEditor.photoError != nil },
+            set: { if !$0 { photoEditor.photoError = nil } }), presenting: photoEditor.photoError) { _ in
+                Button("OK", role: .cancel) { photoEditor.photoError = nil }
+        } message: { error in
+            Text(error.message(locale: locale))
+        }
+        .onAppear { photoEditor.isActive = true }
+        .onDisappear { photoEditor.cancelImport() }
         .sheet(isPresented: $showingAddSubtask) {
             AddSubtaskSheet(parentTask: task)
         }
     }
 
-    private func markDirty() {
-        task.lastModifiedDate = Date()
-        task.isDirty = true
+    private func reminderEditDidChange() {
+        do {
+            try Self.saveReminderEdit(task, in: modelContext)
+        } catch {
+            Self.logger.error("Failed to save detail reminder edit: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    static func saveReminderEdit(
+        _ task: TaskItem,
+        in context: ModelContext,
+        requestReconcile: @MainActor (ModelContext) -> Void = ReminderScheduler.requestReconcile
+    ) throws {
+        guard task.modelContext != nil else { return }
+        try BackgroundRunBudget.protectingCurrent {
+            task.lastModifiedDate = Date()
+            task.isDirty = true
+            try ReminderSchedulingJournal.saveTaskChanges(in: context)
+        }
+        requestReconcile(context)
     }
 
     private func saveAndDismiss() {
-        markDirty()
-        try? modelContext.save()
+        do {
+            try Self.saveReminderEdit(task, in: modelContext)
+        } catch {
+            Self.logger.error("Failed to save task details: \(error.localizedDescription)")
+            return
+        }
         syncScheduler.syncAfterChange(modelContext: modelContext)
 
         // Auto-sync to calendar if enabled
@@ -89,30 +152,40 @@ private struct StatusSection: View {
             HStack {
                 Label("Status", systemImage: "circle.dashed")
                 Spacer()
-                Picker("", selection: $task.status) {
+                // An empty label literal extracted as the `""` key. The visible label is the
+                // `Label` beside it; VoiceOver gets it explicitly rather than by proximity.
+                Picker(selection: $task.status) {
                     ForEach(TaskStatus.allCases, id: \.self) { status in
-                        Text(status.displayLabel).tag(status)
+                        Text(status.displayName).tag(status)
                     }
+                } label: {
+                    EmptyView()
                 }
                 .pickerStyle(.menu)
+                .accessibilityLabel("Status")
             }
 
             HStack {
                 Label("Priority", systemImage: "flag")
                 Spacer()
-                Picker("", selection: $task.priority) {
+                Picker(selection: $task.priority) {
                     ForEach([TaskPriority.none, .low, .medium, .high], id: \.self) { pri in
                         Label(pri.displayName, systemImage: pri.icon).tag(pri)
                     }
+                } label: {
+                    EmptyView()
                 }
                 .pickerStyle(.menu)
+                .accessibilityLabel("Priority")
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Progress", systemImage: "chart.bar")
                     Spacer()
-                    Text("\(task.percentComplete)%")
+                    // `.percent` places the sign where the language puts it — French and the
+                    // Nordic languages use a space before it, and some scripts put it first.
+                    Text(Double(task.percentComplete) / 100, format: .percent.precision(.fractionLength(0)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -142,6 +215,9 @@ private struct StatusSection: View {
 // MARK: - Dates Section
 
 private struct DatesSection: View {
+    /// Every control in this section changes what the scheduler should have pending, so it
+    /// needs a context of its own to ask for a re-plan with.
+    @Environment(\.modelContext) private var modelContext
     @Bindable var task: TaskItem
     @State private var hasStartDate: Bool
     @State private var hasDueDate: Bool
@@ -195,12 +271,10 @@ private struct DatesSection: View {
                     task.dueDate = nil
                     task.isDueDateOnly = false
                     isAllDay = false
-                    if task.reminderOffset != nil {
-                        ReminderScheduler.cancelReminder(for: task.id)
-                    }
                     task.reminderOffset = nil
                     task.recurrenceRule = nil
                 }
+                ReminderScheduler.requestReconcile(modelContext: modelContext)
             }
 
             if hasDueDate {
@@ -231,9 +305,9 @@ private struct DatesSection: View {
                 )
                 .datePickerStyle(.compact)
                 .onChange(of: task.dueDate) { _, _ in
-                    if task.reminderOffset != nil {
-                        ReminderScheduler.scheduleReminder(for: task)
-                    }
+                    // Not gated on `reminderOffset`: moving a bare due date has to move its
+                    // overdue-badge notification too, or the badge fires at the old deadline.
+                    ReminderScheduler.requestReconcile(modelContext: modelContext)
                 }
 
                 Picker(selection: Binding(
@@ -242,13 +316,18 @@ private struct DatesSection: View {
                         task.reminderOffset = newValue
                         if newValue != nil {
                             ReminderScheduler.requestPermissionIfNeeded()
-                            ReminderScheduler.scheduleReminder(for: task)
-                        } else {
-                            ReminderScheduler.cancelReminder(for: task.id)
                         }
+                        // Either way the plan changes: clearing a reminder on a still-dated task
+                        // turns it into an overdue-badge notification rather than nothing.
+                        ReminderScheduler.requestReconcile(modelContext: modelContext)
                     }
                 )) {
-                    Text("None").tag(nil as Int?)
+                    // Already localized at the literal inside String(localized:), so the
+                    // verbatim initializer is the correct one here.
+                    Text(verbatim: String(
+                        localized: "reminder.none", defaultValue: "None",
+                        comment: "Reminder picker value meaning the task has no reminder. Answers 'Reminder: ?', so the word agrees with the target language's word for reminder — masculine in Spanish, French and Italian. Do not share this key with the priority, location or empty-quadrant 'None'."))
+                        .tag(nil as Int?)
                     Text("At due time").tag(0 as Int?)
                     Text("5 minutes before").tag(300 as Int?)
                     Text("15 minutes before").tag(900 as Int?)
@@ -265,10 +344,14 @@ private struct DatesSection: View {
                         get: { task.isNaggingReminder },
                         set: { newValue in
                             task.isNaggingReminder = newValue
-                            ReminderScheduler.scheduleReminder(for: task)
+                            ReminderScheduler.requestReconcile(modelContext: modelContext)
                         }
                     )) {
-                        Label("Repeat Hourly Until Done", systemImage: "bell.and.waves.left.and.right")
+                        Label(String(
+                            localized: "reminder.nag.toggle",
+                            defaultValue: "Repeat Hourly Until Completed",
+                            comment: "Toggle in the Reminder section that makes a reminder fire every hour until the task is completed. 'Completed' here is the task STATE — the same word as the Completed status, not the sheet-dismiss Done button. The recurrence control sits directly below this row, so the verb must not be the one used for a repeating task."),
+                              systemImage: "bell.and.waves.left.and.right")
                     }
                     .tint(.orange)
                 }
@@ -307,7 +390,7 @@ private struct DatesSection: View {
     private var recurrenceDisplayText: String {
         guard let rrule = task.recurrenceRule,
               let rule = RecurrenceRule.parse(rrule) else {
-            return "Never"
+            return String(localized: "taskDetail.recurrence.never", defaultValue: "Never", comment: "Value shown next to the Repeat row in Task Detail when the task has no recurrence rule set")
         }
         return rule.displayText
     }
@@ -329,9 +412,7 @@ private struct DatesSection: View {
                 minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
             )
         }
-        if task.reminderOffset != nil {
-            ReminderScheduler.scheduleReminder(for: task)
-        }
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
@@ -354,6 +435,29 @@ struct RecurrencePickerSheet: View {
         case custom = "Custom"
 
         var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .never:
+                return String(localized: "recurrence.preset.never", defaultValue: "Never",
+                              comment: "Recurrence preset: the task does not repeat. Answers 'Repeats: ?'.")
+            case .daily:
+                return String(localized: "recurrence.preset.daily", defaultValue: "Daily",
+                              comment: "Recurrence preset: repeats every day.")
+            case .weekly:
+                return String(localized: "recurrence.preset.weekly", defaultValue: "Weekly",
+                              comment: "Recurrence preset: repeats every week.")
+            case .monthly:
+                return String(localized: "recurrence.preset.monthly", defaultValue: "Monthly",
+                              comment: "Recurrence preset: repeats every month.")
+            case .yearly:
+                return String(localized: "recurrence.preset.yearly", defaultValue: "Yearly",
+                              comment: "Recurrence preset: repeats every year.")
+            case .custom:
+                return String(localized: "recurrence.preset.custom", defaultValue: "Custom",
+                              comment: "Recurrence preset: the user defines their own interval and weekdays.")
+            }
+        }
     }
 
     init(recurrenceRule: Binding<String?>) {
@@ -387,7 +491,7 @@ struct RecurrencePickerSheet: View {
                             selectedPreset = preset
                         } label: {
                             HStack {
-                                Text(preset.rawValue)
+                                Text(preset.displayName)
                                     .foregroundStyle(.primary)
                                 Spacer()
                                 if selectedPreset == preset {
@@ -407,7 +511,9 @@ struct RecurrencePickerSheet: View {
                             }
                         }
 
-                        Stepper("Every \(customInterval) \(intervalUnit)", value: $customInterval, in: 1...99)
+                        Stepper(value: $customInterval, in: 1...99) {
+                            Text(verbatim: intervalLabel)
+                        }
                     }
 
                     if customFrequency == .weekly {
@@ -421,7 +527,7 @@ struct RecurrencePickerSheet: View {
                                             customByDay.insert(day)
                                         }
                                     } label: {
-                                        Text(day.shortName)
+                                        Text(verbatim: day.shortName())
                                             .font(.caption)
                                             .fontWeight(.medium)
                                             .frame(maxWidth: .infinity)
@@ -461,12 +567,30 @@ struct RecurrencePickerSheet: View {
         .presentationDetents([.medium])
     }
 
-    private var intervalUnit: String {
+    /// The stepper's whole label, not a unit spliced into a shared template.
+    ///
+    /// `"Every %lld %@"` cannot be translated. German inflects the phrase with the numeral —
+    /// *jeden Tag* for one, *alle 2 Tage* for more — so the noun and the number are not
+    /// separable, and a translator handed the bare unit `"day"` has no sentence to put it in.
+    /// Four complete templates, each plural-varied in the catalog.
+    private var intervalLabel: String {
         switch customFrequency {
-        case .daily: return customInterval == 1 ? "day" : "days"
-        case .weekly: return customInterval == 1 ? "week" : "weeks"
-        case .monthly: return customInterval == 1 ? "month" : "months"
-        case .yearly: return customInterval == 1 ? "year" : "years"
+        case .daily:
+            return String(localized: "recurrence.custom.interval.daily",
+                          defaultValue: "Every \(customInterval) days",
+                          comment: "Label on the stepper that sets how often a task repeats, for a daily rule. The placeholder is the interval in days.")
+        case .weekly:
+            return String(localized: "recurrence.custom.interval.weekly",
+                          defaultValue: "Every \(customInterval) weeks",
+                          comment: "Label on the stepper that sets how often a task repeats, for a weekly rule. The placeholder is the interval in weeks.")
+        case .monthly:
+            return String(localized: "recurrence.custom.interval.monthly",
+                          defaultValue: "Every \(customInterval) months",
+                          comment: "Label on the stepper that sets how often a task repeats, for a monthly rule. The placeholder is the interval in months.")
+        case .yearly:
+            return String(localized: "recurrence.custom.interval.yearly",
+                          defaultValue: "Every \(customInterval) years",
+                          comment: "Label on the stepper that sets how often a task repeats, for a yearly rule. The placeholder is the interval in years.")
         }
     }
 
@@ -499,10 +623,21 @@ struct RecurrencePickerSheet: View {
 
 private struct DetailsSection: View {
     @Bindable var task: TaskItem
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var syncScheduler: SyncScheduler
     @State private var showingLocationPicker = false
+    @State private var moveRequest: MoveToListRequest?
+
+    /// Spoken stand-in when the task has no location. Deliberately the same key the
+    /// visible label uses, so VoiceOver and the screen say the same word.
+    private static let noLocationSpoken = String(
+        localized: "location.none", defaultValue: "None",
+        comment: "Shown in place of a location when the task has none, and spoken as the second half of the row's VoiceOver label. Answers 'Location: ?', so the word agrees with the target language's word for location. Do not share this key with the priority, reminder or empty-quadrant 'None'.")
 
     var body: some View {
         Section("Details") {
+            listRow
+
             Button {
                 showingLocationPicker = true
             } label: {
@@ -514,20 +649,28 @@ private struct DetailsSection: View {
                             Text(name)
                                 .font(.subheadline)
                             if let radius = task.geofenceRadius {
-                                Text("\(Int(radius))m radius")
+                                Text(verbatim: String(
+                                    localized: "location.geofence.radiusValue",
+                                    defaultValue: "\(Measurement(value: radius, unit: UnitLength.meters).formatted(.measurement(width: .narrow))) radius",
+                                    comment: "Caption under the geofence slider showing how large the trigger area is. The placeholder is an already-formatted distance with its unit, e.g. \"50 m\"."))
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
                         }
                         .foregroundStyle(.secondary)
                     } else {
-                        Text("None")
+                        Text(verbatim: String(
+                            localized: "location.none", defaultValue: "None",
+                            comment: "Shown in place of a location when the task has none. Answers 'Location: ?', so the word agrees with the target language's word for location. Do not share this key with the priority, reminder or empty-quadrant 'None'."))
                             .foregroundStyle(.tertiary)
                     }
                 }
             }
             .foregroundStyle(.primary)
-            .accessibilityLabel("Location, \(task.locationName ?? "not set")")
+            // The `%@` is spoken, so its fallback has to be localized too. A bare "not set"
+            // here made VoiceOver say "Ort, not set" beside a screen correctly reading
+            // "Keiner" — the outer key translates, the argument filling it did not.
+            .accessibilityLabel("Location, \(task.locationName ?? Self.noLocationSpoken)")
             .sheet(isPresented: $showingLocationPicker) {
                 LocationPickerView(task: task)
             }
@@ -543,6 +686,38 @@ private struct DetailsSection: View {
                 .foregroundStyle(.secondary)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
+            }
+        }
+    }
+}
+
+extension DetailsSection {
+    /// Shows which list the task is in, and moves it to another.
+    private var listRow: some View {
+        Button {
+            moveRequest = MoveToListRequest(task: task)
+        } label: {
+            HStack {
+                Label("List", systemImage: "list.bullet")
+                Spacer()
+                if let list = task.taskList {
+                    Circle()
+                        .fill(Color(hex: list.colorHex) ?? .blue)
+                        .frame(width: 10, height: 10)
+                        .accessibilityHidden(true)
+                    Text(verbatim: list.name)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+        .disabled(!MoveDestinations.canMove(task))
+        // Reads "List, Work"; the button trait says it can be changed.
+        .accessibilityElement(children: .combine)
+        .sheet(item: $moveRequest) { request in
+            MoveToListSheet(request: request) { listID in
+                guard MoveDestinations.perform(task, toListID: listID, in: modelContext) else { return }
+                syncScheduler.syncAfterChange(modelContext: modelContext)
             }
         }
     }
@@ -586,7 +761,10 @@ private struct SubtasksSection: View {
                 Text("Subtasks")
                 Spacer()
                 if !activeSubtasks.isEmpty {
-                    Text("\(completedCount)/\(activeSubtasks.count)")
+                    // Two numbers and a solidus — no words, so no catalog entry. `verbatim`
+                    // keeps it out of the catalog while `formatted()` still applies the locale's
+                    // digits and grouping.
+                    Text(verbatim: "\(completedCount.formatted())/\(activeSubtasks.count.formatted())")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -595,7 +773,13 @@ private struct SubtasksSection: View {
     }
 
     private var activeSubtasks: [TaskItem] {
-        task.subtasks.filter { !$0.isDeletedLocally }
+        // The traversal itself has to be safe: the section reads its children
+        // before anything checks the parent's own liveness, and reading
+        // `subtasks` on a task an account delete has cascaded away traps in
+        // SwiftData rather than returning nothing. Same guard as
+        // `TaskListHelpers.orderedSubtasksIfLive`, without imposing its sort.
+        guard task.modelContext != nil else { return [] }
+        return task.subtasks.filter { $0.modelContext != nil && !$0.isDeletedLocally }
     }
 
     private var completedCount: Int {
@@ -619,6 +803,11 @@ private struct SubtaskRow: View {
                     )
             }
             .buttonStyle(.plain)
+            // Same two literals the row's checkbox uses, so the two checkboxes
+            // read as one control. An all-literal ternary binds the
+            // LocalizedStringKey overload; a mixed one would ship verbatim.
+            .accessibilityLabel(subtask.status == .completed ? "Completed" : "Not completed")
+            .accessibilityAddTraits(.isButton)
 
             Text(subtask.title)
                 .strikethrough(subtask.status == .completed)
@@ -643,7 +832,10 @@ private struct SubtaskRow: View {
             subtask.isDirty = true
         }
         HapticManager.checkbox()
-        try? modelContext.save()
+        do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext) }
+        catch { return }
+        if subtask.status == .completed { ReminderScheduler.cancelReminder(for: subtask.id) }
+        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
@@ -696,24 +888,9 @@ private struct AddSubtaskSheet: View {
         subtask.isDirty = true
 
         modelContext.insert(subtask)
-        try? modelContext.save()
+        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
         HapticManager.success()
         dismiss()
-    }
-}
-
-// MARK: - TaskStatus Extension
-
-// MARK: - TaskStatus Extension
-
-extension TaskStatus {
-    var displayLabel: String {
-        switch self {
-        case .needsAction: return "To Do"
-        case .inProcess: return "In Progress"
-        case .completed: return "Done"
-        case .cancelled: return "Cancelled"
-        }
     }
 }
 
@@ -764,6 +941,7 @@ private struct TagsSection: View {
                         TagPill(tag: tag) {
                             withAnimation {
                                 task.tags.removeAll { $0.id == tag.id }
+                                TaskListHelpers.markTagsChanged(on: task)
                             }
                         }
                     }
@@ -800,6 +978,15 @@ private struct TagPill: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            // Named, not just "Remove": a task with five tags gives VoiceOver
+            // five identical buttons otherwise. Localized at the literal via
+            // `String(localized:)` because the tag name is user data — handing
+            // the composed String to `.accessibilityLabel` would bind the
+            // disfavored StringProtocol overload and never reach the catalog.
+            .accessibilityLabel(String(
+                localized: "taskDetail.tag.a11y.remove",
+                defaultValue: "Remove tag \(tag.name)",
+                comment: "VoiceOver label for the small x button on a tag pill in Task Detail, which takes that tag off the task. The placeholder is the user's own tag name."))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -898,7 +1085,10 @@ private struct TagPickerSheet: View {
                 }
 
                 Section("Create New Tag") {
-                    TextField("Tag name", text: $newTagName)
+                    TextField(String(localized: "tag.field.name",
+                                     defaultValue: "Tag name",
+                                     comment: "Placeholder in the text field where a new tag's name is typed. One key for both places a tag can be created — the task detail sheet and the sidebar."),
+                              text: $newTagName)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 12) {
                         ForEach(colors, id: \.self) { hex in
                             Button {
@@ -944,6 +1134,8 @@ private struct TagPickerSheet: View {
         } else {
             task.tags.append(tag)
         }
+        // Or the change neither reaches the server nor survives the next pull.
+        TaskListHelpers.markTagsChanged(on: task)
     }
 
     private func tagColor(_ tag: Tag) -> Color {
@@ -959,6 +1151,7 @@ private struct TagPickerSheet: View {
         let tag = Tag(name: trimmed, color: newTagColor)
         modelContext.insert(tag)
         task.tags.append(tag)
+        TaskListHelpers.markTagsChanged(on: task)
         newTagName = ""
         HapticManager.success()
     }

@@ -10,11 +10,21 @@ import SwiftData
 /// - Q4 (Eliminate): Lower priority + due later or no due date
 struct EisenhowerMatrixView: View {
 
-    static let activeTasksPredicate = #Predicate<TaskItem> { !$0.isDeletedLocally }
-    @Query(filter: Self.activeTasksPredicate) private var allTasks: [TaskItem]
+    static let activeTasksPredicate = #Predicate<TaskItem> { !$0.isDeletedLocally && $0.parentTask == nil }
+    @State private var allTasks: [TaskItem] = []
     @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var syncScheduler: SyncScheduler
-    @State private var selectedTask: TaskItem?
+    @Environment(\.syncCommands) private var syncCommands
+    @State private var selectedTask: SelectedTask?
+
+    /// The way out when this screen is the hidden-destination sheet rather than a tab.
+    ///
+    /// The sheet cannot supply it. This view opens on its own `NavigationStack`, so a `.toolbar`
+    /// applied at the presentation site has no bar of this view's to land on — and wrapping it in
+    /// a second container to give it one is exactly the nesting `-[UINavigationBar layoutSubviews]`
+    /// aborts on. Gated on `isPresented`, so the tab that hosts this same view keeps no Done
+    /// button. See `NavigationContainerGuardTests`.
+    @Environment(\.isPresented) private var isPresented
+    @Environment(\.dismiss) private var dismiss
 
     private let urgencyThresholdDays = 3
 
@@ -22,8 +32,11 @@ struct EisenhowerMatrixView: View {
         NavigationStack {
             GeometryReader { geo in
                 let quadrants = classifyTasks()
-                let cellWidth = (geo.size.width - 36) / 2  // 12 padding each side + 12 gap
-                let cellHeight = (geo.size.height - 36) / 2
+                // Clamp to 0: during transient layout passes geo.size can be < 36,
+                // which would make the cell dimensions negative and trip SwiftUI's
+                // "Invalid frame dimension (negative or non-finite)" runtime warning.
+                let cellWidth = max(0, (geo.size.width - 36) / 2)  // 12 padding each side + 12 gap
+                let cellHeight = max(0, (geo.size.height - 36) / 2)
 
                 VStack(spacing: 12) {
                     // Row labels
@@ -33,14 +46,14 @@ struct EisenhowerMatrixView: View {
                             tasks: quadrants.doFirst,
                             width: cellWidth,
                             height: cellHeight,
-                            onSelect: { selectedTask = $0 }
+                            onSelect: { selectedTask = SelectedTask($0) }
                         )
                         QuadrantCell(
                             quadrant: .schedule,
                             tasks: quadrants.schedule,
                             width: cellWidth,
                             height: cellHeight,
-                            onSelect: { selectedTask = $0 }
+                            onSelect: { selectedTask = SelectedTask($0) }
                         )
                     }
                     HStack(spacing: 12) {
@@ -49,28 +62,36 @@ struct EisenhowerMatrixView: View {
                             tasks: quadrants.delegate,
                             width: cellWidth,
                             height: cellHeight,
-                            onSelect: { selectedTask = $0 }
+                            onSelect: { selectedTask = SelectedTask($0) }
                         )
                         QuadrantCell(
                             quadrant: .eliminate,
                             tasks: quadrants.eliminate,
                             width: cellWidth,
                             height: cellHeight,
-                            onSelect: { selectedTask = $0 }
+                            onSelect: { selectedTask = SelectedTask($0) }
                         )
                     }
                 }
                 .padding(12)
             }
+            .background(InboundQueryReader(descriptor: FetchDescriptor(predicate: Self.activeTasksPredicate)) { allTasks = $0 })
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Matrix")
             .navigationBarTitleDisplayMode(.inline)
-            .refreshable {
-                await syncScheduler.syncNow(modelContext: modelContext)
+            .toolbar {
+                if isPresented {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
             }
-            .sheet(item: $selectedTask) { task in
+            .refreshable {
+                await syncCommands.syncNow(modelContext)
+            }
+            .sheet(item: $selectedTask) { selection in
                 NavigationStack {
-                    TaskDetailView(task: task)
+                    TaskDetailView(task: selection.task)
                 }
             }
         }
@@ -79,17 +100,24 @@ struct EisenhowerMatrixView: View {
     // MARK: - Classification
 
     private struct ClassifiedTasks {
-        var doFirst: [TaskItem] = []
-        var schedule: [TaskItem] = []
-        var delegate: [TaskItem] = []
-        var eliminate: [TaskItem] = []
+        var doFirst: [TaskGlanceRow] = []
+        var schedule: [TaskGlanceRow] = []
+        var delegate: [TaskGlanceRow] = []
+        var eliminate: [TaskGlanceRow] = []
     }
 
     private func classifyTasks() -> ClassifiedTasks {
-        let activeTasks = allTasks.filter { task in
-            task.parentTask == nil
-                && task.status != .completed
-                && task.status != .cancelled
+        // Snapshot first, classify second. Classification reads `priority`,
+        // `status` and `dueDate`, so an account delete that cascaded a task away
+        // would trap here, before any quadrant row ever ran.
+        let activeTasks = TaskListHelpers.liveTasks(allTasks, in: modelContext,
+            matching: FetchDescriptor(predicate: Self.activeTasksPredicate)).glanceRows().filter { row in
+            row.data.status != .completed
+                && row.data.status != .cancelled
+                // `parentTask` is a relationship rather than a snapshotted field.
+                // Reading it is safe here and only here: `glanceRows()` verified
+                // this task's liveness moments ago, in the same synchronous pass.
+                && row.task.parentTask == nil
         }
 
         let now = Date()
@@ -99,29 +127,32 @@ struct EisenhowerMatrixView: View {
 
         var result = ClassifiedTasks()
 
-        for task in activeTasks {
-            let isImportant = task.priority == .high
+        for row in activeTasks {
+            let isImportant = row.data.priority == .high
             let isUrgent: Bool = {
-                guard let due = task.dueDate else { return false }
+                guard let due = row.data.dueDate else { return false }
                 return due <= threshold
-                    || DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly)
+                    || DueDateHelper.isOverdue(dueDate: due, isDateOnly: row.data.isDueDateOnly)
             }()
 
             switch (isImportant, isUrgent) {
-            case (true, true):   result.doFirst.append(task)
-            case (true, false):  result.schedule.append(task)
-            case (false, true):  result.delegate.append(task)
-            case (false, false): result.eliminate.append(task)
+            case (true, true):   result.doFirst.append(row)
+            case (true, false):  result.schedule.append(row)
+            case (false, true):  result.delegate.append(row)
+            case (false, false): result.eliminate.append(row)
             }
         }
 
         // Sort each quadrant by due date (soonest first), then by title
-        let sortByDue: (TaskItem, TaskItem) -> Bool = { a, b in
-            switch (a.dueDate, b.dueDate) {
+        let sortByDue: (TaskGlanceRow, TaskGlanceRow) -> Bool = { a, b in
+            switch (a.data.dueDate, b.data.dueDate) {
             case let (d1?, d2?): return d1 < d2
             case (_?, nil): return true
             case (nil, _?): return false
-            case (nil, nil): return a.title < b.title
+            // `<` on String is Unicode code-point order: "Ärzte" sorts after "Zoo" in German,
+            // and ñ, é and ij are all misplaced in the other four languages.
+            case (nil, nil):
+                return a.data.title.localizedStandardCompare(b.data.title) == .orderedAscending
             }
         }
 
@@ -141,10 +172,18 @@ private enum Quadrant {
 
     var title: String {
         switch self {
-        case .doFirst:  return "Do First"
-        case .schedule: return "Schedule"
-        case .delegate: return "Delegate"
-        case .eliminate: return "Eliminate"
+        case .doFirst:
+            return String(localized: "matrix.quadrant.doFirst.title", defaultValue: "Do First",
+                          comment: "Eisenhower Matrix quadrant header (urgent & important) rendered in a tiny .caption cell header — very tight width budget.")
+        case .schedule:
+            return String(localized: "matrix.quadrant.schedule.title", defaultValue: "Schedule",
+                          comment: "Eisenhower Matrix quadrant header (important, not urgent) rendered in a tiny .caption cell header — very tight width budget.")
+        case .delegate:
+            return String(localized: "matrix.quadrant.delegate.title", defaultValue: "Delegate",
+                          comment: "Eisenhower Matrix quadrant header (urgent, not important) rendered in a tiny .caption cell header — very tight width budget.")
+        case .eliminate:
+            return String(localized: "matrix.quadrant.eliminate.title", defaultValue: "Eliminate",
+                          comment: "Eisenhower Matrix quadrant header (neither urgent nor important) rendered in a tiny .caption cell header — very tight width budget.")
         }
     }
 
@@ -168,10 +207,18 @@ private enum Quadrant {
 
     var subtitle: String {
         switch self {
-        case .doFirst:  return "Urgent & Important"
-        case .schedule: return "Important, Not Urgent"
-        case .delegate: return "Urgent, Not Important"
-        case .eliminate: return "Neither"
+        case .doFirst:
+            return String(localized: "matrix.quadrant.doFirst.subtitle", defaultValue: "Urgent & Important",
+                          comment: "Eisenhower Matrix quadrant subtitle explaining the doFirst quadrant, rendered at .system(size: 9) — extremely tight width budget.")
+        case .schedule:
+            return String(localized: "matrix.quadrant.schedule.subtitle", defaultValue: "Important, Not Urgent",
+                          comment: "Eisenhower Matrix quadrant subtitle explaining the schedule quadrant, rendered at .system(size: 9) — extremely tight width budget.")
+        case .delegate:
+            return String(localized: "matrix.quadrant.delegate.subtitle", defaultValue: "Urgent, Not Important",
+                          comment: "Eisenhower Matrix quadrant subtitle explaining the delegate quadrant, rendered at .system(size: 9) — extremely tight width budget.")
+        case .eliminate:
+            return String(localized: "matrix.quadrant.eliminate.subtitle", defaultValue: "Neither",
+                          comment: "Eisenhower Matrix quadrant subtitle for the eliminate quadrant, rendered at .system(size: 9) — extremely tight width budget. Means neither urgent nor important; the word alone is ambiguous out of context.")
         }
     }
 }
@@ -180,7 +227,7 @@ private enum Quadrant {
 
 private struct QuadrantCell: View {
     let quadrant: Quadrant
-    let tasks: [TaskItem]
+    let tasks: [TaskGlanceRow]
     let width: CGFloat
     let height: CGFloat
     let onSelect: (TaskItem) -> Void
@@ -196,7 +243,7 @@ private struct QuadrantCell: View {
                     .fontWeight(.bold)
                     .foregroundStyle(quadrant.tintColor)
                 Spacer()
-                Text("\(tasks.count)")
+                Text(tasks.count, format: .number)
                     .font(.caption2)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
@@ -222,7 +269,9 @@ private struct QuadrantCell: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Text("None")
+                    Text(verbatim: String(
+                        localized: "matrix.quadrant.empty", defaultValue: "None",
+                        comment: "Shown inside an Eisenhower Matrix quadrant that holds no tasks. It means 'no tasks', not 'no priority' — the quadrant cell is tiny, so keep it to one short word. Do not share this key with the priority, reminder or location 'None'."))
                         .font(.caption)
                         .foregroundStyle(.quaternary)
                     Spacer()
@@ -231,9 +280,9 @@ private struct QuadrantCell: View {
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(tasks) { task in
-                            MatrixTaskRow(task: task, tintColor: quadrant.tintColor) {
-                                onSelect(task)
+                        ForEach(tasks) { row in
+                            MatrixTaskRow(data: row.data, tintColor: quadrant.tintColor) {
+                                onSelect(row.task)
                             }
                         }
                     }
@@ -250,14 +299,17 @@ private struct QuadrantCell: View {
                 .strokeBorder(quadrant.tintColor.opacity(0.15), lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(quadrant.title), \(tasks.count) task\(tasks.count == 1 ? "" : "s")")
+        .accessibilityLabel(String(
+            localized: "list.a11y.taskCount",
+            defaultValue: "\(quadrant.title), \(tasks.count) tasks",
+            comment: "VoiceOver label for a row that names a collection and how many tasks are in it. First placeholder is the name (a list, tag, smart list or board quadrant), second is the count."))
     }
 }
 
 // MARK: - Matrix Task Row
 
 private struct MatrixTaskRow: View {
-    let task: TaskItem
+    let data: TaskGlanceData
     let tintColor: Color
     let onTap: () -> Void
 
@@ -268,18 +320,18 @@ private struct MatrixTaskRow: View {
                     .fill(tintColor.opacity(0.6))
                     .frame(width: 5, height: 5)
 
-                Text(task.title)
+                Text(verbatim: data.title)
                     .font(.caption)
                     .lineLimit(1)
                     .foregroundStyle(.primary)
 
                 Spacer(minLength: 2)
 
-                if let due = task.dueDate {
+                if let due = data.dueDate {
                     Text(due, format: .dateTime.month(.abbreviated).day())
                         .font(.system(size: 9))
                         .foregroundStyle(
-                            DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly)
+                            DueDateHelper.isOverdue(dueDate: due, isDateOnly: data.isDueDateOnly)
                                 ? .red : .secondary
                         )
                 }
@@ -290,7 +342,7 @@ private struct MatrixTaskRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(task.title)
+        .accessibilityLabel(Text(verbatim: data.title))
         .accessibilityHint("Double tap to open task details")
     }
 }
