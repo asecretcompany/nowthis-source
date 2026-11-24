@@ -63,23 +63,29 @@ actor SyncEngine {
     /// `BackgroundSyncManager` to check if a sync is in progress.
     var isSyncInProgress: Bool { isRunning }
 
+    private let inboundSave: @MainActor @Sendable (ModelContext) throws -> Void
     private let calDAVClient: CalDAVClient
     private let taskPhotoSync: TaskPhotoSync
     private let taskPhotoCleanup: TaskPhotoCleanupRunner
     private let taskPhotoVaultMoves: TaskPhotoVaultMoves
     private let taskPhotoCache: TaskPhotoCache
+    private let now: @Sendable () -> Date
     private let logger = Logger(subsystem: "com.nowthis", category: "sync-engine")
 
     init(calDAVClient: CalDAVClient = CalDAVClient(),
          taskPhotoSync: TaskPhotoSync = TaskPhotoSync(),
          taskPhotoCleanup: TaskPhotoCleanupRunner = TaskPhotoCleanupRunner(),
          taskPhotoVaultMoves: TaskPhotoVaultMoves = TaskPhotoVaultMoves(),
-         taskPhotoCache: TaskPhotoCache = TaskPhotoOriginals.cache) {
+         taskPhotoCache: TaskPhotoCache = TaskPhotoOriginals.cache,
+         now: @escaping @Sendable () -> Date = { Date() },
+         inboundSave: @escaping @MainActor @Sendable (ModelContext) throws -> Void = { try $0.save() }) {
+        self.inboundSave = inboundSave
         self.calDAVClient = calDAVClient
         self.taskPhotoSync = taskPhotoSync
         self.taskPhotoCleanup = taskPhotoCleanup
         self.taskPhotoVaultMoves = taskPhotoVaultMoves
         self.taskPhotoCache = taskPhotoCache
+        self.now = now
     }
 
     private(set) var lastOutcome = SyncOutcome()
@@ -89,15 +95,49 @@ actor SyncEngine {
     private var importedIDs: Set<String> = []
     private var updatedIDs: Set<String> = []
     private var deletedIDs: Set<String> = []
-    private var visiblyChangedLists: Set<String> = []
     private var pendingScopeListIDs: Set<String> = []
     private var pendingScopeAccountIDs: Set<String> = []
     private var credentialGate = AuthFailureGate()
-    private var deferredUntil: [String: Date] = [:]
+    private let serverDeferrals = ServerDeferrals()
     private var pendingSweepFailure: (any Error)?
 
-    private func authenticationKey(accountID: String, baseURL: String, username: String) -> String {
-        [accountID, baseURL, username].map { "\($0.utf8.count):\($0)" }.joined()
+    private struct OtherAccountSyncFailure: Error {
+        let underlying: any Error
+    }
+
+    /// URLSession records a wait on its delegate queue before body handling can fail.
+    private final class ServerDeferrals: @unchecked Sendable {
+        private let lock = NSLock()
+        private var waits: [String: RetryDeferredError] = [:]
+
+        func retain(_ deferral: RetryDeferredError, for accountID: String) {
+            lock.withLock {
+                if let existing = waits[accountID], existing.deadline > deferral.deadline { return }
+                waits[accountID] = deferral
+            }
+        }
+
+        func check(accountID: String, now: Date) throws {
+            try lock.withLock {
+                guard let deferral = waits[accountID] else { return }
+                if deferral.deadline > now { throw deferral }
+                waits.removeValue(forKey: accountID)
+            }
+        }
+    }
+
+    private func captureServerDeferrals<Value>(accountID: String,
+        _ operation: () async throws -> Value) async rethrows -> Value {
+        let admission = ServerRetryAdmission(accountID: accountID,
+            checkDeadline: { [serverDeferrals, now] in try serverDeferrals.check(accountID: $0, now: now()) },
+            recordDeadline: { [serverDeferrals] in serverDeferrals.retain($1, for: $0) })
+        return try await ServerRetryAdmission.$current.withValue(admission) {
+            try await operation()
+        }
+    }
+
+    private func checkServerAdmission(accountID: String) throws {
+        try serverDeferrals.check(accountID: accountID, now: now())
     }
 
     func changes() -> AsyncStream<SyncChange> {
@@ -127,12 +167,11 @@ actor SyncEngine {
     private func beginOutcome() {
         lastOutcome = SyncOutcome()
         importedIDs.removeAll(); updatedIDs.removeAll(); deletedIDs.removeAll()
-        visiblyChangedLists.removeAll()
         pendingScopeListIDs.removeAll(); pendingScopeAccountIDs.removeAll()
     }
 
     /// Capture IDs before saving; publish only after the store accepts the transaction.
-    private func saveAndPublish(_ context: ModelContext, publish: Bool = true) throws {
+    private func saveAndPublish(_ context: ModelContext) throws {
         let section = try BackgroundRunBudget.current?.beginCriticalSection()
         defer { section?.end() }
         try Task.checkCancellation()
@@ -142,8 +181,6 @@ actor SyncEngine {
         let deletions = context.deletedModelsArray.compactMap { $0 as? TaskItem }
         let lists = (context.insertedModelsArray + context.deletedModelsArray)
             .compactMap { $0 as? TaskList }
-            + context.changedModelsArray.compactMap { $0 as? TaskList }
-                .filter { visiblyChangedLists.contains($0.id) }
         let insertedIDs = Set(inserts.map(\.id))
         let changedIDs = Set(updates.map(\.id))
         let changed = insertedIDs.union(changedIDs)
@@ -163,10 +200,11 @@ actor SyncEngine {
         }
         let interval = PerformanceTrace.begin("ImportSave", count: tasks.count)
         defer { PerformanceTrace.end("ImportSave", interval) }
+        try CalendarMirrorState.enqueueTaskChanges(in: context)
         ReminderSchedulingJournal.enqueueTaskChanges(in: context)
         try context.save()
-        guard publish else { return }
-        visiblyChangedLists.subtract(lists.map(\.id))
+        CalendarMirrorState.publishCommit(in: context.container,
+                                          includesTaskChanges: !changed.isEmpty || !removed.isEmpty || !lists.isEmpty)
         guard !changed.isEmpty || !removed.isEmpty || !lists.isEmpty else { return }
         pendingScopeListIDs.removeAll(); pendingScopeAccountIDs.removeAll()
         importedIDs.formUnion(insertedIDs)
@@ -200,7 +238,13 @@ actor SyncEngine {
 
     private func recordOperationFailure(_ error: Error) throws {
         if Task.isCancelled || error is CancellationError { throw CancellationError() }
-        if let failure = SyncFailure.from(error) { lastOutcome.failures.append(failure) }
+        if error is RetryDeferredError || error is BackgroundBudgetExhausted { throw error }
+        if error is AccountCredentialDeferral {
+            lastOutcome.status = .partial
+            return
+        }
+        let underlying = (error as? OtherAccountSyncFailure)?.underlying ?? error
+        if let failure = SyncFailure.from(underlying) { lastOutcome.failures.append(failure) }
         lastOutcome.status = .partial
         if let dav = error as? CalDAVError {
             switch dav {
@@ -211,14 +255,20 @@ actor SyncEngine {
     }
 
     /// A run's registered models can outlive account deletion during an await.
-    /// Check the saved store before reading or saving those retained models.
-    private func requireLiveAccount(_ accountID: String, container: ModelContainer) throws {
+    /// List operations also pin the account settings used when discovery began.
+    private func requireLiveAccount(_ accountID: String, container: ModelContainer,
+                                    matching scope: ListAccountScope? = nil) throws {
         let section = try BackgroundRunBudget.current?.beginCriticalSection()
         defer { section?.end() }
         try Task.checkCancellation()
         let context = ModelContext(container)
         let predicate = #Predicate<ServerAccount> { $0.id == accountID }
-        guard try context.fetchCount(FetchDescriptor(predicate: predicate)) == 1 else {
+        let descriptor = FetchDescriptor(predicate: predicate)
+        if let scope {
+            guard let account = try context.fetch(descriptor).first, scope.matches(account) else {
+                throw CancellationError()
+            }
+        } else if try context.fetchCount(descriptor) != 1 {
             throw CancellationError()
         }
     }
@@ -278,6 +328,16 @@ actor SyncEngine {
         isRunning = true
         beginOutcome()
         defer { isRunning = false; for observer in progressObservers.values { observer.yield(nil) } }
+        return try await captureServerDeferrals(accountID: accountID) {
+            try await performFullSyncRun(accountID: accountID, serverBaseURL: serverBaseURL,
+                credentials: credentials, modelContainer: modelContainer,
+                syncWindowMonths: syncWindowMonths, reconcileNotifications: reconcileNotifications)
+        }
+    }
+
+    private func performFullSyncRun(accountID: String, serverBaseURL: String,
+        credentials: CalDAVClient.Credentials, modelContainer: ModelContainer,
+        syncWindowMonths: Int, reconcileNotifications: Bool) async throws -> Bool {
         lastMovePermissionDenied = false
 
         setState(.syncing)
@@ -286,14 +346,15 @@ actor SyncEngine {
         // Create a dedicated background context for all SwiftData work.
         // This is the fix for the 0x8BADF00D watchdog crash: heavy task
         // iteration no longer blocks the main thread.
-        let bgContext = ModelContext(modelContainer)
+        var bgContext = ModelContext(modelContainer)
 
         defer {
             // Keep SQL to direct fields; older runtimes cannot lower two optional joins.
             if let count = try? BackgroundRunBudget.protectingCurrent({
                 let pending = #Predicate<TaskItem> { $0.isDirty || $0.isDeletedLocally }
-                return try bgContext.fetch(FetchDescriptor(predicate: pending))
-                    .filter { $0.taskList?.account?.id == accountID }.count
+                let rows = try bgContext.fetch(FetchDescriptor(predicate: pending))
+                PerformanceTrace.record(.pendingOutbound, rows: rows.count)
+                return rows.filter { $0.taskList?.account?.id == accountID }.count
             }) { lastOutcome.pendingOutboundCount = count }
         }
         let targetID = accountID
@@ -302,62 +363,74 @@ actor SyncEngine {
             predicate: accountPredicate
         )
         accountDescriptor.fetchLimit = 1
-        guard let account = try bgContext.fetch(accountDescriptor).first else {
+        guard var account = try bgContext.fetch(accountDescriptor).first else {
             setState(.idle)
             return false
         }
 
         var didImportInbound = false
+        let accountScope = ListAccountScope(account)
 
-        let authKey = authenticationKey(accountID: accountID, baseURL: serverBaseURL, username: credentials.username)
-        await calDAVClient.setRunDeadline(Date().addingTimeInterval(900))
+        let authScope = AuthFailureGate.Scope(accountID: accountID, baseURL: serverBaseURL,
+            username: credentials.username, password: credentials.password)
+        await calDAVClient.setRunDeadline(now().addingTimeInterval(900))
         do {
-            if let deadline = deferredUntil[authKey], deadline > Date() { throw RetryDeferredError(deadline: deadline) }
-            deferredUntil.removeValue(forKey: authKey)
-            if credentialGate.shouldSkip(accountID: authKey, currentPassword: credentials.password) {
+            guard accountScope.matchesRequest(baseURL: serverBaseURL, username: credentials.username) else {
+                throw CancellationError()
+            }
+            try checkServerAdmission(accountID: accountID)
+            if credentialGate.shouldSkip(authScope) {
                 throw CalDAVError.unauthorized
             }
-            // Step 1: Discover calendars
-            let principalPath = try await calDAVClient.discoverPrincipal(
-                baseURL: serverBaseURL,
-                credentials: credentials
-            )
-            try requireLiveAccount(accountID, container: modelContainer)
-
-            let calendarHomePath = try await calDAVClient.discoverCalendarHome(
-                baseURL: serverBaseURL,
-                principalPath: principalPath,
-                credentials: credentials
-            )
-            try requireLiveAccount(accountID, container: modelContainer)
-
-            // Step 1.5: Push local-only lists to the server
-            try await pushLocalLists(
-                account: account,
-                baseURL: serverBaseURL,
-                calendarHomePath: calendarHomePath,
-                credentials: credentials,
-                modelContext: bgContext
-            )
-
-            try Task.checkCancellation()
-
-            // Step 2: Re-discover to include freshly pushed calendars
-            let discovered = try await calDAVClient.discoverTaskCalendars(
-                baseURL: serverBaseURL,
-                calendarHomePath: calendarHomePath,
-                credentials: credentials
-            )
-            try requireLiveAccount(accountID, container: modelContainer)
+            // Discover first, then push local lists and rediscover so newly created lists
+            // participate in this run. Validate identities before any reconciliation.
+            let address = try NextcloudDiscoverySeed.address(accountID: accountID, serverURL: serverBaseURL, in: bgContext)
+            let discovery = CalDAVDiscovery(client: calDAVClient, validateAccount: {
+                try await self.requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            })
+            let initial = try await discovery.discover(address: address, credentials: credentials)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            let beforeWrites = ModelContext(modelContainer)
+            guard let writeAccount = try beforeWrites.fetch(accountDescriptor).first,
+                  accountScope.matches(writeAccount) else { throw CancellationError() }
+            _ = try CalDAVDiscovery.preservingStorageIdentities(initial.calendars,
+                existingHrefs: writeAccount.taskLists.map(\.serverURL), baseURL: serverBaseURL)
+            let pendingCreationIDs = writeAccount.taskLists.filter { $0.serverURL.isEmpty }.map(\.id)
+            let deferredMetadata = try await pushNewLists(pendingCreationIDs, accountScope: accountScope,
+                baseURL: serverBaseURL, discovery: initial, credentials: credentials, container: modelContainer)
+            let metadataContext = ModelContext(modelContainer)
+            guard let metadataAccount = try metadataContext.fetch(accountDescriptor).first,
+                  accountScope.matches(metadataAccount) else { throw CancellationError() }
+            let editedListIDs = metadataAccount.taskLists.filter {
+                !$0.serverURL.isEmpty && $0.isMetadataDirty && !deferredMetadata.contains($0.id)
+            }.map(\.id)
+            try await pushListMetadata(editedListIDs, accountScope: accountScope, baseURL: serverBaseURL,
+                credentials: credentials, container: modelContainer)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            let refreshed: CalDAVDiscoveryResult
+            if !pendingCreationIDs.isEmpty || !editedListIDs.isEmpty {
+                refreshed = try await discovery.refreshCalendars(homeURL: initial.calendarHomeURL,
+                    allowedOrigin: address.baseURL, credentials: credentials, principalURL: initial.principalURL)
+            } else {
+                refreshed = initial
+            }
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            bgContext = ModelContext(modelContainer)
+            guard let refreshedAccount = try bgContext.fetch(accountDescriptor).first,
+                  accountScope.matches(refreshedAccount) else { throw CancellationError() }
+            account = refreshedAccount
+            let discovered = try CalDAVDiscovery.preservingStorageIdentities(refreshed.calendars,
+                existingHrefs: account.taskLists.map(\.serverURL), baseURL: serverBaseURL)
+            let held = try heldCreationHrefs(in: discovered.live, homeURL: refreshed.calendarHomeURL, account: account)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
             lastTrashedLists = discovered.trashed.map(TrashedList.init)
 
             // Step 3: Sync each calendar. `.live` only — a collection the server has thrown
             // away must not become a TaskList, or deleting and recreating a calendar leaves the
             // user with one row per corpse, all bearing the same name.
-            for remoteCal in discovered.live {
-                try requireLiveAccount(accountID, container: modelContainer)
+            for remoteCal in discovered.live where !held.contains(remoteCal.href) {
                 do {
-                    if try await syncCalendar(remoteCal: remoteCal, account: account,
+                    if try await syncCalendar(remoteCal: remoteCal, account: account, accountScope: accountScope,
                         baseURL: serverBaseURL, credentials: credentials, modelContext: bgContext,
                         syncWindowMonths: syncWindowMonths) { didImportInbound = true }
                 } catch {
@@ -365,10 +438,11 @@ actor SyncEngine {
                     try recordOperationFailure(error)
                 }
             }
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
             try await probeMissingPhotoLists(accountID: accountID,
                 livePaths: Set(discovered.live.map(\.href)), baseURL: serverBaseURL,
                 credentials: credentials, container: modelContainer)
-            try requireLiveAccount(accountID, container: modelContainer)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
 
             // Clean up any duplicate TaskItems that accumulated from prior syncs.
             //
@@ -381,13 +455,33 @@ actor SyncEngine {
             if didImportInbound {
                 var removed = 0
                 for list in account.taskLists {
-                    removed += TaskListHelpers.cleanupDuplicateUIDs(
+                    removed += try TaskListHelpers.cleanupDuplicateUIDs(
                         in: bgContext,
                         listID: list.id
                     )
                 }
                 if removed > 0 {
                     logger.warning("cleanupDuplicateUIDs removed \(removed) duplicate(s) — sync gate may have a gap")
+                }
+            }
+
+            // Vault moves have no destination PUT to trigger catch-up. Capture their
+            // source data before any source DELETE can make that data unrecoverable.
+            let legacyMoves = PendingMoveSweep.candidates(
+                sourceListIDs: Set(account.taskLists.map(\.id)), in: bgContext, requiringReady: false)
+                .compactMap { task -> (String, String, String)? in
+                    guard let list = task.taskList, let accountID = list.account?.id else { return nil }
+                    return (task.id, list.id, accountID)
+                }
+            var failedLegacyMoves = Set<String>()
+            for (taskID, listID, destinationAccountID) in legacyMoves {
+                do {
+                    try await catchUpLegacyTask(taskID: taskID, expectedListID: listID,
+                        expectedAccountID: destinationAccountID, runAccountID: accountID, baseURL: serverBaseURL,
+                        credentials: credentials, container: modelContainer)
+                } catch {
+                    failedLegacyMoves.insert(taskID)
+                    try recordOperationFailure(error)
                 }
             }
 
@@ -420,11 +514,12 @@ actor SyncEngine {
             } catch { try recordOperationFailure(error) }
 
             try requireLiveAccount(accountID, container: modelContainer)
-            PendingMoveSweep.clearOrphans(in: bgContext)
+            do { try PendingMoveSweep.clearOrphans(in: bgContext) }
+            catch { try recordOperationFailure(error) }
             let movedOut = PendingMoveSweep.candidates(
                 sourceListIDs: Set(account.taskLists.map(\.id)),
                 in: bgContext
-            )
+            ).filter { !failedLegacyMoves.contains($0.id) }
             if !movedOut.isEmpty {
                 // Save source scopes before the sweep clears the move markers.
                 pendingScopeListIDs.formUnion(movedOut.compactMap(\.pendingMoveFromListID))
@@ -436,16 +531,23 @@ actor SyncEngine {
                 let client = calDAVClient
                 pendingSweepFailure = nil
                 let denied = await PendingMoveSweep.run(movedOut, in: bgContext,
-                    onCommit: { self.publishExternalChange($0) },
+                    expectedSourceAccountID: accountID, onCommit: { self.publishExternalChange($0) },
                     onFailure: { error in
                         do { try self.recordOperationFailure(error) }
                         catch { self.pendingSweepFailure = error; throw error }
-                    }) { href in
+                    }) { snapshot in
+                    guard snapshot.sourceProof.scope.serverBaseURL == serverBaseURL,
+                          snapshot.sourceProof.scope.username == credentials.username,
+                          snapshot.sourceProof.scope.accountID == accountID else { throw SyncResourceState.Hold.needsRevalidation }
+                    let validateAttempt: @Sendable () async throws -> Void = {
+                        try await SyncMoveAcknowledgement.validateDeletion(snapshot, container: modelContainer)
+                    }
                     try await client.deleteTask(
                         baseURL: serverBaseURL,
-                        taskPath: href,
-                        etag: nil,
-                        credentials: credentials
+                        taskPath: snapshot.sourceProof.href,
+                        etag: snapshot.sourceProof.etag,
+                        credentials: credentials,
+                        validateAttempt: validateAttempt
                     )
                 }
                 if denied { lastMovePermissionDenied = true }
@@ -476,7 +578,7 @@ actor SyncEngine {
 
             // Update last sync time
             try requireLiveAccount(accountID, container: modelContainer)
-            if lastOutcome.failures.isEmpty { account.lastSyncDate = Date() }
+            if lastOutcome.status == .completed { account.lastSyncDate = Date() }
             try saveAndPublish(bgContext)
 
             // Awaited, not fired and forgotten: the background caller reports its BGTask
@@ -497,11 +599,7 @@ actor SyncEngine {
                 throw CancellationError()
             }
             if let dav = error as? CalDAVError, case .unauthorized = dav {
-                credentialGate.recordFailure(accountID: authKey, password: credentials.password)
-            }
-            if let deferred = error as? RetryDeferredError { deferredUntil[authKey] = deferred.deadline }
-            if case CalDAVError.rateLimited(let wait) = error, let wait {
-                deferredUntil[authKey] = Date().addingTimeInterval(wait)
+                credentialGate.recordFailure(authScope)
             }
             lastOutcome.status = .partial
             if let failure = SyncFailure.from(error), !lastOutcome.failures.contains(failure) {
@@ -551,10 +649,12 @@ actor SyncEngine {
             try await BackgroundRunBudget.$current.withValue(budget) {
                 try await BackgroundRunBudget.$phase.withValue(.remote) {
                     try BackgroundBudgetExhausted.checkAdmission(budget)
-                    try await performBackgroundSyncRun(accountID: accountID, serverBaseURL: serverBaseURL,
-                        credentials: credentials, modelContainer: modelContainer,
-                        syncWindowMonths: syncWindowMonths, reconcileNotifications: reconcileNotifications,
-                        runBudget: budget)
+                    try await captureServerDeferrals(accountID: accountID) {
+                        try await performBackgroundSyncRun(accountID: accountID, serverBaseURL: serverBaseURL,
+                            credentials: credentials, modelContainer: modelContainer,
+                            syncWindowMonths: syncWindowMonths, reconcileNotifications: reconcileNotifications,
+                            runBudget: budget)
+                    }
                 }
             }
         } catch {
@@ -580,15 +680,16 @@ actor SyncEngine {
         reconcileNotifications: Bool,
         runBudget: BackgroundRunBudget
     ) async throws {
-        let bgContext = ModelContext(modelContainer)
+        var bgContext = ModelContext(modelContainer)
         bgContext.autosaveEnabled = false
 
         defer {
             // Keep SQL to direct fields; older runtimes cannot lower two optional joins.
             if let count = try? BackgroundRunBudget.protectingCurrent({
                 let pending = #Predicate<TaskItem> { $0.isDirty || $0.isDeletedLocally }
-                return try bgContext.fetch(FetchDescriptor(predicate: pending))
-                    .filter { $0.taskList?.account?.id == accountID }.count
+                let rows = try bgContext.fetch(FetchDescriptor(predicate: pending))
+                PerformanceTrace.record(.pendingOutbound, rows: rows.count)
+                return rows.filter { $0.taskList?.account?.id == accountID }.count
             }) { lastOutcome.pendingOutboundCount = count }
         }
         let targetID = accountID
@@ -597,8 +698,9 @@ actor SyncEngine {
             predicate: accountPredicate2
         )
         accountDescriptor.fetchLimit = 1
-        guard let account = try BackgroundRunBudget.protectingCurrent({ try bgContext.fetch(accountDescriptor).first }) else {
-            throw CancellationError()
+        let accountScope = try BackgroundRunBudget.protectingCurrent {
+            guard let account = try bgContext.fetch(accountDescriptor).first else { throw CancellationError() }
+            return ListAccountScope(account)
         }
 
         let baseURL = serverBaseURL
@@ -606,35 +708,32 @@ actor SyncEngine {
         setState(.syncing)
         reportProgress(.init(accountID: accountID, listID: nil, stage: .discovering, completed: 0, total: nil))
 
-        let authKey = authenticationKey(accountID: accountID, baseURL: serverBaseURL, username: credentials.username)
+        let authScope = AuthFailureGate.Scope(accountID: accountID, baseURL: serverBaseURL,
+            username: credentials.username, password: credentials.password)
         do {
-            if let deadline = deferredUntil[authKey], deadline > Date() { throw RetryDeferredError(deadline: deadline) }
-            deferredUntil.removeValue(forKey: authKey)
-            if credentialGate.shouldSkip(accountID: authKey, currentPassword: credentials.password) {
+            guard accountScope.matchesRequest(baseURL: baseURL, username: credentials.username) else {
+                throw CancellationError()
+            }
+            try checkServerAdmission(accountID: accountID)
+            if credentialGate.shouldSkip(authScope) {
                 throw CalDAVError.unauthorized
             }
-            // Step 1: Discover calendars
-            let principalPath = try await calDAVClient.discoverPrincipal(
-                baseURL: baseURL,
-                credentials: credentials
-            )
-
-            try requireLiveAccount(accountID, container: modelContainer)
-
-            let calendarHomePath = try await calDAVClient.discoverCalendarHome(
-                baseURL: baseURL,
-                principalPath: principalPath,
-                credentials: credentials
-            )
-
-            try requireLiveAccount(accountID, container: modelContainer)
-
-            let discovered = try await calDAVClient.discoverTaskCalendars(
-                baseURL: baseURL,
-                calendarHomePath: calendarHomePath,
-                credentials: credentials
-            )
-            try requireLiveAccount(accountID, container: modelContainer)
+            let address = try NextcloudDiscoverySeed.address(accountID: accountID, serverURL: baseURL, in: bgContext)
+            let discovery = CalDAVDiscovery(client: calDAVClient, validateAccount: {
+                try await self.requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            })
+            let result = try await discovery.discover(address: address, credentials: credentials)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
+            bgContext = ModelContext(modelContainer)
+            bgContext.autosaveEnabled = false
+            guard let account = try BackgroundRunBudget.protectingCurrent({ try bgContext.fetch(accountDescriptor).first }),
+                  accountScope.matches(account) else {
+                throw CancellationError()
+            }
+            let discovered = try CalDAVDiscovery.preservingStorageIdentities(result.calendars,
+                existingHrefs: account.taskLists.map(\.serverURL), baseURL: baseURL)
+            let held = try heldCreationHrefs(in: discovered.live, homeURL: result.calendarHomeURL, account: account)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
             lastTrashedLists = discovered.trashed.map(TrashedList.init)
 
             // Accumulated across every calendar, then left on `pendingInboundRefresh` for the
@@ -653,61 +752,32 @@ actor SyncEngine {
             }
             // Step 2: Pull each calendar. `.live` only — see the note in `performFullSync`.
             for path in orderedPaths {
-                guard let remoteCal = calendarsByPath[path] else { continue }
-                try requireLiveAccount(accountID, container: modelContainer)
+                guard !held.contains(path), let remoteCal = calendarsByPath[path] else { continue }
+                try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
                 try BackgroundSyncCursor.recordAttempt(id: path, scope: cursorScope, in: bgContext)
 
-                let listID = try BackgroundRunBudget.protectingCurrent {
-                    // Find or create local TaskList
-                    let href = remoteCal.href
-                    let lists = account.taskLists
-                    let taskList: TaskList
-                    if let existing = lists.first(where: { $0.serverURL == href }) {
-                        let before = (existing.name, existing.colorHex, existing.isReadOnly)
-                        existing.applyRemoteMetadata(
-                            name: remoteCal.displayName,
-                            colorHex: remoteCal.color
-                        )
-                        // Not behind `isMetadataDirty`: privileges are the server's, never a local edit.
-                        if existing.isReadOnly != remoteCal.isReadOnly { existing.isReadOnly = remoteCal.isReadOnly }
-                        if before != (existing.name, existing.colorHex, existing.isReadOnly) {
-                            visiblyChangedLists.insert(existing.id)
-                        }
-                        taskList = existing
-                    } else {
-                        let newList = TaskList(
-                            serverURL: href,
-                            name: remoteCal.displayName.isEmpty
-                                ? String(localized: "Tasks")
-                                : remoteCal.displayName,
-                            colorHex: remoteCal.color.isEmpty ? "#007AFF" : remoteCal.color
-                        )
-                        newList.account = account
-                        newList.isReadOnly = remoteCal.isReadOnly
-                        bgContext.insert(newList)
-                        taskList = newList
-                    }
-
-                    try saveAndPublish(bgContext)
-                    return taskList.id
-                }
-                if try await restorePhotoAccess(listID: listID, container: modelContainer) {
+                let taskList = try await findOrCreateTaskList(for: remoteCal, account: account,
+                    accountScope: accountScope, modelContext: bgContext)
+                let listID = taskList.id
+                let photoScope = TaskPhotoOwnership.Scope(accountID: accountID, listID: listID,
+                    collectionPath: remoteCal.href, serverBaseURL: baseURL, username: credentials.username)
+                try saveAndPublish(bgContext)
+                if try await restorePhotoAccess(scope: photoScope, container: modelContainer) {
                     inboundChanged = true
                 }
-                try requireLiveAccount(accountID, container: modelContainer)
+                try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
                 let repair = Self.categoriesCatchUpPending(listID: listID)
                 do {
-                    if try await pullCalendarCheckingPhotoAccess(remoteCal: remoteCal, listID: listID,
-                        accountID: accountID, baseURL: baseURL, credentials: credentials,
-                        container: modelContainer, months: syncWindowMonths, repairCategories: repair) {
-                        inboundChanged = true
-                    }
+                    let pull = try await pullCalendarCheckingPhotoAccess(remoteCal: remoteCal,
+                        scope: photoScope, credentials: credentials,
+                        container: modelContainer, months: syncWindowMonths, repairCategories: repair)
+                    inboundChanged = inboundChanged || pull.changed
                 } catch {
                     guard Self.isDefinitiveCollectionDenial(error) else { throw error }
                     try recordOperationFailure(error)
                     continue
                 }
-                try requireLiveAccount(accountID, container: modelContainer)
+                try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
                 if repair { Self.markCategoriesCaughtUp(listID: listID) }
 
             }
@@ -717,9 +787,9 @@ actor SyncEngine {
             // import photo metadata and confirm definitive access denial above.
 
             // Update last sync time
-            try requireLiveAccount(accountID, container: modelContainer)
+            try requireLiveAccount(accountID, container: modelContainer, matching: accountScope)
             try BackgroundRunBudget.protectingCurrent {
-                if lastOutcome.failures.isEmpty { account.lastSyncDate = Date() }
+                if lastOutcome.status == .completed { account.lastSyncDate = Date() }
                 try saveAndPublish(bgContext)
             }
 
@@ -750,11 +820,7 @@ actor SyncEngine {
                 throw CancellationError()
             }
             if let dav = error as? CalDAVError, case .unauthorized = dav {
-                credentialGate.recordFailure(accountID: authKey, password: credentials.password)
-            }
-            if let deferred = error as? RetryDeferredError { deferredUntil[authKey] = deferred.deadline }
-            if case CalDAVError.rateLimited(let wait) = error, let wait {
-                deferredUntil[authKey] = Date().addingTimeInterval(wait)
+                credentialGate.recordFailure(authScope)
             }
             lastOutcome.status = .partial
             if let failure = SyncFailure.from(error), !lastOutcome.failures.contains(failure) {
@@ -765,11 +831,8 @@ actor SyncEngine {
         }
     }
 
-    /// Applies a single remote task to the local store. Not `@MainActor`-isolated.
-    ///
-    /// This is the background-safe equivalent of `processRemoteTask`.
-    @discardableResult
-    /// Every task in the list, by UID, for the pull to match the server against.
+    /// Builds the list-scoped UID lookup for direct importer tests.
+    /// Every task in the list is included for matching against the server.
     ///
     /// **Deliberately includes tasks awaiting deletion.** They used to be
     /// filtered out, which made a task the user had just deleted invisible to
@@ -777,9 +840,9 @@ actor SyncEngine {
     /// row, and the pending DELETE removed the *original*. The task stayed in
     /// the list forever and was gone from the server.
     ///
-    /// Being in the map is not permission to apply anything: both appliers
-    /// refuse an `isDeletedLocally` task outright. Recognising it is what lets
-    /// them refuse it.
+    /// Being in the map is not permission to apply anything: the importer
+    /// refuses an `isDeletedLocally` task outright. Recognising it lets the
+    /// importer refuse it.
     ///
     /// Fetched explicitly rather than through `taskList.tasks`, because the
     /// relationship can be stale or unfaulted on a background context.
@@ -830,17 +893,7 @@ actor SyncEngine {
         modelContext: ModelContext
     ) throws -> Bool {
         let importer = try SyncImportStore(context: modelContext)
-        return importer.apply(try importer.parse(remoteTask), list: taskList, uidMap: &uidMap, movedAway: movedAway)
-    }
-
-    /// Applies parsed VTODO data onto a TaskItem. `nonisolated` so it can be
-    /// called from `applyRemoteTask` without actor hops (it touches no actor state).
-    nonisolated private func applyTodoDataBackground(
-        _ data: ICalendarParser.VTODOData,
-        to task: TaskItem,
-        modelContext: ModelContext
-    ) {
-        applyTodoData(data, to: task, modelContext: modelContext)
+        return try importer.apply(try importer.parse(remoteTask), list: taskList, uidMap: &uidMap, movedAway: movedAway)
     }
 
     // MARK: - Calendar Sync
@@ -855,109 +908,41 @@ actor SyncEngine {
     private func syncCalendar(
         remoteCal: CalDAVClient.RemoteCalendar,
         account: ServerAccount,
+        accountScope: ListAccountScope,
         baseURL: String,
         credentials: CalDAVClient.Credentials,
         modelContext: ModelContext,
         syncWindowMonths: Int = 0
     ) async throws -> Bool {
         // Find or create local TaskList
-        let taskList = findOrCreateTaskList(
+        let taskList = try await findOrCreateTaskList(
             for: remoteCal,
             account: account,
+            accountScope: accountScope,
             modelContext: modelContext
         )
 
         let expectedListID = taskList.id
         let expectedAccountID = account.id
+        let photoScope = TaskPhotoOwnership.Scope(accountID: expectedAccountID, listID: expectedListID,
+            collectionPath: remoteCal.href, serverBaseURL: baseURL, username: credentials.username)
         try saveAndPublish(modelContext)
-        let restoredPhotoAccess = try await restorePhotoAccess(listID: expectedListID,
+        let restoredPhotoAccess = try await restorePhotoAccess(scope: photoScope,
             container: modelContext.container)
-        try requireLiveAccount(expectedAccountID, container: modelContext.container)
+        try requireLiveAccount(expectedAccountID, container: modelContext.container, matching: accountScope)
 
-        // Owed once per list, and it has nothing to read without a pull — so it
-        // overrides the CTag skip below. See `catchUpCategories`.
-        let owesCategoriesCatchUp = Self.categoriesCatchUpPending(listID: taskList.id)
-        let hierarchyKey = SyncImportCheckpoint.identity(accountID: account.id, listID: taskList.id,
-            baseURL: baseURL, username: credentials.username, months: syncWindowMonths)
-        let owesHierarchyResolution = try SyncImportCheckpoint.hierarchyPending(id: hierarchyKey, in: modelContext)
-
-        // CTag delta check: skip the expensive full pull when nothing changed
-        // on the server AND a full pull happened recently. The recency bound
-        // (see `shouldSkipPull`) ensures a stale/cached `getctag` can never
-        // silently suppress server changes. Still push local dirty/deleted tasks.
-        if !restoredPhotoAccess, !remoteCal.supportsSyncCollection, !owesCategoriesCatchUp, !owesHierarchyResolution, Self.shouldSkipPull(
-            localCTag: taskList.syncCTag,
-            remoteCTag: remoteCal.ctag,
-            lastFullPull: taskList.lastFullPullDate,
-            now: Date(),
-            maxSkipInterval: Self.maxPullSkipInterval
-        ) {
-            logger.debug("CTag unchanged for \(remoteCal.displayName), skipping pull")
-            let photosChanged = try await synchronizePhotos(listID: expectedListID,
-                accountID: expectedAccountID, baseURL: baseURL, credentials: credentials,
-                container: modelContext.container)
-            try requireLiveAccount(expectedAccountID, container: modelContext.container)
-
-            // Push local dirty tasks even when server hasn't changed (with per-task error isolation)
-            let dirtyTasks = findDirtyTasks(for: taskList, modelContext: modelContext)
-            for localTask in dirtyTasks {
-                try Task.checkCancellation()
-                do {
-                    try await pushLocalTask(
-                        localTask,
-                        expectedListID: expectedListID, expectedAccountID: expectedAccountID,
-                        calendarPath: remoteCal.href,
-                        baseURL: baseURL,
-                        credentials: credentials,
-                        modelContext: modelContext
-                    )
-                } catch {
-                    try requireLiveAccount(expectedAccountID, container: modelContext.container)
-                    try recordOperationFailure(error)
-                    logger.error("Failed to push task '\(localTask.title)': \(error.localizedDescription)")
-                }
-                try requireLiveAccount(expectedAccountID, container: modelContext.container)
-            }
-
-            // Push local deletions (with per-task error isolation)
-            let deletedTasks = findDeletedTasks(for: taskList, modelContext: modelContext)
-            for deletedTask in deletedTasks {
-                try Task.checkCancellation()
-                do {
-                    try await pushDeletion(
-                        deletedTask,
-                        calendarPath: remoteCal.href,
-                        baseURL: baseURL,
-                        credentials: credentials,
-                        modelContext: modelContext
-                    )
-                } catch {
-                    try requireLiveAccount(expectedAccountID, container: modelContext.container)
-                    try recordOperationFailure(error)
-                    logger.error("Failed to push deletion '\(deletedTask.title)': \(error.localizedDescription)")
-                }
-                try requireLiveAccount(expectedAccountID, container: modelContext.container)
-            }
-
-            try saveAndPublish(modelContext)
-            return photosChanged
-        }
-
-        // Tracks whether the inbound pull actually changed local data, so the
-        // UI is only forced to re-query when the server delivered something new.
-        var inboundChanged = false
-
-        inboundChanged = try await pullCalendarCheckingPhotoAccess(remoteCal: remoteCal, listID: taskList.id,
-            accountID: account.id, baseURL: baseURL, credentials: credentials,
+        let owesCategoriesCatchUp = Self.categoriesCatchUpPending(listID: expectedListID)
+        let pull = try await pullCalendarCheckingPhotoAccess(remoteCal: remoteCal,
+            scope: photoScope, credentials: credentials,
             container: modelContext.container, months: syncWindowMonths,
             repairCategories: owesCategoriesCatchUp)
-        try requireLiveAccount(expectedAccountID, container: modelContext.container)
+        try requireLiveAccount(expectedAccountID, container: modelContext.container, matching: accountScope)
 
         let photosChanged = try await synchronizePhotos(listID: expectedListID,
             accountID: expectedAccountID, baseURL: baseURL, credentials: credentials,
             container: modelContext.container)
         try requireLiveAccount(expectedAccountID, container: modelContext.container)
-        inboundChanged = inboundChanged || photosChanged || restoredPhotoAccess
+        let inboundChanged = pull.changed || photosChanged || restoredPhotoAccess
 
         // Push local dirty tasks (with per-task error isolation)
         let dirtyTasks = findDirtyTasks(for: taskList, modelContext: modelContext)
@@ -986,11 +971,11 @@ actor SyncEngine {
             try Task.checkCancellation()
             do {
                 try await pushDeletion(
-                    deletedTask,
-                    calendarPath: remoteCal.href,
+                    deletedTask.id,
+                    expectedListID: expectedListID, expectedAccountID: expectedAccountID,
                     baseURL: baseURL,
                     credentials: credentials,
-                    modelContext: modelContext
+                    container: modelContext.container
                 )
             } catch {
                 try requireLiveAccount(expectedAccountID, container: modelContext.container)
@@ -1000,14 +985,15 @@ actor SyncEngine {
             try requireLiveAccount(expectedAccountID, container: modelContext.container)
         }
 
-        let listID = taskList.id
-        let metadataContext = ModelContext(modelContext.container)
-        metadataContext.autosaveEnabled = false
-        let listPredicate = #Predicate<TaskList> { $0.id == listID }
-        if let currentList = try metadataContext.fetch(FetchDescriptor(predicate: listPredicate)).first {
-            currentList.lastFullPullDate = Date()
-            currentList.syncCTag = (!dirtyTasks.isEmpty || !deletedTasks.isEmpty) ? nil : remoteCal.ctag
-            try metadataContext.save()
+        if pull.didPull {
+            let metadataContext = ModelContext(modelContext.container)
+            metadataContext.autosaveEnabled = false
+            let listPredicate = #Predicate<TaskList> { $0.id == expectedListID }
+            if let currentList = try metadataContext.fetch(FetchDescriptor(predicate: listPredicate)).first {
+                currentList.lastFullPullDate = Date()
+                currentList.syncCTag = (!dirtyTasks.isEmpty || !deletedTasks.isEmpty) ? nil : remoteCal.ctag
+                try metadataContext.save()
+            }
         }
         // Recorded only once what it added is saved; a pass that threw is still owed.
         if owesCategoriesCatchUp {
@@ -1016,67 +1002,147 @@ actor SyncEngine {
         return inboundChanged
     }
 
+    private struct CalendarPullResult {
+        let changed: Bool
+        let didPull: Bool
+    }
+
     /// Shared bounded bootstrap/delta path. No full-body array survives between batches.
-    private func pullCalendar(remoteCal: CalDAVClient.RemoteCalendar, listID: String, accountID: String,
-        baseURL: String, credentials: CalDAVClient.Credentials, container: ModelContainer,
-        months: Int, repairCategories: Bool) async throws -> Bool {
+    private func pullCalendar(remoteCal: CalDAVClient.RemoteCalendar, resourceScope: TaskPhotoOwnership.Scope,
+        credentials: CalDAVClient.Credentials, container: ModelContainer,
+        months: Int, repairCategories: Bool) async throws -> CalendarPullResult {
+        let accountID = resourceScope.accountID
+        let listID = resourceScope.listID
+        let baseURL = resourceScope.serverBaseURL
         let scope = SyncCollectionPuller.Scope(accountID: accountID, listID: listID, historyScope: String(months))
         let key = SyncImportCheckpoint.identity(accountID: accountID, listID: listID,
-            baseURL: baseURL, username: credentials.username, months: months)
-        let (checkpoint, knownETags, repair) = try BackgroundRunBudget.protectingCurrent {
-            try SyncImportCheckpoint.pruneOtherScopes(accountID: accountID, listID: listID, keeping: key, container: container)
+            baseURL: baseURL, username: resourceScope.username, months: months)
+        let (checkpoint, repair, classification, aliases) = try BackgroundRunBudget.protectingCurrent {
             let read = ModelContext(container)
+            let list = try resourceScope.requireList(in: read)
+            try SyncImportCheckpoint.pruneOtherScopes(accountID: accountID, listID: listID, keeping: key, container: container)
             let checkpoint = try SyncImportCheckpoint.read(id: key, scope: scope, in: read)
-            let id = listID
-            let local = try read.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.taskList?.id == id }))
-            var knownETags = try SyncImportCheckpoint.accountedETags(id: key, container: container)
-            for task in local {
-                if let href = task.remoteHref {
-                    // A nil ETag is an explicit invalidation after a refused move rollback.
-                    if task.etag == nil { knownETags.removeValue(forKey: href) }
-                    else if let etag = task.etag, !task.isDirty || knownETags[href] == nil { knownETags[href] = etag }
-                }
-            }
-            let repair = repairCategories && !local.isEmpty
-            if repairCategories && local.isEmpty { Self.markCategoriesCaughtUp(listID: listID) }
-            return (checkpoint, knownETags, repair)
+            let scan = try SyncResourceState.scanForClassification(list: list, in: read)
+            if repairCategories && !scan.hasLocalTasks { Self.markCategoriesCaughtUp(listID: listID) }
+            let classification = try Set(scan.needsClassification.map { try SyncResourceState.canonical($0, scope: resourceScope) })
+            return (checkpoint, repairCategories && scan.hasLocalTasks, classification, scan.aliases)
         }
         let cache = ICalendarParser.FormatterCache()
-        let accountedHrefs = Set(knownETags.keys)
         let writer = await SyncInboundBatchWriter(container: container, listID: listID, expectedAccountID: accountID,
-            checkpointID: key, needsParentResolution: checkpoint?.hasCompletedBaseline != true)
-        let puller = SyncCollectionPuller(client: calDAVClient)
+            checkpointID: key, needsParentResolution: checkpoint?.hasCompletedBaseline != true,
+            photoScope: resourceScope, save: inboundSave)
+        let puller = SyncCollectionPuller(client: calDAVClient, now: now)
         let before = lastOutcome.importedCount + lastOutcome.updatedCount + lastOutcome.deletedCount
-        _ = try await puller.pull(baseURL: baseURL, calendar: remoteCal, credentials: credentials,
-            scope: scope, checkpoint: checkpoint, knownETags: knownETags,
-            forceIntegrity: repair, forceBodies: repair,
+        let result = try await puller.pull(baseURL: baseURL, calendar: remoteCal, credentials: credentials,
+            scope: scope, checkpoint: checkpoint,
+            forceIntegrity: repair || !classification.isEmpty, forceBodies: repair,
             callbacks: .init(
                 progress: { [self] stage, completed, total in
                     await self.reportProgress(.init(accountID: accountID, listID: listID, stage: stage, completed: completed, total: total))
                 },
+                manifestInventory: {
+                    try Self.manifestInventory(id: key, scope: resourceScope, classification: classification, container: container)
+                },
+                deltaInventory: { hrefs in
+                    try Self.deltaInventory(id: key, scope: resourceScope, hrefs: hrefs, aliases: aliases, container: container)
+                },
                 applyBodies: { [self] bodies in
                     try await self.applyPullBodies(bodies, writer: writer, months: months, repairCategories: repair, cache: cache)
-                    try await self.markPullBodiesAccounted(bodies, id: key, scope: scope, container: container)
+                    try await self.markPullBodiesAccounted(bodies, id: key, scope: resourceScope, container: container)
                 },
                 deleteExplicit: { [self] hrefs in
                     try await writer.deleteExplicit(hrefs, onCommit: { await self.publishBatch($0) })
-                    try await self.removePullReceipts(hrefs, id: key, scope: scope, container: container)
+                    try await self.removePullReceipts(hrefs, id: key, scope: resourceScope, container: container)
                 },
-                reconcileCompleteManifest: { [self] manifest in
+                reconcileCompleteManifest: { [self] manifest, accountedHrefs in
                     try await writer.resolveParents(onCommit: { await self.publishBatch($0) })
                     try await writer.reconcileManifest(manifest, onCommit: { await self.publishBatch($0) })
                     let present = Set(manifest.map(\.href))
-                    try await self.removePullReceipts(Array(accountedHrefs.subtracting(present)), id: key, scope: scope, container: container)
+                    try await self.removePullReceipts(Array(accountedHrefs.subtracting(present)), id: key, scope: resourceScope, container: container)
                 },
                 commitCheckpoint: { [self] checkpoint in
                     // Delta pages need parent wiring as well, before their token is durable.
                     try await writer.resolveParents(onCommit: { await self.publishBatch($0) })
-                    try await self.commitPullCheckpoint(checkpoint, id: key, path: remoteCal.href, container: container)
+                    try await self.commitPullCheckpoint(checkpoint, id: key, scope: resourceScope, container: container)
                 }))
         // An unchanged CTag returns without a checkpoint callback. Durable
         // local parent work still needs to drain and announce its committed IDs.
         try await writer.resolveParents(onCommit: { await self.publishBatch($0) })
-        return before != lastOutcome.importedCount + lastOutcome.updatedCount + lastOutcome.deletedCount
+        return CalendarPullResult(
+            changed: before != lastOutcome.importedCount + lastOutcome.updatedCount + lastOutcome.deletedCount,
+            didPull: result.didPull)
+    }
+
+    private nonisolated static func manifestInventory(id: String, scope: TaskPhotoOwnership.Scope,
+        classification: Set<String>, container: ModelContainer) throws -> SyncCollectionPuller.Inventory {
+        try BackgroundRunBudget.protectingCurrent {
+            let context = ModelContext(container)
+            _ = try scope.requireList(in: context)
+            let listID = scope.listID
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.taskList?.id == listID }))
+            PerformanceTrace.record(.matchingTaskInventory, rows: tasks.count)
+            let accounted = try SyncImportCheckpoint.accountedETags(id: id, container: container)
+            return try matchInventory(tasks: tasks, accounted: accounted, scope: scope, invalidated: classification)
+        }
+    }
+
+    private nonisolated static func deltaInventory(id: String, scope: TaskPhotoOwnership.Scope,
+        hrefs: [String], aliases: [String: Set<String>], container: ModelContainer) throws -> SyncCollectionPuller.Inventory {
+        try BackgroundRunBudget.protectingCurrent {
+            let context = ModelContext(container)
+            _ = try scope.requireList(in: context)
+            let listID = scope.listID
+            let spellings = Array(Set(hrefs).union(hrefs.flatMap { aliases[$0] ?? [] }))
+            var tasks: [TaskItem] = []
+            for start in stride(from: 0, to: spellings.count, by: 100) {
+                try Task.checkCancellation()
+                let batch = spellings[start..<min(start + 100, spellings.count)].map(Optional.some)
+                let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate {
+                    $0.taskList?.id == listID && batch.contains($0.calendarURL)
+                }))
+                PerformanceTrace.record(.matchingTaskLookup, rows: rows.count, keys: batch.count)
+                tasks.append(contentsOf: rows)
+            }
+            let accounted = try SyncImportCheckpoint.accountedETags(id: id, hrefs: hrefs, in: context)
+            return try matchInventory(tasks: tasks, accounted: accounted, scope: scope, invalidated: [])
+        }
+    }
+
+    private nonisolated static func matchInventory(tasks: [TaskItem], accounted: [String: String],
+        scope: TaskPhotoOwnership.Scope, invalidated: Set<String>) throws -> SyncCollectionPuller.Inventory {
+        var known = accounted
+        var invalidated = invalidated
+        for task in tasks {
+            guard let href = task.remoteHref, !href.isEmpty else { continue }
+            if let etag = task.etag {
+                // Preserve raw positive baselines. A fetched body can normalize an alias
+                // before the conservative manifest-absence reconciliation reads it.
+                if !task.isDirty || known[href] == nil { known[href] = etag }
+            } else {
+                invalidated.insert(href)
+                invalidated.insert(try SyncResourceState.canonical(href, scope: scope))
+            }
+        }
+        for href in invalidated { known.removeValue(forKey: href) }
+        return .init(knownETags: known, accountedETags: accounted, invalidatedHrefs: invalidated)
+    }
+
+    nonisolated static func inboundApplyChunks(_ resources: [ParsedRemoteTask]) -> [[ParsedRemoteTask]] {
+        var result: [[ParsedRemoteTask]] = []
+        var chunk: [ParsedRemoteTask] = []
+        var categories = 0
+        for resource in resources {
+            let count = resource.todo?.categories?.count ?? 0
+            if !chunk.isEmpty && (chunk.count == 100 || categories + count > 512) {
+                result.append(chunk)
+                chunk = []
+                categories = 0
+            }
+            chunk.append(resource)
+            categories += count
+        }
+        if !chunk.isEmpty { result.append(chunk) }
+        return result
     }
 
     private func applyPullBodies(_ bodies: [CalDAVClient.RemoteTask], writer: SyncInboundBatchWriter,
@@ -1085,30 +1151,34 @@ actor SyncEngine {
         let parsed = try bodies.map { resource in
             try SyncBodyValidation.parse(resource, using: cache)
         }
-        if let commit = try await writer.apply(parsed, months: months, repairCategories: repairCategories) {
-            publishBatch(commit)
+        for chunk in Self.inboundApplyChunks(parsed) {
+            try Task.checkCancellation()
+            if let commit = try await writer.apply(chunk, months: months, repairCategories: repairCategories) {
+                publishBatch(commit)
+            }
+            await Task.yield()
         }
     }
 
     private func markPullBodiesAccounted(_ resources: [CalDAVClient.RemoteTask], id: String,
-        scope: SyncCollectionPuller.Scope, container: ModelContainer) async throws {
+        scope: TaskPhotoOwnership.Scope, container: ModelContainer) async throws {
         try Task.checkCancellation()
         try await MainActor.run {
             try BackgroundRunBudget.protectingCurrent {
-                try Self.requireLiveScope(scope, container: container)
+                _ = try scope.requireList(in: ModelContext(container))
                 try SyncImportCheckpoint.markAccounted(resources, id: id, container: container)
             }
         }
     }
     private func removePullReceipts(_ hrefs: [String], id: String,
-        scope: SyncCollectionPuller.Scope, container: ModelContainer) async throws {
+        scope: TaskPhotoOwnership.Scope, container: ModelContainer) async throws {
         try Task.checkCancellation()
         for start in stride(from: 0, to: hrefs.count, by: 100) {
             try Task.checkCancellation()
             let batch = Array(hrefs[start..<min(start + 100, hrefs.count)])
             try await MainActor.run {
                 try BackgroundRunBudget.protectingCurrent {
-                    try Self.requireLiveScope(scope, container: container)
+                    _ = try scope.requireList(in: ModelContext(container))
                     try SyncImportCheckpoint.removeAccounted(batch, id: id, container: container)
                 }
             }
@@ -1121,36 +1191,21 @@ actor SyncEngine {
     }
 
     private func commitPullCheckpoint(_ checkpoint: SyncCollectionPuller.Checkpoint, id: String,
-                                     path: String, container: ModelContainer) async throws {
+                                     scope: TaskPhotoOwnership.Scope, container: ModelContainer) async throws {
         try Task.checkCancellation()
         try await MainActor.run {
             try BackgroundRunBudget.protectingCurrent {
-                try Self.requireLiveScope(checkpoint.scope, container: container)
-                try SyncImportCheckpoint.commit(checkpoint, id: id, collectionPath: path, container: container)
+                _ = try scope.requireList(in: ModelContext(container))
+                try SyncImportCheckpoint.commit(checkpoint, id: id, collectionPath: scope.collectionPath, container: container)
             }
         }
     }
 
-    @MainActor private static func requireLiveScope(_ scope: SyncCollectionPuller.Scope, container: ModelContainer) throws {
-        let section = try BackgroundRunBudget.current?.beginCriticalSection()
-        defer { section?.end() }
-        try Task.checkCancellation()
-        let context = ModelContext(container)
-        let listID = scope.listID; let accountID = scope.accountID
-        let predicate = #Predicate<TaskList> { $0.id == listID && $0.account?.id == accountID }
-        guard try context.fetchCount(FetchDescriptor(predicate: predicate)) == 1 else { throw CancellationError() }
-    }
-
     // MARK: - Pull (Remote → Local)
 
-    /// Processes a single remote task: creates or updates the local TaskItem.
-    ///
-    /// Uses a pre-built UID map for O(1) lookups instead of per-task SwiftData queries.
-    /// `nonisolated` to mirror its background twin `applyRemoteTask`, which
-    /// always was. Neither touches actor state — both work entirely on the
-    /// `ModelContext` handed to them, and `logger` is a `let`. Being isolated for
-    /// no reason meant the foreground path could not be driven from a test,
-    /// because an `inout` map cannot cross an actor boundary.
+    /// Legacy per-resource test seam retained for importer behavior tests.
+    /// Shipping pulls use the shared bounded writer and do not call this facade.
+    /// It stays nonisolated so tests can synchronously pass their context-owned UID map.
     @discardableResult
     nonisolated private func processRemoteTask(
         _ remoteTask: CalDAVClient.RemoteTask,
@@ -1163,78 +1218,14 @@ actor SyncEngine {
             movedAway: movedAway, modelContext: modelContext)
     }
 
-    /// Applies parsed VTODO data onto a TaskItem model.
+    /// The UID of every fetched VTODO, or nil if any one of them could not be
+    /// read. Retained for direct completeness tests of the legacy UID-set helper;
+    /// shipping pulls use the complete manifest writer.
     ///
-    /// `nonisolated` for the same reason as `processRemoteTask`, its only caller
-    /// besides the conflict-resolution path: pure field assignment on a context
-    /// it is given.
-    nonisolated private func applyTodoData(
-        _ data: ICalendarParser.VTODOData,
-        to task: TaskItem,
-        modelContext: ModelContext
-    ) {
-        if let importer = try? SyncImportStore(context: modelContext) { importer.applyFields(data, to: task) }
-    }
-
-    /// Applies the server's `CATEGORIES` to a task's tags.
-    ///
-    /// Shared by both apply paths, and `nonisolated` because the background pull
-    /// runs on its own `ModelContext`.
-    ///
-    /// **Absent is not empty.** `nil` means the VTODO carried no `CATEGORIES`
-    /// property, which every client that has never heard of it also does — it is
-    /// silence, not an instruction, and adopting it as "no tags" deletes the
-    /// user's tags here and then pushes that deletion to the server. `[]` means
-    /// the server said the task has none, which *is* an instruction. This is the
-    /// same reasoning `applyTodoData` already applies to `X-APPLE-SORT-ORDER`.
-    ///
-    /// Tags are matched through ``Tag/matching(_:in:)`` rather than by string
-    /// equality, so an inbound `work` finds the user's existing `Work` instead of
-    /// minting a second tag that the next push would send back as a duplicate
-    /// category.
-    /// Removes local tasks the server no longer has. Returns whether it removed
-    /// any, so the caller can tell the UI to refresh.
-    ///
-    /// Must run **after** `resolveParentRelationships`: the rule that spares a
-    /// parent whose subtask the server still holds reads `subtasks`, and that
-    /// relationship is only populated once the pass has resolved `parentUID`.
-    /// Called before an unreadable fetch can matter — `remoteUIDSet` returning
-    /// `nil` abandons the reconciliation rather than proceeding on a short set.
-    @discardableResult
-    nonisolated private func reconcileServerDeletions(
-        remoteTasks: [CalDAVClient.RemoteTask],
-        uidMap: [String: TaskItem],
-        modelContext: ModelContext,
-        parsedTasks: [ParsedRemoteTask]? = nil
-    ) -> Bool {
-        let accountedUIDs: Set<String>?
-        if let parsedTasks {
-            accountedUIDs = parsedTasks.allSatisfy { $0.todo != nil }
-                ? Set(parsedTasks.compactMap { $0.todo?.uid }) : nil
-        } else { accountedUIDs = Self.remoteUIDSet(remoteTasks) }
-        guard let remoteUIDs = accountedUIDs else {
-            logger.error("Skipping deletion reconciliation: a fetched resource had no readable UID")
-            return false
-        }
-        let doomed = Self.tasksDeletedOnServer(local: Array(uidMap.values), remoteUIDs: remoteUIDs)
-        guard !doomed.isEmpty else { return false }
-        for task in doomed {
-            modelContext.delete(task)
-        }
-        return true
-    }
-
-    /// The UID of every fetched VTODO, or `nil` if any one of them could not be
-    /// read.
-    ///
-    /// All-or-nothing on purpose. `tasksDeletedOnServer` treats "not in this
-    /// set" as "deleted on the server", so a set short by one entry deletes the
-    /// task that entry named. A resource we cannot read a UID from is a reason
-    /// to abandon the reconciliation, not to proceed without it.
-    ///
-    /// Unfolds first. RFC 5545 folds lines past 75 octets and Nextcloud emits
-    /// folded UIDs for the long ones it generates, so reading raw lines would
-    /// silently truncate exactly those and delete their local counterparts.
+    /// All-or-nothing on purpose. tasksDeletedOnServer treats absence from this
+    /// set as a server deletion, so an unreadable resource abandons reconciliation.
+    /// Unfold first: RFC 5545 folds lines past 75 octets and Nextcloud emits folded
+    /// UIDs for long values, so reading raw lines would silently truncate them.
     nonisolated static func remoteUIDSet(_ tasks: [CalDAVClient.RemoteTask]) -> Set<String>? {
         var uids: Set<String> = []
         for task in tasks {
@@ -1251,39 +1242,10 @@ actor SyncEngine {
         return uids
     }
 
-    /// The local tasks the server no longer has, deepest first.
+    /// The local tasks absent from a complete UID set, deepest first.
     ///
-    /// The pull could add and update but never delete, so a task removed in the
-    /// Nextcloud web UI stayed here forever, holding an etag and an href for a
-    /// resource that 404s.
-    ///
-    /// **This is the one reconciliation that destroys data**, and it acts on an
-    /// absence — which is also what a short read, a filtered fetch and a
-    /// half-finished request look like. So it is written as refusals, and
-    /// `remoteUIDs` must be the **whole** fetched set. `fetchAllTasks` issues a
-    /// `calendar-query` for every VTODO with no time-range, so that set is
-    /// complete; `filterCompletedByWindow` narrows only what gets *applied*.
-    /// Passing the filtered subset here would delete the user's older completed
-    /// history on the first run.
-    ///
-    /// Kept, never deleted:
-    ///
-    /// - A task with no `remoteHref`, or `isLocalOnly` — absent because it has
-    ///   not been pushed, not because it was deleted.
-    /// - A dirty task. The push that follows re-creates it on the server;
-    ///   deleting it would discard the user's edit to win a race against our
-    ///   own upload.
-    /// - A task already flagged `isDeletedLocally`, which the deletion push
-    ///   still owes the server a DELETE for.
-    /// - A parent while the server still has any of its subtasks, because the
-    ///   local delete cascades and would take a live child with it.
-    /// - Everything, when `remoteUIDs` is empty. An empty fetch and a list the
-    ///   user emptied are indistinguishable and want opposite handling. This
-    ///   refuses on purpose: a genuinely emptied list stays until the user
-    ///   clears it here too, which is the recoverable failure.
-    ///
-    /// Deepest first so each delete removes a leaf and no delete lands on a row
-    /// an earlier cascade already removed.
+    /// This legacy helper is kept for focused behavior tests. Production pulls
+    /// reconcile complete manifests through SyncInboundBatchWriter.
     nonisolated static func tasksDeletedOnServer(local: [TaskItem],
                                                  remoteUIDs: Set<String>, protectedUIDs: Set<String> = [], allowEmpty: Bool = false) -> [TaskItem] {
         guard allowEmpty || !remoteUIDs.isEmpty else { return [] }
@@ -1334,32 +1296,8 @@ actor SyncEngine {
                                        isStartDateOnly: task.isStartDateOnly)
     }
 
-    nonisolated private func applyCategories(
-        _ categories: [String]?,
-        to task: TaskItem,
-        modelContext: ModelContext
-    ) {
-        guard let categories else { return }
-
-        var known = (try? modelContext.fetch(FetchDescriptor<Tag>())) ?? []
-        var resolved: [Tag] = []
-        for name in categories {
-            let tag = resolveTag(named: name, known: &known, modelContext: modelContext)
-            // A VTODO may legally repeat a category, and two spellings of one
-            // name resolve to the same tag.
-            if !resolved.contains(where: { $0.id == tag.id }) {
-                resolved.append(tag)
-            }
-        }
-        // Assign rather than merge: a tag the server no longer lists has been
-        // taken off the task. It is removed from the task only — the tag itself
-        // stays in the user's sidebar and on whatever else carries it.
-        task.tags = resolved
-    }
-
     /// The tag `name` means among `known`, or a new one — inserted, and added to
-    /// `known` so a later name in the same pass finds it. Shared by both category
-    /// passes because they must agree on it; see ``Tag/matching(_:in:)``.
+    /// `known` so a later name in the same pass finds it; see ``Tag/matching(_:in:)``.
     nonisolated private func resolveTag(
         named name: String,
         known: inout [Tag],
@@ -1377,11 +1315,9 @@ actor SyncEngine {
     /// Adds the server's `CATEGORIES` to the tasks a device already holds.
     /// Returns whether it added any, so the caller can refresh the UI.
     ///
-    /// `applyCategories` runs only when a task's etag changes, and every task
-    /// pulled before categories were applied still carries that pull's etag. The
-    /// gate calls it unchanged, so its categories are never read — and the first
-    /// upload of it writes the empty tag set over them. This pass reads them
-    /// regardless of the etag.
+    /// An existing task can already have its current ETag from a pull made before
+    /// categories were imported. The additive pass reads categories even then,
+    /// so the next upload does not overwrite them with the older local set.
     ///
     /// - **Adds, never removes.** A tag added here before tag edits marked a task
     ///   dirty never reached the server; adopting the server's set would delete it.
@@ -1395,6 +1331,8 @@ actor SyncEngine {
     ///
     /// Takes the whole fetched set, not the sync-window subset, so a completed
     /// task outside the window cannot be reopened later and uploaded without them.
+    /// Retained as a direct compatibility test seam; production category repair
+    /// runs through SyncImportStore in the bounded inbound writer.
     nonisolated private func catchUpCategories(
         remoteTasks: [CalDAVClient.RemoteTask],
         uidMap: [String: TaskItem],
@@ -1418,8 +1356,9 @@ actor SyncEngine {
         return added
     }
 
-    /// Whether ``catchUpCategories(remoteTasks:uidMap:modelContext:)`` is still
-    /// owed to a list. Keyed by the local `TaskList.id` rather than the href,
+    /// Whether ``SyncImportStore/catchUpCategories(_:uidMap:)`` is still owed to a
+    /// list. The bounded inbound writer performs this repair. Keyed by the
+    /// local `TaskList.id` rather than the href,
     /// which two accounts can share. App-local and never synced, like the
     /// trashed-list notice: on a fresh install it runs once and finds nothing.
     static func categoriesCatchUpPending(listID: String, defaults: UserDefaults = .standard) -> Bool {
@@ -1440,8 +1379,8 @@ actor SyncEngine {
         }
     }
 
-    private func restorePhotoAccess(listID: String, container: ModelContainer) async throws -> Bool {
-        guard let change = try await TaskPhotoAccessMaintenance.restore(listID: listID,
+    private func restorePhotoAccess(scope: TaskPhotoOwnership.Scope, container: ModelContainer) async throws -> Bool {
+        guard let change = try await TaskPhotoAccessMaintenance.restore(scope: scope,
             container: container) else { return false }
         publishExternalChange(change)
         return true
@@ -1450,58 +1389,76 @@ actor SyncEngine {
     /// Discovery omission is ambiguous. Only a full collection probe can revoke access.
     private func probeMissingPhotoLists(accountID: String, livePaths: Set<String>, baseURL: String,
         credentials: CalDAVClient.Credentials, container: ModelContainer) async throws {
-        let candidates = try await MainActor.run { () throws -> [(String, String)] in
+        let candidates = try await MainActor.run { () throws -> [TaskPhotoOwnership.Scope] in
             let context = ModelContext(container)
             let lists = try context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate {
                 $0.account?.id == accountID
             }))
-            var candidates: [(String, String)] = []
+            var candidates: [TaskPhotoOwnership.Scope] = []
             for list in lists where !livePaths.contains(list.serverURL) && !list.serverURL.isEmpty {
                 let id = list.id
                 var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.taskList?.id == id })
                 descriptor.relationshipKeyPathsForPrefetching = [\.photos]
                 let hasPhotos = try context.fetch(descriptor).contains { !$0.photos.isEmpty }
-                if list.photoAccessRevoked == true || hasPhotos { candidates.append((id, list.serverURL)) }
+                if list.photoAccessRevoked == true || hasPhotos {
+                    candidates.append(.init(accountID: accountID, listID: id, collectionPath: list.serverURL,
+                        serverBaseURL: baseURL, username: credentials.username))
+                }
             }
             return candidates
         }
-        for (listID, path) in candidates {
-            try Task.checkCancellation()
+        for scope in candidates {
+            try requirePhotoProbeScope(scope, container: container)
             do {
-                _ = try await calDAVClient.fetchTaskManifest(baseURL: baseURL,
-                    calendarPath: path, credentials: credentials)
-                _ = try await restorePhotoAccess(listID: listID, container: container)
+                _ = try await calDAVClient.fetchTaskManifest(baseURL: scope.serverBaseURL,
+                    calendarPath: scope.collectionPath, credentials: credentials)
             } catch {
-                if Self.isDefinitiveCollectionDenial(error),
-                   let change = try await TaskPhotoAccessMaintenance.revoke(listID: listID, container: container) {
+                if Self.isDefinitiveCollectionDenial(error) {
+                    let change = try await TaskPhotoAccessMaintenance.revoke(scope: scope,
+                        container: container, cache: taskPhotoCache)
                     publishExternalChange(change)
+                } else {
+                    try requirePhotoProbeScope(scope, container: container)
                 }
                 try recordOperationFailure(error)
+                continue
             }
+            _ = try await restorePhotoAccess(scope: scope, container: container)
+        }
+    }
+
+    private func requirePhotoProbeScope(_ scope: TaskPhotoOwnership.Scope, container: ModelContainer) throws {
+        try BackgroundRunBudget.protectingCurrent {
+            _ = try scope.requireList(in: ModelContext(container))
         }
     }
 
     /// A failed multiget/resource read is not proof of collection denial. Confirm with
     /// a collection REPORT before removing previews or cached originals.
     private func pullCalendarCheckingPhotoAccess(remoteCal: CalDAVClient.RemoteCalendar,
-        listID: String, accountID: String, baseURL: String, credentials: CalDAVClient.Credentials,
-        container: ModelContainer, months: Int, repairCategories: Bool) async throws -> Bool {
+        scope: TaskPhotoOwnership.Scope, credentials: CalDAVClient.Credentials,
+        container: ModelContainer, months: Int, repairCategories: Bool) async throws -> CalendarPullResult {
         do {
-            return try await pullCalendar(remoteCal: remoteCal, listID: listID, accountID: accountID,
-                baseURL: baseURL, credentials: credentials, container: container, months: months,
+            return try await pullCalendar(remoteCal: remoteCal, resourceScope: scope,
+                credentials: credentials, container: container, months: months,
                 repairCategories: repairCategories)
         } catch {
             guard Self.isDefinitiveCollectionDenial(error) else { throw error }
+            try requirePhotoProbeScope(scope, container: container)
             do {
-                _ = try await calDAVClient.fetchTaskManifest(baseURL: baseURL,
-                    calendarPath: remoteCal.href, credentials: credentials)
+                _ = try await calDAVClient.fetchTaskManifest(baseURL: scope.serverBaseURL,
+                    calendarPath: scope.collectionPath, credentials: credentials)
             } catch {
-                if Self.isDefinitiveCollectionDenial(error),
-                   let change = try await TaskPhotoAccessMaintenance.revoke(listID: listID, container: container) {
+                if Self.isDefinitiveCollectionDenial(error) {
+                    let change = try await TaskPhotoAccessMaintenance.revoke(scope: scope,
+                        container: container, cache: taskPhotoCache)
                     publishExternalChange(change)
+                } else {
+                    try requirePhotoProbeScope(scope, container: container)
                 }
                 throw error
             }
+            try requirePhotoProbeScope(scope, container: container)
             throw error
         }
     }
@@ -1511,13 +1468,14 @@ actor SyncEngine {
         credentials: CalDAVClient.Credentials, container: ModelContainer,
         uploadOriginals: Bool = true, deadline: Date? = nil) async throws -> Bool {
         do {
-            let changed = try await taskPhotoSync.synchronize(listID: listID,
+            let outcome = try await taskPhotoSync.synchronize(listID: listID,
                 access: PhotoServerAccess(baseURL: baseURL, username: credentials.username,
                     password: credentials.password), container: container,
                 uploadOriginals: uploadOriginals, deadline: deadline)
-            guard !changed.isEmpty else { return false }
+            if outcome.credentialsDeferred { lastOutcome.status = .partial }
+            guard !outcome.changedTaskIDs.isEmpty else { return false }
             publishExternalChange(SyncChange(revision: 0, accountIDs: [accountID], listIDs: [listID],
-                changedIDs: changed, deletedIDs: [], kind: .tasks))
+                changedIDs: outcome.changedTaskIDs, deletedIDs: [], kind: .tasks))
             return true
         } catch {
             try recordOperationFailure(error)
@@ -1526,6 +1484,58 @@ actor SyncEngine {
     }
 
     // MARK: - Push (Local → Remote)
+
+    private func catchUpLegacyTask(taskID: String, expectedListID: String, expectedAccountID: String,
+                                   runAccountID: String, baseURL: String, credentials: CalDAVClient.Credentials,
+                                   container: ModelContainer) async throws {
+        if let request = try await TaskPhotoLegacyCatchUp.requestInfo(taskID: taskID,
+            listID: expectedListID, accountID: expectedAccountID, container: container) {
+            guard let captured = request.photoScope else { throw SyncResourceState.Hold.needsRevalidation }
+            let access = PhotoServerAccess(baseURL: baseURL, username: credentials.username,
+                password: credentials.password)
+            let expectedSource = AccountCredentialScope(id: captured.accountID, serverBaseURL: captured.serverBaseURL,
+                                                        username: captured.username)
+            let runScope = AccountCredentialScope(id: runAccountID, serverBaseURL: baseURL,
+                                                  username: credentials.username)
+            let sourceAccess: PhotoServerAccess
+            if request.sourceAccountID == runAccountID && expectedSource == runScope {
+                sourceAccess = access
+            } else if request.sourceListID != nil {
+                sourceAccess = try await taskPhotoSync.sourceAccess(accountID: request.sourceAccountID,
+                    expected: expectedSource, container: container)
+            } else {
+                throw AccountCredentialDeferral.staleAccount
+            }
+            let responseScope = TaskPhotoOwnership.Scope(accountID: captured.accountID, listID: captured.listID,
+                collectionPath: captured.collectionPath, serverBaseURL: sourceAccess.baseURL, username: sourceAccess.username)
+            let sourceAuthScope = AuthFailureGate.Scope(accountID: request.sourceAccountID,
+                baseURL: sourceAccess.baseURL, username: sourceAccess.username, password: sourceAccess.password)
+            do {
+                if credentialGate.shouldSkip(sourceAuthScope) { throw CalDAVError.unauthorized }
+                let resource = try await captureServerDeferrals(accountID: request.sourceAccountID) {
+                    try await calDAVClient.fetchTask(baseURL: sourceAccess.baseURL,
+                        taskPath: try SyncResourceState.canonical(request.href, scope: captured),
+                        credentials: .init(username: sourceAccess.username, password: sourceAccess.password))
+                }
+                let parsed = try SyncBodyValidation.parse(resource, using: .init())
+                if let change = try await TaskPhotoLegacyCatchUp.accept(parsed, taskID: taskID,
+                    listID: expectedListID, accountID: expectedAccountID, expectedRequest: request,
+                    responseScope: responseScope, container: container) { publishExternalChange(change) }
+            } catch CalDAVError.notFound {
+                if let change = try await TaskPhotoLegacyCatchUp.acceptAbsence(taskID: taskID,
+                    listID: expectedListID, accountID: expectedAccountID, expectedRequest: request,
+                    responseScope: responseScope, container: container) { publishExternalChange(change) }
+            } catch let error as RetryDeferredError where error.httpStatusCode != nil && request.sourceAccountID != runAccountID {
+                throw OtherAccountSyncFailure(underlying: error)
+            } catch CalDAVError.unauthorized {
+                let runAuthScope = AuthFailureGate.Scope(accountID: runAccountID, baseURL: baseURL,
+                    username: credentials.username, password: credentials.password)
+                guard sourceAuthScope != runAuthScope else { throw CalDAVError.unauthorized }
+                credentialGate.recordFailure(sourceAuthScope)
+                throw OtherAccountSyncFailure(underlying: CalDAVError.unauthorized)
+            }
+        }
+    }
 
     /// Pushes a locally modified task to the server.
     private func pushLocalTask(
@@ -1538,35 +1548,23 @@ actor SyncEngine {
     ) async throws {
         let taskID = task.id
         let container = modelContext.container
-        if let request = try await TaskPhotoLegacyCatchUp.requestInfo(taskID: taskID,
-            listID: expectedListID, accountID: expectedAccountID, container: container) {
-            let access = PhotoServerAccess(baseURL: baseURL, username: credentials.username,
-                password: credentials.password)
-            let sourceAccess = request.sourceListID == nil ? access :
-                try await TaskPhotoSync.sourceAccess(accountID: request.sourceAccountID,
-                    fallback: access, container: container)
-            let resource = try await calDAVClient.fetchTask(baseURL: sourceAccess.baseURL,
-                taskPath: request.href, credentials: .init(username: sourceAccess.username,
-                    password: sourceAccess.password))
-            guard let todo = try ICalendarParser.parseSingleVTODO(from: resource.icsData) else {
-                throw CalDAVError.invalidResponse
-            }
-            if let change = try await TaskPhotoLegacyCatchUp.apply(todo, taskID: taskID,
-                listID: expectedListID, accountID: expectedAccountID, href: request.href,
-                container: container, expectedRequest: request) {
-                publishExternalChange(change)
-            }
-        }
+        try await catchUpLegacyTask(taskID: taskID, expectedListID: expectedListID,
+            expectedAccountID: expectedAccountID, runAccountID: expectedAccountID, baseURL: baseURL, credentials: credentials,
+            container: container)
         guard let snapshot = try await MainActor.run(body: {
             try SyncPushAcknowledgement.snapshot(taskID: taskID, calendarPath: calendarPath, container: container, expectedListID: expectedListID, expectedAccountID: expectedAccountID)
         }) else { return }
         let icsData = snapshot.payload
         let taskPath = snapshot.path
+        let responseScope = TaskPhotoOwnership.Scope(accountID: expectedAccountID, listID: expectedListID,
+            collectionPath: calendarPath, serverBaseURL: baseURL, username: credentials.username)
 
         do {
             let newEtag = try await calDAVClient.putTask(
                 baseURL: baseURL, taskPath: taskPath, icsData: icsData,
-                etag: snapshot.etag, credentials: credentials)
+                etag: snapshot.etag, credentials: credentials) {
+                try await SyncPushAcknowledgement.validateWrite(snapshot, container: container, responseScope: responseScope)
+            }
             try await MainActor.run {
                 try SyncPushAcknowledgement.acknowledge(snapshot, etag: newEtag, container: container)
             }
@@ -1593,10 +1591,11 @@ actor SyncEngine {
                     taskPath: taskPath,
                     credentials: credentials
                 )
-                let parsed = ParsedRemoteTask(href: refreshed.href, etag: refreshed.etag,
-                    todo: try ICalendarParser.parseSingleVTODO(from: refreshed.icsData))
+                let parsed = try SyncBodyValidation.parse(refreshed, using: .init())
                 let change = try await MainActor.run {
-                    try SyncPushAcknowledgement.applyConflict(snapshot, resource: parsed, container: container)
+                    try SyncPushAcknowledgement.applyConflict(snapshot, resource: parsed, container: container,
+                        responseScope: .init(accountID: expectedAccountID, listID: expectedListID,
+                            collectionPath: calendarPath, serverBaseURL: baseURL, username: credentials.username))
                 }
                 publishExternalChange(change)
                 // Only pending photo operations leave the rebased task dirty. A fresh
@@ -1605,7 +1604,9 @@ actor SyncEngine {
                     calendarPath: calendarPath, container: container,
                     expectedListID: expectedListID, expectedAccountID: expectedAccountID) {
                     let etag = try await calDAVClient.putTask(baseURL: baseURL, taskPath: retry.path,
-                        icsData: retry.payload, etag: retry.etag, credentials: credentials)
+                        icsData: retry.payload, etag: retry.etag, credentials: credentials) {
+                        try await SyncPushAcknowledgement.validateWrite(retry, container: container, responseScope: responseScope)
+                    }
                     try await SyncPushAcknowledgement.acknowledge(retry, etag: etag, container: container)
                 }
             case .localWins:
@@ -1614,9 +1615,11 @@ actor SyncEngine {
                     baseURL: baseURL,
                     taskPath: taskPath,
                     icsData: icsData,
-                    etag: nil,
+                    etag: snapshot.etag,
                     credentials: credentials
-                )
+                ) {
+                    try await SyncPushAcknowledgement.validateWrite(snapshot, container: container, responseScope: responseScope)
+                }
                 try await MainActor.run {
                     try SyncPushAcknowledgement.acknowledge(snapshot, etag: newEtag, container: container)
                 }
@@ -1628,54 +1631,34 @@ actor SyncEngine {
 
     /// Pushes a deletion to the server.
     private func pushDeletion(
-        _ task: TaskItem,
-        calendarPath: String,
+        _ taskID: String,
+        expectedListID: String, expectedAccountID: String,
         baseURL: String,
         credentials: CalDAVClient.Credentials,
-        modelContext: ModelContext
+        container: ModelContainer
     ) async throws {
-        let taskID = task.id
-        let container = modelContext.container
-        guard let snapshot = try await SyncPushAcknowledgement.deletionSnapshot(taskID: taskID, container: container) else { return }
+        try await catchUpLegacyTask(taskID: taskID, expectedListID: expectedListID,
+            expectedAccountID: expectedAccountID, runAccountID: expectedAccountID, baseURL: baseURL,
+            credentials: credentials, container: container)
+        guard let snapshot = try await SyncPushAcknowledgement.deletionSnapshot(taskID: taskID, container: container,
+            expectedListID: expectedListID, expectedAccountID: expectedAccountID) else { return }
         if let href = snapshot.href, !href.isEmpty {
-            try await calDAVClient.deleteTask(baseURL: baseURL, taskPath: href, etag: snapshot.etag, credentials: credentials)
+            guard snapshot.resourceProof?.scope.serverBaseURL == baseURL,
+                  snapshot.resourceProof?.scope.username == credentials.username else { throw SyncResourceState.Hold.needsRevalidation }
+            do {
+                guard let target = snapshot.resourceProof?.href else { throw SyncResourceState.Hold.needsRevalidation }
+                try await calDAVClient.deleteTask(baseURL: baseURL, taskPath: target, etag: snapshot.etag,
+                    credentials: credentials) {
+                    try await SyncPushAcknowledgement.validateDeletion(snapshot, container: container)
+                }
+            } catch is SupersededTaskDeletion {
+                return
+            }
         }
         try Task.checkCancellation()
         if let change = try await SyncPushAcknowledgement.acknowledgeDeletion(snapshot, container: container) {
             publishExternalChange(change)
         }
-    }
-
-    // MARK: - Serialization
-
-    /// Serializes a TaskItem to an .ics string for PUT.
-    private func serializeTask(_ task: TaskItem) -> String {
-        return ICalendarSerializer.serialize(
-            uid: task.uid,
-            summary: task.title,
-            description: task.notes.isEmpty ? nil : task.notes,
-            status: task.status.rawValue,
-            priority: task.priorityRaw,
-            percentComplete: task.percentComplete,
-            dueDate: task.dueDate,
-            startDate: task.startDate,
-            completedDate: task.completedDate,
-            createdDate: task.createdDate,
-            lastModifiedDate: task.lastModifiedDate ?? Date(),
-            categories: task.tags.compactMap { $0.name },
-            location: task.location,
-            latitude: task.latitude,
-            longitude: task.longitude,
-            url: task.url,
-            parentUID: task.parentUID,
-            recurrenceRule: task.recurrenceRule,
-            alarmTriggerSeconds: task.reminderOffset,
-            isDueDateOnly: task.isDueDateOnly,
-            isStartDateOnly: task.isStartDateOnly,
-            manualSortOrder: task.effectiveSortOrder,
-            photos: task.photoAttachments,
-            opaqueAttachments: task.opaqueAttachments
-        )
     }
 
     // MARK: - Queries
@@ -1684,21 +1667,30 @@ actor SyncEngine {
     private func findOrCreateTaskList(
         for remoteCal: CalDAVClient.RemoteCalendar,
         account: ServerAccount,
+        accountScope: ListAccountScope,
         modelContext: ModelContext
-    ) -> TaskList {
+    ) async throws -> TaskList {
+        let container = modelContext.container
+        try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
         let href = remoteCal.href
-        let lists = account.taskLists
-
+        let lists = try BackgroundRunBudget.protectingCurrent { account.taskLists }
         if let existing = lists.first(where: { $0.serverURL == href }) {
-            let before = (existing.name, existing.colorHex, existing.isReadOnly)
-            existing.applyRemoteMetadata(name: remoteCal.displayName, colorHex: remoteCal.color)
-            if existing.isReadOnly != remoteCal.isReadOnly { existing.isReadOnly = remoteCal.isReadOnly }
-            if before != (existing.name, existing.colorHex, existing.isReadOnly) {
-                visiblyChangedLists.insert(existing.id)
+            let listID = existing.id
+            let metadataDiffers = existing.name != remoteCal.displayName
+                || (!remoteCal.color.isEmpty && existing.colorHex != remoteCal.color)
+            if metadataDiffers || existing.isReadOnly != remoteCal.isReadOnly {
+                if try await Self.applyDiscoveredListMetadata(remoteCal, listID: listID,
+                    accountScope: accountScope, container: container) {
+                    publishExternalChange(.init(revision: 0, accountIDs: [accountScope.id], listIDs: [listID],
+                        changedIDs: [], deletedIDs: [], kind: .lists))
+                }
+                try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
             }
             return existing
         }
 
+        let section = try BackgroundRunBudget.current?.beginCriticalSection()
+        defer { section?.end() }
         // Create new list
         let newList = TaskList(
             serverURL: href,
@@ -1715,69 +1707,259 @@ actor SyncEngine {
 
     // MARK: - Push Local Lists
 
-    /// Pushes local-only task lists to the server via `MKCALENDAR`.
-    ///
-    /// Lists with an empty `serverURL` were created locally on the device
-    /// and need to be created on the remote CalDAV server. After creation,
-    /// their `serverURL` is updated to match the remote href so subsequent
-    /// syncs correctly associate them.
-    private func pushLocalLists(
-        account: ServerAccount,
-        baseURL: String,
-        calendarHomePath: String,
-        credentials: CalDAVClient.Credentials,
-        modelContext: ModelContext
-    ) async throws {
-        let accountID = account.id
-        let localOnlyLists = account.taskLists.filter { $0.serverURL.isEmpty }
+    private struct ListAccountScope: Sendable {
+        let id: String
+        let serverBaseURL: String
+        let username: String
 
-        for list in localOnlyLists {
-            do {
-                let remoteHref = try await calDAVClient.createCalendar(
-                    baseURL: baseURL,
-                    calendarHomePath: calendarHomePath,
-                    name: list.name,
-                    color: list.colorHex,
-                    credentials: credentials
-                )
-                try requireLiveAccount(accountID, container: modelContext.container)
-                list.serverURL = remoteHref
-                list.isMetadataDirty = false
-                try saveAndPublish(modelContext, publish: false)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                try requireLiveAccount(accountID, container: modelContext.container)
-                // Log but don't fail the whole sync for one list
-                logger.error("Failed to push list '\(list.name)': \(error.localizedDescription)")
-            }
+        init(_ account: ServerAccount) {
+            id = account.id
+            serverBaseURL = account.serverBaseURL
+            username = account.username
         }
 
-        // Lists already on the server whose name or colour was edited on this device. This
-        // has to run before Step 2 re-discovers them, or the PROPFIND that follows reads the
-        // server's older copy back over the edit. A failure here leaves `isMetadataDirty`
-        // set, which is also what stops discovery adopting over it until the push lands.
-        let editedLists = account.taskLists.filter { !$0.serverURL.isEmpty && $0.isMetadataDirty }
+        func matches(_ account: ServerAccount) -> Bool {
+            id == account.id && matchesRequest(baseURL: account.serverBaseURL, username: account.username)
+        }
 
-        for list in editedLists {
+        func matchesRequest(baseURL: String, username: String) -> Bool {
+            serverBaseURL.utf8.elementsEqual(baseURL.utf8) && self.username.utf8.elementsEqual(username.utf8)
+        }
+    }
+
+    private struct ListWriteSnapshot: Sendable {
+        let listID: String
+        let accountScope: ListAccountScope
+        let path: String
+        let name: String
+        let color: String
+
+        init(list: TaskList, accountScope: ListAccountScope) {
+            listID = list.id
+            self.accountScope = accountScope
+            path = list.serverURL
+            name = list.name
+            color = list.colorHex
+        }
+
+        func samePayload(as other: Self) -> Bool {
+            path.utf8.elementsEqual(other.path.utf8)
+                && name.utf8.elementsEqual(other.name.utf8)
+                && color.utf8.elementsEqual(other.color.utf8)
+        }
+
+        func matchesMetadata(_ list: TaskList) -> Bool {
+            name.utf8.elementsEqual(list.name.utf8) && color.utf8.elementsEqual(list.colorHex.utf8)
+        }
+
+        func matchesScope(_ list: TaskList) -> Bool {
+            guard let account = list.account else { return false }
+            return accountScope.matches(account) && list.serverURL.utf8.elementsEqual(path.utf8)
+        }
+    }
+
+    private struct SupersededListWrite: Error {}
+
+    @MainActor
+    private static func hasPendingListChange(_ list: TaskList, container: ModelContainer) -> Bool {
+        let main = container.mainContext
+        return (main.insertedModelsArray + main.changedModelsArray + main.deletedModelsArray)
+            .contains { $0.persistentModelID == list.persistentModelID }
+            || list.account.map { hasPendingAccountScopeChange($0, in: main) } == true
+    }
+
+    @MainActor
+    private static func hasPendingAccountScopeChange(_ account: ServerAccount, in main: ModelContext) -> Bool {
+        main.deletedModelsArray.contains { $0.persistentModelID == account.persistentModelID }
+            || main.changedModelsArray.contains { model in
+                guard let pending = model as? ServerAccount,
+                      pending.persistentModelID == account.persistentModelID else { return false }
+                return !ListAccountScope(account).matches(pending)
+            }
+    }
+
+    @MainActor
+    private static func captureListCreation(listID: String, accountScope: ListAccountScope, target: URL,
+        baseURL: String, container: ModelContainer) throws -> ListWriteSnapshot? {
+        let context = ModelContext(container)
+        let predicate = #Predicate<TaskList> { $0.id == listID }
+        guard let list = try context.fetch(FetchDescriptor(predicate: predicate)).first,
+              let account = list.account, accountScope.matches(account), list.serverURL.isEmpty else { return nil }
+        guard !hasPendingListChange(list, container: container) else { throw CalDAVDiscovery.ambiguousCollection }
+        try requireUnclaimedCreationTarget(target, account: account, baseURL: baseURL, container: container)
+        return ListWriteSnapshot(list: list, accountScope: accountScope)
+    }
+
+    @MainActor
+    private static func requireUnclaimedCreationTarget(_ target: URL, account: ServerAccount,
+        baseURL: String, container: ModelContainer) throws {
+        guard let base = URL(string: baseURL) else { throw CalDAVError.invalidURL }
+        let main = container.mainContext
+        let pending = (main.insertedModelsArray + main.changedModelsArray).compactMap { $0 as? TaskList }
+            .filter { $0.account?.id == account.id }
+        if (account.taskLists + pending).contains(where: { list in
+            guard !list.serverURL.isEmpty, let url = URL(string: list.serverURL, relativeTo: base)?.absoluteURL else { return false }
+            return CalDAVDiscovery.sameCollection(url, target)
+        }) {
+            throw CalDAVDiscovery.ambiguousCollection
+        }
+    }
+
+    @MainActor
+    private static func bindCreatedList(_ creation: CalDAVClient.CalendarCreation,
+        snapshot: ListWriteSnapshot, baseURL: String, container: ModelContainer) throws -> Bool {
+        try Task.checkCancellation()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let listID = snapshot.listID
+        let predicate = #Predicate<TaskList> { $0.id == listID }
+        guard let list = try context.fetch(FetchDescriptor(predicate: predicate)).first,
+              let account = list.account, snapshot.matchesScope(list),
+              !hasPendingListChange(list, container: container),
+              let target = URL(string: creation.href) else { throw CalDAVDiscovery.ambiguousCollection }
+        try requireUnclaimedCreationTarget(target, account: account, baseURL: baseURL, container: container)
+        let newerMetadata = !snapshot.matchesMetadata(list)
+        list.serverURL = creation.href
+        list.isMetadataDirty = creation.adopted || newerMetadata
+        try context.save()
+        return newerMetadata && !creation.adopted
+    }
+
+    private func pushNewLists(_ listIDs: [String], accountScope: ListAccountScope, baseURL: String,
+        discovery: CalDAVDiscoveryResult, credentials: CalDAVClient.Credentials, container: ModelContainer
+    ) async throws -> Set<String> {
+        var deferredMetadata = Set<String>()
+        for listID in listIDs {
             do {
-                try await calDAVClient.updateCalendarProperties(
-                    baseURL: baseURL,
-                    calendarPath: list.serverURL,
-                    name: list.name,
-                    colorHex: list.colorHex,
-                    credentials: credentials
-                )
-                try requireLiveAccount(accountID, container: modelContext.container)
-                list.isMetadataDirty = false
-                try saveAndPublish(modelContext, publish: false)
-            } catch is CancellationError {
-                throw CancellationError()
+                let target = try CalDAVDiscovery.creationTarget(listID: listID, homeURL: discovery.calendarHomeURL)
+                guard let snapshot = try await Self.captureListCreation(listID: listID, accountScope: accountScope,
+                    target: target, baseURL: baseURL, container: container) else { continue }
+                let alreadyDiscovered = discovery.collectionAddresses.contains {
+                    CalDAVDiscovery.sameCollection($0.requestURL, target)
+                }
+                let creation = try await calDAVClient.createCalendar(baseURL: baseURL,
+                    calendarHomePath: discovery.calendarHomeURL.absoluteString, listID: listID,
+                    name: snapshot.name, color: snapshot.color, credentials: credentials,
+                    alreadyDiscovered: alreadyDiscovered, validateAccount: {
+                        guard try await Self.captureListCreation(listID: listID, accountScope: accountScope,
+                            target: target, baseURL: baseURL, container: container) != nil else {
+                            throw SupersededListWrite()
+                        }
+                    })
+                try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
+                if try await Self.bindCreatedList(creation, snapshot: snapshot, baseURL: baseURL, container: container) {
+                    deferredMetadata.insert(listID)
+                    try recordOperationFailure(SupersededListWrite())
+                }
             } catch {
-                try requireLiveAccount(accountID, container: modelContext.container)
-                logger.error(
-                    "Failed to push list metadata '\(list.name)': \(error.localizedDescription)"
-                )
+                if error is RetryDeferredError || error is BackgroundBudgetExhausted { throw error }
+                try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
+                try recordOperationFailure(error)
+            }
+        }
+        return deferredMetadata
+    }
+
+    private func heldCreationHrefs(in live: [CalDAVClient.RemoteCalendar], homeURL: URL,
+                                   account: ServerAccount) throws -> Set<String> {
+        let section = try BackgroundRunBudget.current?.beginCriticalSection()
+        defer { section?.end() }
+        let lists = account.taskLists
+        let held = try CalDAVDiscovery.heldCreationHrefs(live,
+            unboundIDs: lists.filter { $0.serverURL.isEmpty }.map(\.id),
+            boundHrefs: Set(lists.map(\.serverURL)), homeURL: homeURL)
+        if !held.isEmpty {
+            let failure = CalDAVDiscovery.ambiguousCollection
+            if let summary = SyncFailure.from(failure), !lastOutcome.failures.contains(summary) {
+                try recordOperationFailure(failure)
+            }
+        }
+        return held
+    }
+
+    @MainActor
+    private static func applyDiscoveredListMetadata(_ remote: CalDAVClient.RemoteCalendar, listID: String,
+        accountScope: ListAccountScope, container: ModelContainer) throws -> Bool {
+        let section = try BackgroundRunBudget.current?.beginCriticalSection()
+        defer { section?.end() }
+        try Task.checkCancellation()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let predicate = #Predicate<TaskList> { $0.id == listID }
+        guard let list = try context.fetch(FetchDescriptor(predicate: predicate)).first,
+              let account = list.account, accountScope.matches(account),
+              list.serverURL.utf8.elementsEqual(remote.href.utf8) else { return false }
+
+        let main = container.mainContext
+        let modelID = list.persistentModelID
+        let insertedOrDeleted = (main.insertedModelsArray + main.deletedModelsArray)
+            .contains { $0.persistentModelID == modelID }
+        guard !insertedOrDeleted, !hasPendingAccountScopeChange(account, in: main) else { return false }
+        let pending = main.changedModelsArray.first { $0.persistentModelID == modelID } as? TaskList
+        if let pending {
+            guard pending.id.utf8.elementsEqual(list.id.utf8),
+                  pending.serverURL.utf8.elementsEqual(list.serverURL.utf8),
+                  pending.calendarPath.map({ Array($0.utf8) }) == list.calendarPath.map({ Array($0.utf8) }),
+                  let pendingAccount = pending.account, pendingAccount.persistentModelID == account.persistentModelID,
+                  accountScope.matches(pendingAccount) else { return false }
+        }
+
+        let before = (list.name, list.colorHex, list.isReadOnly)
+        if pending == nil { list.applyRemoteMetadata(name: remote.displayName, colorHex: remote.color) }
+        if list.isReadOnly != remote.isReadOnly { list.isReadOnly = remote.isReadOnly }
+        let changed = before != (list.name, list.colorHex, list.isReadOnly)
+        if changed { try context.save() }
+        // Saving a pending row can write its old privilege back to the store.
+        if let pending, pending.isReadOnly != list.isReadOnly { pending.isReadOnly = list.isReadOnly }
+        return changed
+    }
+
+    @MainActor
+    private static func captureListMetadata(listID: String, accountScope: ListAccountScope,
+        container: ModelContainer) throws -> ListWriteSnapshot? {
+        let context = ModelContext(container)
+        let predicate = #Predicate<TaskList> { $0.id == listID }
+        guard let list = try context.fetch(FetchDescriptor(predicate: predicate)).first,
+              let account = list.account, accountScope.matches(account),
+              !list.serverURL.isEmpty, list.isMetadataDirty else { return nil }
+        guard !hasPendingListChange(list, container: container) else { throw SupersededListWrite() }
+        return ListWriteSnapshot(list: list, accountScope: accountScope)
+    }
+
+    @MainActor
+    private static func acknowledgeListMetadata(_ snapshot: ListWriteSnapshot, container: ModelContainer) throws {
+        try Task.checkCancellation()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let listID = snapshot.listID
+        let predicate = #Predicate<TaskList> { $0.id == listID }
+        guard let list = try context.fetch(FetchDescriptor(predicate: predicate)).first,
+              list.isMetadataDirty, snapshot.matchesScope(list), snapshot.matchesMetadata(list),
+              !hasPendingListChange(list, container: container) else { throw SupersededListWrite() }
+        list.isMetadataDirty = false
+        try context.save()
+    }
+
+    private func pushListMetadata(_ listIDs: [String], accountScope: ListAccountScope, baseURL: String,
+        credentials: CalDAVClient.Credentials, container: ModelContainer) async throws {
+        for listID in listIDs {
+            do {
+                guard let snapshot = try await Self.captureListMetadata(listID: listID, accountScope: accountScope,
+                    container: container) else { continue }
+                try await calDAVClient.updateCalendarProperties(baseURL: baseURL,
+                    calendarPath: snapshot.path, name: snapshot.name, colorHex: snapshot.color,
+                    credentials: credentials, validateAttempt: {
+                        guard let current = try await Self.captureListMetadata(listID: listID, accountScope: accountScope,
+                            container: container), snapshot.samePayload(as: current) else {
+                            throw SupersededListWrite()
+                        }
+                    })
+                try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
+                try await Self.acknowledgeListMetadata(snapshot, container: container)
+            } catch {
+                if error is RetryDeferredError || error is BackgroundBudgetExhausted { throw error }
+                try requireLiveAccount(accountScope.id, container: container, matching: accountScope)
+                try recordOperationFailure(error)
             }
         }
     }
@@ -1803,12 +1985,9 @@ actor SyncEngine {
     /// which can be stale/unfaulted in background contexts.
     /// Tasks awaiting a DELETE, **deepest first**.
     ///
-    /// The order is part of the contract, not a detail. `pushDeletion` hard-
-    /// deletes each task once its DELETE succeeds, and that hard delete cascades
-    /// to the task's children — so pushing a parent first removes its children
-    /// from the context before their own DELETEs are sent, leaving them on the
-    /// server exactly as the original bug did. Deepest first means every DELETE
-    /// that goes out belongs to a row with nothing left underneath it.
+    /// Try children first so their parent can be removed in the same sync.
+    /// Deletion snapshots and acknowledgements separately verify that each row
+    /// is a leaf, since a failed DELETE or a new child can change eligibility.
     nonisolated func findDeletedTasks(
         for taskList: TaskList,
         modelContext: ModelContext
@@ -1819,40 +1998,6 @@ actor SyncEngine {
         }
         let tasks = (try? modelContext.fetch(FetchDescriptor<TaskItem>(predicate: predicate))) ?? []
         return tasks.sorted { TaskListHelpers.depth(of: $0) > TaskListHelpers.depth(of: $1) }
-    }
-
-    // MARK: - Parent Resolution
-
-    /// Resolves `parentUID` strings into actual SwiftData `parentTask` relationships.
-    ///
-    /// After all tasks are fetched from the server, each task's `parentUID` (the CalDAV
-    /// `RELATED-TO;RELTYPE=PARENT` UID) is matched against other tasks in the same list
-    /// to build the `parentTask`/`subtasks` hierarchy.
-    private func resolveParentRelationships(
-        for taskList: TaskList,
-        modelContext: ModelContext
-    ) throws {
-        // Use explicit FetchDescriptor instead of taskList.tasks relationship,
-        // which can be stale/unfaulted in background contexts.
-        let listID = taskList.id
-        let predicate = #Predicate<TaskItem> {
-            $0.taskList?.id == listID && !$0.isDeletedLocally
-        }
-        let allTasks = (try? modelContext.fetch(FetchDescriptor<TaskItem>(predicate: predicate))) ?? []
-
-        // Build a UID → TaskItem lookup for O(1) parent resolution
-        var uidMap: [String: TaskItem] = [:]
-        for task in allTasks {
-            uidMap[task.uid] = task
-        }
-
-        let rawParents = Dictionary(allTasks.map { ($0.uid, $0.parentUID) }, uniquingKeysWith: { _, latest in latest })
-        let validParents = HierarchyResolver.resolvedParents(rawParents)
-        for task in allTasks {
-            let parent = validParents[task.uid].flatMap { uidMap[$0] }
-            if task.parentTask !== parent { task.parentTask = parent }
-            // Keep parentUID unchanged so missing/cyclic source links remain recoverable.
-        }
     }
 
     // MARK: - State Management
@@ -1882,20 +2027,6 @@ actor SyncEngine {
         return (active, completed)
     }
 
-    // MARK: - Pull-Skip Decision
-
-    /// The longest a matching CTag may suppress a full pull before one is forced
-    /// regardless. Bounds the CTag optimization so a stale/cached `getctag` can
-    /// never silently blind the device to server changes indefinitely.
-    static let maxPullSkipInterval: TimeInterval = 600 // 10 minutes
-
-    /// Decides whether the inbound pull may be skipped for a calendar.
-    ///
-    /// The CTag delta check is only a *bandwidth* optimization, so it must never
-    /// be the reason server data goes missing. A pull is skipped **only** when
-    /// the stored CTag is present, equals the freshly-fetched server CTag, AND a
-    /// full pull completed within `maxSkipInterval`. Any other case (no/empty
-    /// CTag, differing CTags, no prior full pull, or a stale one) forces a pull.
     nonisolated static func partitionParsedTasks(_ tasks: [ParsedRemoteTask], months: Int,
                                                 now: Date = Date()) -> ([ParsedRemoteTask], [ParsedRemoteTask]) {
         let cutoff = months > 0 ? Calendar.current.date(byAdding: .month, value: -months, to: now) : nil
@@ -1908,26 +2039,6 @@ actor SyncEngine {
             } else { active.append(task) }
         }
         return (active, completed)
-    }
-
-    static func shouldSkipPull(
-        localCTag: String?,
-        remoteCTag: String,
-        lastFullPull: Date?,
-        now: Date,
-        maxSkipInterval: TimeInterval
-    ) -> Bool {
-        guard let localCTag, !localCTag.isEmpty, localCTag == remoteCTag else {
-            return false // ctags differ / missing → pull
-        }
-        guard let lastFullPull else {
-            return false // never completed a full pull → pull
-        }
-        // A backward clock jump (NTP correction, manual change) makes the elapsed
-        // interval negative; treat that as "stale" and pull, so a clock change can
-        // never wedge the skip optimization into suppressing server changes.
-        let elapsed = now.timeIntervalSince(lastFullPull)
-        return elapsed >= 0 && elapsed < maxSkipInterval
     }
 
     // MARK: - Sync Window Filter
@@ -2029,9 +2140,8 @@ actor SyncEngine {
         existingTaskMap(for: taskList, modelContext: modelContext)
     }
 
-    /// Test-accessible wrapper for `processRemoteTask`, the foreground twin of
-    /// `applyRemoteTask`. Actor-isolated, so unlike `testApplyRemoteTask` this
-    /// one is `async`.
+    /// Synchronous test wrapper for the legacy per-resource importer seam.
+    /// Production pulls use the shared bounded writer instead.
     @discardableResult
     nonisolated func testProcessRemoteTask(
         _ remoteTask: CalDAVClient.RemoteTask,

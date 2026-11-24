@@ -54,6 +54,10 @@ struct PluralRuleGuardTests {
     static let registry: [PluralEntry] = [
         // ---- NowThis, whole-string variations (one placeholder) ----
         PluralEntry(catalog: "NowThis/Localizable.xcstrings",
+                    key: "tasks.row.deleteConfirmation", slot: "",
+                    one: "Delete this task and %lld subtask?", other: "Delete this task and %lld subtasks?",
+                    site: "TaskRowView — subtree deletion confirmation"),
+        PluralEntry(catalog: "NowThis/Localizable.xcstrings",
                     key: "tasks.row.a11y.subtaskCount", slot: "",
                     one: "1 subtask", other: "%lld subtasks",
                     site: "TaskRowView — VoiceOver label fragment"),
@@ -214,6 +218,9 @@ struct PluralRuleGuardTests {
     /// the catalog said. They are covered structurally and that difference is counted separately
     /// in the failure message rather than hidden.
     static let runtimeProbes: [String: @Sendable (Int) -> String] = [
+        "tasks.row.deleteConfirmation": {
+            String(localized: "tasks.row.deleteConfirmation",
+                   defaultValue: "Delete this task and \($0) subtasks?") },
         "tasks.row.a11y.subtaskCount": {
             String(localized: "tasks.row.a11y.subtaskCount", defaultValue: "\($0) subtasks") },
         "calendar.month.cell.a11y.taskCount": {

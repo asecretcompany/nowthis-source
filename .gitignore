@@ -35,19 +35,24 @@ Package.resolved
 Local.xcconfig
 *.local
 
-# === Claude Code ===
-.claude/
+# === Assistant and agent tools ===
+.claude
+.claude.json
+.claude.json.backup*
+.claude-plugin
 CLAUDE.md
 CLAUDE.local.md
 .mcp.json
 
-# === Codex ===
-.codex/
-.agents/
+# === Agent workspace files ===
+.codex
+.codex-plugin
+.openai
+.agents
 AGENTS.md
 AGENTS.override.md
 
-# === Other AI coding tools ===
+# === Other development tools ===
 .gemini/
 GEMINI.md
 .cursor/

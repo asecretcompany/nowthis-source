@@ -23,10 +23,9 @@ import SwiftData
 /// locally, and the next push writes *that* deletion back — a read bug turned
 /// into a worse write bug.
 ///
-/// So it is `[String]?` now, and absence is respected. The precedent is twenty
-/// lines away in `applyTodoData`, which already says the same thing about
-/// `X-APPLE-SORT-ORDER`: adopt the server's value only when present, so a local
-/// one isn't wiped by a VTODO that omits it.
+/// So it is `[String]?` now, and absence is respected. `SyncImportStore.applyFields`
+/// applies the same present-only rule to `X-APPLE-SORT-ORDER`, so omitted server
+/// properties do not wipe local values.
 ///
 /// The two halves are tested separately below because they fail separately:
 /// `absent` must change nothing, `present` must be adopted exactly.
@@ -223,6 +222,64 @@ struct SyncTagRoundTripTests {
                   uid: "tag-5", to: task, list: list, context: context)
 
         #expect(task.tags.isEmpty)
+    }
+
+    @Test("Removing the last tag reaches another device and survives its next title edit")
+    @MainActor
+    func removingLastTagRoundTripsBetweenDevices() throws {
+        let uid = "clear-last-tag"
+        let href = "/calendars/tasks/\(uid).ics"
+        func remote(_ body: String, etag: String) throws -> ParsedRemoteTask {
+            try SyncBodyValidation.parse(.init(href: href, etag: etag, icsData: body),
+                                         using: ICalendarParser.FormatterCache())
+        }
+
+        let initial = try remote(vtodo(uid: uid, categories: ["work"]), etag: "etag-1")
+        func makeDevice() throws -> (ModelContainer, SyncInboundBatchWriter) {
+            let container = try makeContainer()
+            let context = container.mainContext
+            let list = makeList(in: context)
+            let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://cloud.example.test",
+                                        username: "tester")
+            context.insert(account)
+            list.account = account
+            try context.save()
+            let reader = SyncInboundBatchWriter(container: container, listID: list.id)
+            _ = try reader.apply([initial])
+            return (container, reader)
+        }
+
+        let (deviceA, _) = try makeDevice()
+        let (deviceB, readerB) = try makeDevice()
+        let contextA = deviceA.mainContext
+        let taskA = try #require(try contextA.fetch(FetchDescriptor<TaskItem>()).first)
+        #expect(taskA.tags.map(\.name) == ["work"])
+        let beforeClear = ModelContext(deviceB)
+        #expect(try beforeClear.fetch(FetchDescriptor<TaskItem>()).first?.tags.map(\.name) == ["work"])
+
+        let editDate = Date(timeIntervalSince1970: 1_800_000_000)
+        taskA.tags.removeAll()
+        TaskListHelpers.markTagsChanged(on: taskA, now: editDate)
+        try contextA.save()
+        let clear = try #require(try SyncPushAcknowledgement.snapshot(taskID: taskA.id,
+            calendarPath: "/calendars/tasks/", container: deviceA))
+
+        _ = try readerB.apply([try remote(clear.payload, etag: "etag-2")])
+        let contextB = deviceB.mainContext
+        let taskB = try #require(try contextB.fetch(FetchDescriptor<TaskItem>()).first)
+        #expect(taskB.etag == "etag-2")
+        #expect(taskB.tags.isEmpty)
+        #expect(clear.payload.components(separatedBy: "\r\n").contains("CATEGORIES:"))
+
+        taskB.title = "Buy oat milk"
+        taskB.lastModifiedDate = editDate.addingTimeInterval(60)
+        taskB.isDirty = true
+        try contextB.save()
+        let titleEdit = try #require(try SyncPushAcknowledgement.snapshot(taskID: taskB.id,
+            calendarPath: "/calendars/tasks/", container: deviceB))
+        let updated = try #require(try remote(titleEdit.payload, etag: "etag-3").todo)
+        #expect(updated.summary == "Buy oat milk")
+        #expect(updated.categories == [])
     }
 
     // MARK: - The other direction: a tag added here
@@ -454,47 +511,56 @@ struct SyncTagRoundTripTests {
 
         // This app's serializer: one property, joined.
         let names = ["Home, Garden", "R&D; Q3", #"C:\Temp"#, "Work"]
-        let joined = "CATEGORIES:" + names.map(ICalendarSerializer.escapeText).joined(separator: ",")
-        #expect(try categories([joined]) == names)
+        let ics = ICalendarSerializer.serialize(uid: "esc-1", summary: "Tagged task", categories: names)
+        #expect(try ICalendarParser.parseSingleVTODO(from: ics)?.categories == names)
     }
 
-    // MARK: - The catch-up is wired into the pull
+    @Test("Equal CTag category repair reaches the dirty task before conditional upload")
+    @MainActor
+    func catchUpPrecedesForegroundUpload() async throws {
+        let host = "category-repair-" + UUID().uuidString.lowercased() + ".invalid"
+        let baseURL = "https://" + host
+        let container = try DAVSyncScenario.container()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let context = container.mainContext
+        let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
+        let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        context.insert(list); list.account = account
+        let task = TaskItem(uid: "category-repair", title: "Local edit")
+        let href = "/one/category-repair.ics"
+        context.insert(task); task.taskList = list; task.remoteHref = href
+        task.etag = "same"; task.isLocalOnly = false; task.isDirty = true
+        try VTODOOpaqueState.empty.store(taskID: task.id, in: context)
+        try SyncResourceFixture.prove(task, in: context)
+        try context.save()
 
-    /// `syncCalendar` needs a live server and nothing here stubs one, so its
-    /// wiring is pinned on the source — the tactic, and the deliberate
-    /// brittleness, `SyncPullCompletenessGuardTests` explains. Each call is load
-    /// bearing: the pending check must come before the CTag skip, or a list whose
-    /// CTag has not moved never pulls and never catches up; the pass must come
-    /// before the upload, or a dirty task goes out without its categories; and
-    /// without the mark it repeats every sync, restoring tags deleted from the
-    /// sidebar.
-    @Test("syncCalendar owes, runs and records the categories catch-up, in order")
-    func catchUpIsWiredIntoTheForegroundPull() throws {
-        let root = try LocalizationCatalogFixture.repositoryRoot()
-        let source = try String(contentsOf: root.appendingPathComponent("NowThis/Sync/SyncEngine.swift"),
-                                encoding: .utf8)
-        let start = try #require(source.range(of: "private func syncCalendar("))
-        let end = try #require(source.range(of: "// MARK: - Pull (Remote → Local)",
-                                            range: start.upperBound..<source.endIndex))
-        let body = source[start.upperBound..<end.lowerBound]
-        #expect(body.contains("lastFullPullDate"), "the span found is not syncCalendar's body")
-
-        let order = ["categoriesCatchUpPending(", "shouldSkipPull(",
-                     "pullCalendarCheckingPhotoAccess(", "markCategoriesCaughtUp("]
-        var previous = body.startIndex
-        var examined = 0
-        for call in order {
-            let found = try #require(body.range(of: call), "syncCalendar never calls \(call)")
-            #expect(found.lowerBound >= previous, "\(call) is out of order in syncCalendar")
-            previous = found.lowerBound
-            examined += 1
-        }
-        let upload = try #require(body.range(of: "pushLocalTask(", options: .backwards))
-        #expect(try #require(body.range(of: "pullCalendarCheckingPhotoAccess(")).lowerBound < upload.lowerBound,
-                "the pull must run before the upload it protects")
-        let importer = try String(contentsOf: root.appendingPathComponent("NowThis/Sync/SyncInboundBatchWriter.swift"), encoding: .utf8)
-        #expect(importer.contains("importer.catchUpCategories("), "The shared bounded writer must perform additive category repair before uploads")
-        #expect(examined == order.count,
-                "examined \(examined) calls; a guard that examines none reports success")
+        let scope = SyncCollectionPuller.Scope(accountID: accountID, listID: list.id, historyScope: "0")
+        let key = SyncImportCheckpoint.identity(accountID: accountID, listID: list.id,
+            baseURL: baseURL, username: "fixture", months: 0)
+        let now = Date()
+        try SyncImportCheckpoint.commit(.init(scope: scope, ctag: "c1", lastIntegrity: now.addingTimeInterval(-1),
+            hasCompletedBaseline: true), id: key, collectionPath: list.serverURL, container: container)
+        #expect(SyncEngine.categoriesCatchUpPending(listID: list.id))
+        let etag = "<d:getetag>same</d:getetag>"
+        let body = ICalendarSerializer.serialize(uid: task.uid, summary: "Server title", categories: ["Server tag"])
+        let manifest = DAVSyncScenario.multistatus(DAVSyncScenario.prop(href, etag))
+        let multiget = DAVSyncScenario.multistatus(DAVSyncScenario.prop(href,
+            etag + "<c:calendar-data>" + body + "</c:calendar-data>"))
+        let engine = SyncEngine(calDAVClient: CalDAVClient(configuration: ScriptedDAVProtocol.install(
+            host: host, responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
+                .init(body: manifest), .init(body: multiget),
+                .init(status: 204, body: "", headers: ["ETag": "accepted"])
+            ]), retryPolicy: .init(maxAttempts: 1, baseDelay: 0)), now: { now })
+        let credentials = CalDAVClient.Credentials(username: "fixture", password: "fixture")
+        let result = await engine.performFullSyncOutcome(accountID: accountID, serverBaseURL: baseURL,
+            credentials: credentials, modelContainer: container, reconcileNotifications: false)
+        #expect(result.status == .completed)
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        #expect(requests.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT", "PUT"])
+        let put = try #require(requests.last)
+        #expect(put.ifMatch == "\"same\"")
+        let sent = try #require(try ICalendarParser.parseSingleVTODO(from: String(decoding: put.body, as: UTF8.self)))
+        #expect(sent.summary == "Local edit" && sent.categories == ["Server tag"])
+        #expect(!SyncEngine.categoriesCatchUpPending(listID: list.id))
     }
 }

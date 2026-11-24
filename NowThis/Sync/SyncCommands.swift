@@ -4,6 +4,7 @@ import SwiftData
 /// Commands do not publish progress to every task row.
 struct SyncCommands: Sendable {
     var syncAfterChange: @MainActor @Sendable (ModelContext) -> Void = { _ in }
+    var publishLocalTaskCommit: @MainActor @Sendable () -> Void = {}
     var syncAfterAccountAdded: @MainActor @Sendable (ModelContext) -> Void = { _ in }
     var syncNow: @MainActor @Sendable (ModelContext) async -> Void = { _ in }
 }
@@ -23,6 +24,8 @@ extension SyncScheduler {
     var commands: SyncCommands {
         SyncCommands(syncAfterChange: { [weak self] context in
             self?.syncAfterChange(modelContext: context)
+        }, publishLocalTaskCommit: { [weak self] in
+            self?.publishLocalTaskCommit()
         }, syncAfterAccountAdded: { [weak self] context in
             self?.syncAfterAccountAdded(modelContext: context)
         }, syncNow: { [weak self] context in

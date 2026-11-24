@@ -22,11 +22,22 @@ enum TaskPhotoOriginals {
         do {
             guard let fileID = before.fileID, let folderID = before.folderID,
                   let accountID = before.accountID, let baseURL = before.baseURL,
-                  let username = before.username, let href = before.calendarHref,
-                  let password = try await KeychainManager().retrieve(for: accountID) else {
+                  let username = before.username, let href = before.calendarHref else {
                 throw TaskPhotoOriginalError.unavailable
             }
-            let access = PhotoServerAccess(baseURL: baseURL, username: username, password: password)
+            let expected = AccountCredentialScope(id: accountID, serverBaseURL: baseURL, username: username)
+            let admitted: CommittedAccountCredentials
+            switch try await AccountManager.admitCredentials(accountID: accountID, expected: expected,
+                                                            container: container) {
+            case .available(let credentials): admitted = credentials
+            case .missing: throw TaskPhotoOriginalError.unavailable
+            case .deferred(let reason): throw reason
+            }
+            guard try read(photoID: photoID, taskID: taskID, container: container) == before else {
+                throw TaskPhotoOriginalError.unavailable
+            }
+            let access = PhotoServerAccess(baseURL: admitted.scope.serverBaseURL,
+                                           username: admitted.scope.username, password: admitted.password)
             let data = try await NextcloudPhotoClient().download(fileID: fileID, folderFileID: folderID,
                 calendarHref: href, access: access)
             try Task.checkCancellation()
@@ -40,6 +51,8 @@ enum TaskPhotoOriginals {
             }
             try markStatus(TaskPhotoOriginalStatus.available.rawValue, photoID: photoID, container: container)
             return data
+        } catch let reason as AccountCredentialDeferral {
+            throw reason
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             try? markStatus(TaskPhotoOriginalStatus.unavailable.rawValue, photoID: photoID, container: container)

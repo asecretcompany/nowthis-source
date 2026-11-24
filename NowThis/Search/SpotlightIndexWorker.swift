@@ -298,6 +298,7 @@ actor SpotlightIndexWorker {
         }
     }
 
+    private let preferences: SpotlightPreferences
     private let sink: any SpotlightIndexSink
     private let store: any SpotlightIncrementalIndexStateStore
     private let now: @Sendable () -> Date
@@ -311,7 +312,9 @@ actor SpotlightIndexWorker {
 
     init(sink: any SpotlightIndexSink, store: any SpotlightIndexStateStore,
          batchSize: Int = 100, now: @escaping @Sendable () -> Date = { Date() },
+         preferences: SpotlightPreferences = SpotlightPreferences(),
          reportError: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.preferences = preferences
         self.sink = sink
         self.store = (store as? any SpotlightIncrementalIndexStateStore)
             ?? SpotlightSnapshotStoreAdapter(store: store)
@@ -390,13 +393,13 @@ actor SpotlightIndexWorker {
             records = [:]
         }
         guard currentGeneration == generation else { return }
-        let current = work.values.values.sorted { $0.id < $1.id }
+        let current = work.values.values.map {
+            SpotlightProjection.applyingNotesPolicy(to: $0, includeNotes: preferences.includesNotes)
+        }.sorted { $0.id < $1.id }
         let clock = now()
-        var fingerprints: [String: String] = [:]
         var changed: [SpotlightTaskSnapshot] = []
         for snapshot in current {
             let fingerprint = try SpotlightProjection.fingerprint(snapshot)
-            fingerprints[snapshot.id] = fingerprint
             let record = records?[snapshot.id]
             // Renew a day before expiration, including migrated timestamp-less state.
             if record?.fingerprint != fingerprint ||
@@ -414,12 +417,20 @@ actor SpotlightIndexWorker {
             try await invalidate(ids)
             guard currentGeneration == generation else { return }
             let expiry = now().addingTimeInterval(30 * 86_400)
-            try await sink.index(batch, expiresAt: expiry)
+            // Invalidation suspends. Re-check privacy before writing a captured
+            // payload and repair an already in-flight write if opt-out wins.
+            var applied = batch.map {
+                SpotlightProjection.applyingNotesPolicy(to: $0, includeNotes: preferences.includesNotes)
+            }
+            try await sink.index(applied, expiresAt: expiry)
+            if !preferences.includesNotes && applied.contains(where: { $0.contentDescription != nil }) {
+                applied = applied.map { SpotlightProjection.applyingNotesPolicy(to: $0, includeNotes: false) }
+                try await sink.index(applied, expiresAt: expiry)
+            }
             var committed: [String: SpotlightIndexRecord] = [:]
-            for id in ids {
-                if let fingerprint = fingerprints[id] {
-                    committed[id] = SpotlightIndexRecord(fingerprint: fingerprint, expiresAt: expiry)
-                }
+            for snapshot in applied {
+                committed[snapshot.id] = SpotlightIndexRecord(
+                    fingerprint: try SpotlightProjection.fingerprint(snapshot), expiresAt: expiry)
             }
             // Record the actual completed side effect even if a newer request arrived.
             try await persist(upserts: committed)

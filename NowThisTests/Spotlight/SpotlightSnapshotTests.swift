@@ -18,12 +18,15 @@ private func spotlightContainer() throws -> ModelContainer {
 }
 
 private actor SuspendedSpotlightSource: SpotlightSnapshotSource {
+    private let preferences: SpotlightPreferences
+    init(preferences: SpotlightPreferences = SpotlightPreferences()) { self.preferences = preferences }
+
     private var captured = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var release: CheckedContinuation<Void, Never>?
 
     func read(container: ModelContainer, pending: SpotlightPendingChanges) async throws -> [SpotlightTaskSnapshot] {
-        let values = try await SpotlightSnapshotReader().read(container: container, pending: pending)
+        let values = try await SpotlightSnapshotReader(preferences: preferences).read(container: container, pending: pending)
         guard !captured else { return values }
         captured = true
         waiters.forEach { $0.resume() }
@@ -249,5 +252,102 @@ private actor CountingSpotlightSource: SpotlightSnapshotSource {
     func read(container: ModelContainer, pending: SpotlightPendingChanges) async throws -> [SpotlightTaskSnapshot] {
         readCount += 1
         return try await SpotlightSnapshotReader().read(container: container, pending: pending)
+    }
+}
+
+@Suite("Spotlight note privacy")
+@MainActor
+struct SpotlightNotePrivacyTests {
+    private func preferences() -> SpotlightPreferences {
+        SpotlightPreferences(suiteName: "Task19.Spotlight." + UUID().uuidString)
+    }
+
+    @Test func savedPendingAndLocalProjectionsRequireOptIn() async throws {
+        let preferences = preferences()
+        defer { UserDefaults(suiteName: preferences.suiteName!)?.removePersistentDomain(forName: preferences.suiteName!) }
+        let container = try spotlightContainer()
+        let task = TaskItem(id: "private", title: "Public title")
+        task.descriptionText = "Secret notes"
+        container.mainContext.insert(task)
+        try container.mainContext.save()
+        let reader = SpotlightSnapshotReader(preferences: preferences)
+        let initial = try await reader.read(container: container, pending: SpotlightPendingChanges())
+        #expect(initial.first?.contentDescription == nil)
+        #expect(SpotlightIndexer.snapshot(from: task, includeNotes: false)?.contentDescription == nil)
+        preferences.setIncludesNotes(true)
+        let optedIn = try await reader.read(container: container, pending: SpotlightPendingChanges())
+        #expect(optedIn.first?.contentDescription == "Secret notes")
+        task.descriptionText = "Pending secret"
+        let pending = try SpotlightIndexer.pendingChanges(in: container.mainContext, includeNotes: true)
+        preferences.setIncludesNotes(false)
+        let optedOut = try await reader.read(container: container, pending: pending)
+        #expect(optedOut.first?.contentDescription == nil)
+        #expect(optedOut.first?.title == "Public title")
+        #expect(container.mainContext.hasChanges)
+        let before = try #require(optedIn.first)
+        let after = try #require(optedOut.first)
+        #expect(try SpotlightProjection.fingerprint(before) != SpotlightProjection.fingerprint(after))
+    }
+
+    @Test func preferenceChangeRefreshesObservedIndexerAndInvalidatesCapturedRead() async throws {
+        let preferences = preferences()
+        defer { UserDefaults(suiteName: preferences.suiteName!)?.removePersistentDomain(forName: preferences.suiteName!) }
+        preferences.setIncludesNotes(true)
+        let container = try spotlightContainer()
+        let task = TaskItem(id: "private", title: "Public title")
+        task.descriptionText = "Secret notes"
+        container.mainContext.insert(task)
+        try container.mainContext.save()
+        let source = SuspendedSpotlightSource(preferences: preferences)
+        let sink = SuspendedSpotlightSink()
+        let store = SpotlightTestStore()
+        let worker = SpotlightIndexWorker(sink: sink, store: store, preferences: preferences)
+        let indexer = SpotlightIndexer(worker: worker, source: source, preferences: preferences)
+        indexer.startObserving(modelContext: container.mainContext, coalescingWindow: .milliseconds(1))
+        await indexer.index(task: task)
+        #expect(await sink.values()[task.id]?.contentDescription == "Secret notes")
+        let read = Task { await indexer.reindexAll(modelContext: container.mainContext) }
+        await source.waitUntilCaptured()
+        preferences.setIncludesNotes(false)
+        for _ in 0..<100 {
+            if await sink.values()[task.id]?.contentDescription == nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await sink.values()[task.id]?.contentDescription == nil)
+        await source.resumeRead()
+        await read.value
+        let final = try #require(await sink.values()[task.id])
+        #expect(final.contentDescription == nil)
+        #expect(await store.load()[task.id]?.fingerprint == (try SpotlightProjection.fingerprint(final)))
+        preferences.setIncludesNotes(true)
+        for _ in 0..<100 {
+            if await sink.values()[task.id]?.contentDescription == "Secret notes" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await sink.values()[task.id]?.contentDescription == "Secret notes")
+    }
+
+    @Test func startupWithoutPreferenceRemovesPreviouslyIndexedNotes() async throws {
+        let preferences = preferences()
+        defer { UserDefaults(suiteName: preferences.suiteName!)?.removePersistentDomain(forName: preferences.suiteName!) }
+        let container = try spotlightContainer()
+        let task = TaskItem(id: "upgrade", title: "Task")
+        task.descriptionText = "Previously indexed notes"
+        container.mainContext.insert(task)
+        try container.mainContext.save()
+        let old = SpotlightTaskSnapshot(id: task.id, title: task.title,
+            contentDescription: task.descriptionText, keywords: [task.title])
+        let expiry = Date().addingTimeInterval(30 * 86_400)
+        let oldHash = try SpotlightProjection.fingerprint(old)
+        let store = SpotlightTestStore([task.id: .init(fingerprint: oldHash, expiresAt: expiry)])
+        let sink = SuspendedSpotlightSink()
+        try await sink.index([old], expiresAt: expiry)
+        let indexer = SpotlightIndexer(worker: SpotlightIndexWorker(sink: sink, store: store, preferences: preferences),
+            source: SpotlightSnapshotReader(preferences: preferences), preferences: preferences)
+        await indexer.reindexAll(modelContext: container.mainContext)
+        let final = try #require(await sink.values()[task.id])
+        #expect(final.contentDescription == nil)
+        #expect(await store.load()[task.id]?.fingerprint != oldHash)
+        #expect(await store.load()[task.id]?.fingerprint == (try SpotlightProjection.fingerprint(final)))
     }
 }

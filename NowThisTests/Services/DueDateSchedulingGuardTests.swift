@@ -19,14 +19,38 @@ import Testing
 /// task must say so.
 @Suite("Due-date writes reschedule notifications")
 struct DueDateSchedulingGuardTests {
-    @Test("Detail title and status edits use the save boundary before any dismissal route")
-    func detailEditCallbacksDoNotDependOnDone() throws {
+    @Test("Detail drafts commit before dismissal while status and dates keep immediate save boundaries")
+    func detailDraftAndImmediateEditBoundaries() throws {
         let root = try LocalizationCatalogFixture.repositoryRoot()
         let source = try String(contentsOf: root.appendingPathComponent(
             "NowThis/Views/Tasks/TaskDetailView.swift"), encoding: .utf8)
-        #expect(source.contains(".onChange(of: task.title) { _, _ in reminderEditDidChange() }"))
-        #expect(source.contains(".onChange(of: task.status) { _, _ in reminderEditDidChange() }"))
-        #expect(source.contains("Self.saveReminderEdit(task, in: modelContext)"))
+        // Title/notes are now isolated drafts. A back swipe must not bypass validation.
+        #expect(source.contains("TitleSection(title: $textDraft.title)"))
+        #expect(source.contains("NotesSection(notes: $textDraft.notes)"))
+        #expect(!source.contains("text: $task.title"))
+        #expect(source.contains(".interactiveDismissDisabled(textDraft.hasChanges)"))
+        #expect(source.contains(".navigationBarBackButtonHidden(textDraft.hasChanges)"))
+        // Status now validates recurrence before mutating, then saves/replans directly:
+        // an ordinal recurrence can advance its due date while status stays needsAction.
+        #expect(source.contains("try TaskDetailView.applyStatusChange(status, to: task, in: modelContext, errorState: errorState)"))
+        #expect(!source.contains("Picker(selection: $task.status)"))
+        let commit = try #require(source.range(of: "try textDraft.commit(to: task)"))
+        let reconcile = try #require(source.range(of: "ViewPersistence.recoverRemindersAfterCommit {",
+            range: commit.upperBound..<source.endIndex))
+        let commitBoundary = source[commit.lowerBound..<reconcile.lowerBound]
+        #expect(commitBoundary.contains("ReminderSchedulingJournal.saveTaskChanges(in: modelContext)"))
+        #expect(commitBoundary.contains("catch let error as TaskTextValidation.Failure"))
+        #expect(commitBoundary.contains("ViewPersistence.report(error, to: errorState)"))
+        #expect(source[reconcile.upperBound...].contains("ReminderScheduler.requestReconcileOrThrow(modelContext: modelContext)"))
+        // Programmatic recurrence advances already reconcile in applyStatusChange. A broad
+        // observer would issue a second save and replace its partial-success recovery alert.
+        #expect(!source.contains(".onChange(of: task.dueDate)"))
+        let dateSetterStart = try #require(source.range(of: "task.dueDate = isAllDay"))
+        let dateSetterEnd = try #require(source.range(of: "displayedComponents: isAllDay", range: dateSetterStart.upperBound..<source.endIndex))
+        let dateSetter = source[dateSetterStart.lowerBound..<dateSetterEnd.lowerBound]
+        #expect(dateSetter.contains("ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure:"),
+                "User date edits must still reconcile inside their binding setter, including bare due dates.")
+        #expect(dateSetter.contains("ViewPersistence.report($0, to: errorState)"))
     }
 
     /// Files that write a due date but correctly leave the rescheduling to someone else.
@@ -76,9 +100,44 @@ struct DueDateSchedulingGuardTests {
                 """)
         }
 
-        // A scanner that examines zero files reports success.
-        #expect(writers.count >= 9, """
-            Expected at least 9 due-date write sites, found \(writers.count): \(writers).
+        // The month and week drops share one due-date writer and reminder trigger.
+        let calendarWriter = "NowThis/Views/Calendar/CalendarTaskRescheduling.swift"
+        try #require(writers.contains(calendarWriter))
+        var entryPoints = writers.filter { $0 != calendarWriter }
+        for view in ["CalendarMonthView.swift", "CalendarWeekView.swift"] {
+            let path = "NowThis/Views/Calendar/\(view)"
+            let source = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+            if source.contains("CalendarTaskRescheduling.drop(") {
+                entryPoints.append(path)
+            } else {
+                Issue.record("\(path) no longer delegates its drop to the shared writer and reminder trigger.")
+            }
+        }
+
+        // Calendar Add is a separate entry point. Its selected date reaches the
+        // Quick Add editor, which saves the draft and then recovers reminders.
+        let calendarAdd = "NowThis/Views/Calendar/CalendarContainerView.swift"
+        let calendar = try String(contentsOf: root.appendingPathComponent(calendarAdd), encoding: .utf8)
+        let quickAddPath = "NowThis/Views/Tasks/QuickAddView.swift"
+        let quickAdd = try String(contentsOf: root.appendingPathComponent(quickAddPath), encoding: .utf8)
+        let commit = try #require(quickAdd.range(of: "guard creationDraft.saveOwnedChanges("))
+        let recovery = try #require(quickAdd.range(of: "ViewPersistence.recoverRemindersAfterCommit {",
+                                                   range: commit.upperBound..<quickAdd.endIndex))
+        let delegatesToQuickAdd = calendar.contains("addSelection = QuickAddView.CalendarSelection(")
+            && calendar.contains("date: selectedDate, destination:")
+            && calendar.contains(".sheet(item: $addSelection)")
+            && calendar.contains("QuickAddView(defaultList: nil, calendarSelection: selection)")
+            && writers.contains(quickAddPath)
+            && quickAdd[recovery.upperBound...].contains("try ReminderScheduler.requestReconcileOrThrow(modelContext: draftContext)")
+        if delegatesToQuickAdd {
+            entryPoints.append(calendarAdd)
+        } else {
+            Issue.record("Calendar Add must pass its selected date to the Quick Add writer and reminder recovery.")
+        }
+
+        // A scanner that examines zero entry points reports success.
+        #expect(entryPoints.count >= 9, """
+            Expected at least 9 due-date write entry points, found \(entryPoints.count): \(entryPoints).
             The scan has gone stale — widen it rather than lowering the floor.
             """)
     }

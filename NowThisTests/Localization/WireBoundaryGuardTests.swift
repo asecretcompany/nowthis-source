@@ -123,6 +123,7 @@ struct WireBoundaryGuardTests {
         ]),
         .init(file: "NowThis/Utilities/RecurrenceRule.swift", keys: [:]),
         .init(file: "NowThis/Utilities/RecurrenceRule+DisplayText.swift", keys: [
+            "recurrence.preset.custom": "Read-only label when a rule cannot be represented by the picker; raw RRULE remains untouched.",
             "recurrence.frequency.daily": "Display only. `Frequency.rawValue` is the RFC-5545 "
                 + "`FREQ=` token and is frozen below.",
             "recurrence.frequency.weekly": "Display only; rawValue frozen below.",
@@ -325,7 +326,7 @@ struct WireBoundaryGuardTests {
     @Test("A recurrence rule round-trips through its wire tokens, not its words")
     func recurrenceRoundTripsThroughWireTokens() throws {
         let rule = RecurrenceRule(frequency: .weekly, interval: 2,
-                                  byDay: [.monday, .friday], count: 10, until: nil)
+                                  byDay: [.init(weekday: .monday), .init(weekday: .friday)], count: 10, until: nil)
         let wire = rule.toRRULEString()
         #expect(wire == "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,FR;COUNT=10", """
             The generated RRULE is \u{201C}\(wire)\u{201D}. Every token in it is read by other

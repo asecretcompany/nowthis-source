@@ -64,8 +64,8 @@ final class ProEntitlement {
         return ProEntitlementPolicy.ownedCollectionIDs(in: snapshot, collections: AppIconCatalog.collections, at: now())
     }
 
-    static func cachedUnlocked() -> Bool {
-        ProEntitlementCache().load()?.isUnlocked(at: Date()) ?? false
+    static func cachedUnlocked(cache: ProEntitlementCache = ProEntitlementCache()) -> Bool {
+        cache.load()?.isUnlocked(at: Date()) ?? false
     }
 
     func start() {
@@ -87,8 +87,8 @@ final class ProEntitlement {
         startupTask = Task { [weak self] in
             guard let self else { return }
             self.isTesterBuild = await self.testerBuild()
-            try? await self.loadProducts()
             await self.refresh()
+            try? await self.loadProducts()
         }
         scheduleDeadline()
     }

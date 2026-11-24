@@ -68,12 +68,9 @@ enum VersionSchemeRules {
 @Suite("Release / version scheme")
 struct VersionSchemeGuardTests {
 
-    /// Repository-root documents that state contributor conventions. `README.md` is published;
-    /// the other two are working files present only in the development checkout. Each is
-    /// checked if present rather than asserting a fixed count, so the guard is meaningful in
-    /// the public `nowthis-source` mirror (where it checks README.md) and in a full checkout
-    /// (where it checks all three).
-    static let contributorBriefs = ["README.md", "GEMINI.md", "CLAUDE.md"]
+    /// The published contributor brief, checked when present so the guard can also run in
+    /// source mirrors that intentionally omit release-only documents.
+    static let contributorBriefs = ["README.md"]
 
     private func spec() throws -> [String: String] {
         let root = try LocalizationCatalogFixture.repositoryRoot()

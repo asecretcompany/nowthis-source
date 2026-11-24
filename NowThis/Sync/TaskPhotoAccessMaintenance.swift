@@ -31,12 +31,12 @@ enum TaskPhotoAccessMaintenance {
     }
 
     @MainActor
-    static func revoke(listID: String, container: ModelContainer,
-                       cache: TaskPhotoCache = TaskPhotoOriginals.cache) async throws -> SyncChange? {
-        let (change, purged): (SyncChange?, [String]) = try BackgroundRunBudget.protectingCurrent {
+    static func revoke(scope: TaskPhotoOwnership.Scope, container: ModelContainer,
+                       cache: TaskPhotoCache = TaskPhotoOriginals.cache) async throws -> SyncChange {
+        let (change, purged): (SyncChange, [String]) = try BackgroundRunBudget.protectingCurrent {
             let context = ModelContext(container); context.autosaveEnabled = false
-            guard let list = try context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == listID })).first else { return (nil, []) }
-            let accountID = list.account?.id
+            let list = try scope.requireList(in: context)
+            let listID = scope.listID
             // Nested optional relationship predicates trap on older SwiftData runtimes.
             var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.taskList?.id == listID })
             descriptor.relationshipKeyPathsForPrefetching = [\.photos]
@@ -45,9 +45,9 @@ enum TaskPhotoAccessMaintenance {
             // Durable previews and unsent operations remain recoverable; downloaded originals are dropped.
             let purged = photos.filter { !($0.pendingOperation == "add" && $0.originalFileID == nil) }.map(\.id)
             list.photoAccessRevoked = true; list.syncCTag = nil; list.lastFullPullDate = nil
-            if let accountID { try SyncImportCheckpoint.removeList(accountID: accountID, listID: listID, in: context) }
+            try SyncImportCheckpoint.removeList(accountID: scope.accountID, listID: listID, in: context)
             try context.save()
-            return (SyncChange(revision: 0, accountIDs: Set([accountID].compactMap { $0 }), listIDs: [listID],
+            return (SyncChange(revision: 0, accountIDs: [scope.accountID], listIDs: [listID],
                 changedIDs: Set(tasks.map(\.id)), deletedIDs: [], kind: .tasks), purged)
         }
         for id in purged {
@@ -58,20 +58,17 @@ enum TaskPhotoAccessMaintenance {
     }
 
     @MainActor
-    static func restore(listID: String, container: ModelContainer) throws -> SyncChange? {
-        let section = try BackgroundRunBudget.current?.beginCriticalSection()
-        defer { section?.end() }
-        try Task.checkCancellation()
-        let context = ModelContext(container); context.autosaveEnabled = false
-        guard let list = try context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == listID })).first,
-              list.photoAccessRevoked == true else { return nil }
-        list.photoAccessRevoked = false; list.syncCTag = nil; list.lastFullPullDate = nil
-        if let accountID = list.account?.id {
-            try SyncImportCheckpoint.removeList(accountID: accountID, listID: listID, in: context)
+    static func restore(scope: TaskPhotoOwnership.Scope, container: ModelContainer) throws -> SyncChange? {
+        try BackgroundRunBudget.protectingCurrent {
+            let context = ModelContext(container); context.autosaveEnabled = false
+            let list = try scope.requireList(in: context)
+            guard list.photoAccessRevoked == true else { return nil }
+            list.photoAccessRevoked = false; list.syncCTag = nil; list.lastFullPullDate = nil
+            try SyncImportCheckpoint.removeList(accountID: scope.accountID, listID: scope.listID, in: context)
+            try context.save()
+            return SyncChange(revision: 0, accountIDs: [scope.accountID], listIDs: [scope.listID],
+                changedIDs: [], deletedIDs: [], kind: .lists)
         }
-        try context.save()
-        return SyncChange(revision: 0, accountIDs: Set([list.account?.id].compactMap { $0 }), listIDs: [listID],
-            changedIDs: [], deletedIDs: [], kind: .lists)
     }
 
     @MainActor

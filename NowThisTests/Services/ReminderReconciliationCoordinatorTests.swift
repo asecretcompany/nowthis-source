@@ -8,6 +8,86 @@ import UserNotifications
 @Suite("Serialized reminder reconciliation", .serialized)
 @MainActor
 struct ReminderReconciliationCoordinatorTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["NOWTHIS_BACKLOG_MEASUREMENTS"] == "1",
+                   "Set NOWTHIS_BACKLOG_MEASUREMENTS=1 for the reminder backlog comparison"),
+          arguments: [1_000, 10_000])
+    func backlogPlannerMeasurement(count: Int) async throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let now = Date()
+        let reminder = TaskItem(id: "measured-reminder", title: "Measured reminder")
+        reminder.dueDate = now.addingTimeInterval(86_400)
+        reminder.reminderOffset = 0
+        context.insert(reminder)
+        for index in 1..<count {
+            let overdue = TaskItem(id: PerformanceFixture.taskID(index: index), title: "Already overdue")
+            overdue.dueDate = now.addingTimeInterval(-86_400)
+            context.insert(overdue)
+        }
+        try context.save()
+        let optimized = ProcessInfo.processInfo.environment["NOWTHIS_T18_EXPECT_OPTIMIZED"] == "1"
+        var reconcileTimes: [Double] = []
+        var badgeTimes: [Double] = []
+
+        for run in 0..<5 {
+            let ticket = ReminderSchedulingJournal.enqueue(in: context)
+            try context.save()
+            let foreign = ReminderScheduler.PendingSnapshot(identifier: "benchmark-foreign",
+                fireDate: nil, badge: nil, title: nil)
+            let store = CoordinatorNotificationStore(pending: [foreign])
+            let reconcilePlans = PerformanceTrace.OperationRecorder()
+            let reconcileStart = ContinuousClock.now
+            let outcome = await PerformanceTrace.$operationRecorder.withValue(reconcilePlans) {
+                await ReminderScheduler.reconcileScheduledNotifications(modelContext: context,
+                    store: store, badgesEnabled: true, allDayReminderMinutes: 540, policy: .background)
+            }
+            reconcileTimes.append(Self.measurementMilliseconds(since: reconcileStart))
+            let reconcilePlan = reconcilePlans.count(.reminderPlan)
+            #expect(outcome.status == .confirmed && outcome.requestedCount == 1 && outcome.confirmedCount == 1)
+            #expect(store.addedIdentifiers == ["reminder-measured-reminder"])
+            #expect(store.pending[foreign.identifier] == foreign && store.removedIdentifiers.isEmpty)
+            let saved = try #require(store.pending["reminder-measured-reminder"])
+            #expect(saved.title == reminder.title && saved.badge == count)
+            #expect(abs((saved.fireDate ?? .distantPast).timeIntervalSince(reminder.dueDate ?? now)) < 1)
+            #expect(try !ReminderSchedulingJournal.capture(in: ModelContext(container)).contains(ticket))
+
+            let badgeTicket = ReminderSchedulingJournal.enqueue(in: context)
+            try context.save()
+            let badgePlans = PerformanceTrace.OperationRecorder()
+            var writtenBadges: [Int] = []
+            var authorizationReads = 0
+            let badgeAccess = ReminderScheduler.BadgeAccess(
+                authorizationStatus: { authorizationReads += 1; return .authorized },
+                requestPermission: { Issue.record("Benchmark attempted a notification permission prompt") },
+                setBadgeCount: { writtenBadges.append($0) })
+            let badgeStart = ContinuousClock.now
+            await PerformanceTrace.$operationRecorder.withValue(badgePlans) {
+                await ReminderScheduler.updateBadgeCount(modelContext: context, allowPrompt: false,
+                                                         badgesEnabled: true, access: badgeAccess)
+            }
+            badgeTimes.append(Self.measurementMilliseconds(since: badgeStart))
+            let badgePlan = badgePlans.count(.reminderPlan)
+            print("T18_REMINDER_PLANS tasks=\(count) run=\(run + 1) reconcile=\(reconcilePlan.calls)/\(reconcilePlan.rows) badge=\(badgePlan.calls)/\(badgePlan.rows)")
+            #expect(writtenBadges == [count - 1] && authorizationReads == 2)
+            #expect(try ReminderSchedulingJournal.capture(in: ModelContext(container)) == Set([badgeTicket]))
+            #expect(reconcilePlan.calls == (optimized ? 2 : 4))
+            #expect(reconcilePlan.rows == count * reconcilePlan.calls)
+            #expect(badgePlan.calls == (optimized ? 0 : 1))
+            #expect(badgePlan.rows == count * badgePlan.calls)
+        }
+        for (workload, samples) in [("verified-reconcile", reconcileTimes), ("badge-only", badgeTimes)] {
+            let sorted = samples.sorted()
+            print("T18_REMINDER_METRIC workload=\(workload) tasks=\(count) samples_ms=\(samples) median_ms=\(sorted[sorted.count / 2])")
+        }
+        withExtendedLifetime(container) {}
+    }
+
+    private static func measurementMilliseconds(since start: ContinuousClock.Instant) -> Double {
+        let parts = start.duration(to: .now).components
+        return Double(parts.seconds) * 1_000 + Double(parts.attoseconds) / 1e15
+    }
+
     private func fixture(_ id: String = "edited") throws -> (ModelContainer, TaskItem) {
         let container = try DAVSyncScenario.container()
         let task = TaskItem(title: "Old title")
@@ -104,7 +184,7 @@ struct ReminderReconciliationCoordinatorTests {
         let store = CoordinatorNotificationStore()
         var newer: String?
         store.onRead = { count in
-            guard count == 2 else { return }
+            guard count == 3 else { return }
             let context = ModelContext(container)
             newer = ReminderSchedulingJournal.enqueue(in: context)
             try! context.save()
@@ -225,6 +305,57 @@ struct ReminderReconciliationCoordinatorTests {
         #expect(store.pending["nag-partial"] == nil)
     }
 
+    @Test("Verification failures never acknowledge recovery as capacity success")
+    func failedVerificationKeepsTicket() async throws {
+        let (container, _) = try fixture()
+        let store = CoordinatorNotificationStore()
+        store.dropsAdds = true
+        let result = await ReminderReconciliationCoordinator().reconcile(
+            modelContext: container.mainContext, policy: .background, store: store,
+            worker: ControlledReminderWorker(container: container), badgesEnabled: false)
+        #expect(result.status == .failed)
+        #expect(result.confirmedCount == 0)
+        #expect(try !ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
+    }
+
+    @Test("Unrelated requests filling capacity during planning retain recovery work")
+    func capacityRaceKeepsTicketAndUnrelatedRequests() async throws {
+        let (container, _) = try fixture("replacement")
+        let store = CoordinatorNotificationStore()
+        store.onRead = { count in
+            guard count == 1 else { return }
+            for i in 0..<64 {
+                let id = "unrelated-\(i)"
+                store.pending[id] = .init(identifier: id, fireDate: nil, badge: nil, title: nil)
+            }
+        }
+        let result = await ReminderReconciliationCoordinator().reconcile(
+            modelContext: container.mainContext, policy: .background, store: store,
+            worker: ControlledReminderWorker(container: container), badgesEnabled: false)
+        #expect(result.status == .capacityLimited)
+        #expect(result.confirmedCount == 0)
+        #expect(store.addedIdentifiers.isEmpty)
+        #expect(store.removedIdentifiers.isEmpty)
+        #expect(store.pending.count == 64)
+        #expect(try !ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
+    }
+
+    @Test("A queue already full of unrelated requests is capacity limited")
+    func unrelatedFullQueueIsCapacityLimited() async throws {
+        let (container, task) = try fixture()
+        let store = CoordinatorNotificationStore(pending: (0..<64).map {
+            .init(identifier: "unrelated-\($0)", fireDate: nil, badge: nil, title: nil)
+        })
+        let result = await ReminderReconciliationCoordinator().reconcile(
+            modelContext: container.mainContext, policy: .background, store: store,
+            worker: ControlledReminderWorker(container: container), badgesEnabled: false)
+        #expect(result.status == .capacityLimited)
+        #expect(result.deferredTaskIDs.contains(task.id))
+        #expect(store.addedIdentifiers.isEmpty)
+        #expect(store.removedIdentifiers.isEmpty)
+        #expect(store.pending.count == 64)
+    }
+
     private func fullStore() -> CoordinatorNotificationStore {
         var pending: [ReminderScheduler.PendingSnapshot] = (0..<63).map {
             .init(identifier: "reminder-obsolete-\($0)",
@@ -244,6 +375,7 @@ final class CoordinatorNotificationStore: NotificationStore {
     var events: [String] = []
     var authorized = true
     var rejectsAdds = false
+    var dropsAdds = false
     var authorizationChecks = 0
     var readCount = 0
     var onRead: ((Int) -> Void)?
@@ -280,6 +412,7 @@ final class CoordinatorNotificationStore: NotificationStore {
             await withCheckedContinuation { addGate = $0 }
         }
         if rejectsAdds { throw Failure.rejected }
+        if dropsAdds { return }
         if pending[request.identifier] == nil && pending.count >= 64 { throw Failure.full }
         pending[request.identifier] = .init(identifier: request.identifier,
             fireDate: (request.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate(),

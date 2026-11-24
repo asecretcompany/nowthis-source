@@ -609,6 +609,8 @@ struct TaskPhotoViewer: View {
             // Shared originals follow the durable sync cleanup path.
             syncScheduler.syncAfterChange(modelContext: modelContext)
             dismiss()
+        } catch TaskPhotoMutationError.readOnly {
+            photoError = .readOnly
         } catch {
             photoError = (error as? TaskPhotoUIError) ?? .removalSave
         }

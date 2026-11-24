@@ -2,7 +2,7 @@ import WidgetKit
 import SwiftUI
 import SwiftData
 
-/// The main NowThis widget bundle providing small, medium, and large task widgets.
+/// The main NowThis task widget bundle.
 @main
 struct NowThisWidgetBundle: WidgetBundle {
     var body: some Widget {
@@ -17,6 +17,14 @@ struct TaskWidgetEntry: TimelineEntry {
     let date: Date
     let tasks: [WidgetTaskItem]
     let listName: String
+    let showsListNames: Bool
+
+    init(date: Date, tasks: [WidgetTaskItem], listName: String, showsListNames: Bool = false) {
+        self.date = date
+        self.tasks = tasks
+        self.listName = listName
+        self.showsListNames = showsListNames
+    }
 }
 
 /// Lightweight task representation for widget rendering.
@@ -31,6 +39,11 @@ struct WidgetTaskItem: Identifiable {
     let dueDate: Date?
     let isDueDateOnly: Bool
     let listName: String
+
+    func spokenAllDayDueDate(timeZone: TimeZone) -> String? {
+        guard isDueDateOnly, let dueDate else { return nil }
+        return DueDateFormatter.accessibilityLabel(dueDate, isDateOnly: isDueDateOnly, timeZone: timeZone)
+    }
 }
 
 // MARK: - Timeline Provider
@@ -69,6 +82,9 @@ struct TaskIntentTimelineProvider: AppIntentTimelineProvider {
     // MARK: - Private
 
     private func maxTasks(for family: WidgetFamily) -> Int {
+        if #available(iOS 27.0, *), family == .systemExtraLargePortrait {
+            return WidgetDisplayPolicy.portraitCandidateLimit
+        }
         switch family {
         case .systemSmall: return 3
         case .systemMedium: return 5
@@ -80,7 +96,7 @@ struct TaskIntentTimelineProvider: AppIntentTimelineProvider {
     @MainActor
     private func fetchEntry(for configuration: SelectListsIntent, maxTasks: Int) -> TaskWidgetEntry {
         do {
-            let container = try SharedModelContainer.create()
+            let container = try SharedModelContainer.createReadOnly()
             let listIDs = configuration.selectedLists.map(\.id)
 
             let result = try SelectListsIntent.fetchFilteredTasks(
@@ -105,7 +121,8 @@ struct TaskIntentTimelineProvider: AppIntentTimelineProvider {
             return TaskWidgetEntry(
                 date: Date(),
                 tasks: widgetTasks,
-                listName: result.displayName
+                listName: result.displayName,
+                showsListNames: listIDs.count != 1
             )
         } catch {
             return TaskWidgetEntry(date: Date(), tasks: [], listName: "Tasks")
@@ -115,7 +132,7 @@ struct TaskIntentTimelineProvider: AppIntentTimelineProvider {
 
 // MARK: - Widget Configuration
 
-/// The NowThis task widget supporting small, medium, and large sizes.
+/// The NowThis task widget with configurable lists.
 ///
 /// Users can long-press the widget → Edit Widget to select which task lists
 /// appear. Defaults to showing all lists.
@@ -129,7 +146,14 @@ struct NowThisTaskWidget: Widget {
         }
         .configurationDisplayName("NowThis Tasks")
         .description("View your tasks due today at a glance.")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        .supportedFamilies(supportedFamilies)
+    }
+
+    private var supportedFamilies: [WidgetFamily] {
+        if #available(iOS 27.0, *) {
+            return [.systemSmall, .systemMedium, .systemLarge, .systemExtraLargePortrait]
+        }
+        return [.systemSmall, .systemMedium, .systemLarge]
     }
 }
 
@@ -149,6 +173,10 @@ struct TaskWidgetView: View {
             MediumWidgetView(entry: entry)
         case .systemLarge:
             LargeWidgetView(entry: entry)
+        case .systemExtraLargePortrait:
+            if #available(iOS 27.0, *) {
+                PortraitTaskWidgetView(entry: entry)
+            }
         default:
             SmallWidgetView(entry: entry)
         }
@@ -256,6 +284,7 @@ private struct MediumWidgetView: View {
 
 private struct MediumTaskRow: View {
     let task: WidgetTaskItem
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         Button(intent: CompleteTaskIntent(task: TaskEntity(
@@ -278,7 +307,8 @@ private struct MediumTaskRow: View {
                 Spacer()
 
                 if let due = task.dueDate {
-                    Text(due, format: .dateTime.month(.abbreviated).day())
+                    Text(DueDateFormatter.format(due, isDateOnly: task.isDueDateOnly, timeZone: timeZone,
+                                                 timedStyle: .dateTime.month(.abbreviated).day()))
                         .font(.caption2)
                         .foregroundStyle(DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly) ? Color.red : Color.secondary)
                 }
@@ -286,6 +316,7 @@ private struct MediumTaskRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(taskRowAccessibilityLabel(title: task.title, isCompleted: task.isCompleted))
+        .accessibilityValue(task.spokenAllDayDueDate(timeZone: timeZone) ?? "")
         .accessibilityHint(task.isCompleted ? "Double tap to mark as incomplete" : "Double tap to complete")
     }
 }
@@ -341,6 +372,7 @@ private struct LargeWidgetView: View {
 
 private struct LargeTaskRow: View {
     let task: WidgetTaskItem
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         Button(intent: CompleteTaskIntent(task: TaskEntity(
@@ -362,7 +394,7 @@ private struct LargeTaskRow: View {
                         .foregroundStyle(task.isCompleted ? .secondary : .primary)
 
                     if let due = task.dueDate {
-                        Text(due, format: .dateTime.month(.abbreviated).day().hour().minute())
+                        Text(DueDateFormatter.format(due, isDateOnly: task.isDueDateOnly, timeZone: timeZone))
                             .font(.caption2)
                             .foregroundStyle(DueDateHelper.isOverdue(dueDate: due, isDateOnly: task.isDueDateOnly) ? Color.red : Color.secondary)
                     }
@@ -376,11 +408,11 @@ private struct LargeTaskRow: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(task.priority == .none
-            ? taskRowAccessibilityLabel(title: task.title, isCompleted: task.isCompleted)
-            : String(localized: "widget.task.a11y.withPriority",
-                     defaultValue: "\(task.title), \(task.priority.label) priority, \(taskRowStateWord(isCompleted: task.isCompleted))",
-                     comment: "VoiceOver label for a task row in the widget that has a priority. Placeholders in order: the user-entered title, the already-localized priority name, and the already-localized completion state."))
+        .accessibilityLabel(taskRowAccessibilityLabel(
+            title: task.title, isCompleted: task.isCompleted,
+            priorityName: task.priority == .none ? nil : task.priority.label
+        ))
+        .accessibilityValue(task.spokenAllDayDueDate(timeZone: timeZone) ?? "")
         .accessibilityHint(task.isCompleted ? "Double tap to mark as incomplete" : "Double tap to complete")
     }
 
@@ -397,7 +429,7 @@ private struct LargeTaskRow: View {
 
 // MARK: - Priority Label Extension
 
-private extension TaskPriority {
+extension TaskPriority {
     var label: String {
         switch self {
         case .high: return String(localized: "widget.priority.short.high",
@@ -420,8 +452,13 @@ private extension TaskPriority {
 /// That form extracts as `%@, %@` — both halves become placeholders, the words "completed" and
 /// "pending" are never offered to a translator at all, and every two-placeholder string in the
 /// target collapses into the same entry.
-func taskRowAccessibilityLabel(title: String, isCompleted: Bool) -> String {
-    isCompleted
+func taskRowAccessibilityLabel(title: String, isCompleted: Bool, priorityName: String? = nil) -> String {
+    if let priorityName {
+        return String(localized: "widget.task.a11y.withPriority",
+                      defaultValue: "\(title), \(priorityName) priority, \(taskRowStateWord(isCompleted: isCompleted))",
+                      comment: "VoiceOver label for a task row in the widget that has a priority. Placeholders in order: the user-entered title, the already-localized priority name, and the already-localized completion state.")
+    }
+    return isCompleted
         ? String(localized: "widget.task.a11y.completed",
                  defaultValue: "\(title), completed",
                  comment: "VoiceOver label for a task row in the widget when the task is done. The placeholder is the user-entered task title.")
@@ -438,3 +475,32 @@ func taskRowStateWord(isCompleted: Bool) -> String {
         : String(localized: "widget.task.a11y.state.pending", defaultValue: "pending",
                  comment: "Not-yet-done state of a task, read at the end of a VoiceOver label in the widget. Adjective agreeing with the word for a task in the target language.")
 }
+
+#if DEBUG
+#Preview("All-day dates, medium", as: .systemMedium) {
+    NowThisTaskWidget()
+} timeline: {
+    dateOnlyPreviewEntry()
+}
+
+#Preview("All-day dates, large", as: .systemLarge) {
+    NowThisTaskWidget()
+} timeline: {
+    dateOnlyPreviewEntry()
+}
+
+private func dateOnlyPreviewEntry() -> TaskWidgetEntry {
+    let midnightUTC = Date(timeIntervalSince1970: 1_794_268_800) // November 10, 2026
+    return TaskWidgetEntry(
+        date: midnightUTC,
+        tasks: [
+            WidgetTaskItem(id: "preview-all-day", title: "Send invoice", isCompleted: false,
+                           priority: .high, dueDate: midnightUTC, isDueDateOnly: true, listName: "Work"),
+            WidgetTaskItem(id: "preview-timed", title: "Call supplier", isCompleted: false,
+                           priority: .medium, dueDate: midnightUTC.addingTimeInterval(17 * 3600),
+                           isDueDateOnly: false, listName: "Work")
+        ],
+        listName: "Work"
+    )
+}
+#endif

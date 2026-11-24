@@ -79,10 +79,20 @@ enum DueDateHelper {
     /// Used to bake a concrete due time onto quick due-date selections and to
     /// convert an all-day task to a timed one — the result is an exact `Date`, so
     /// it round-trips to a `DUE` datetime (not `DUE;VALUE=DATE`) and its row shows
-    /// a clock time rather than "All day".
+    /// a clock time rather than "All day". Preferences supply 0...1439 minutes.
+    /// A missing clock time advances to the next valid time; a repeated time uses
+    /// its first occurrence. Seconds are always zero.
     static func timedValue(for date: Date, minutesSinceMidnight: Int, calendar: Calendar = .current) -> Date {
-        let start = calendar.startOfDay(for: date)
-        return calendar.date(byAdding: .minute, value: minutesSinceMidnight, to: start) ?? start
+        let localCalendar = localCalendar(in: calendar)
+        return localCalendar.date(
+            bySettingHour: minutesSinceMidnight / 60,
+            minute: minutesSinceMidnight % 60,
+            second: 0,
+            of: date,
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) ?? localCalendar.startOfDay(for: date)
     }
 
     /// The local start-of-day for a task's due date.

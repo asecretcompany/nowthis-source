@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftData
 
 @testable import NowThis
 
@@ -29,6 +30,38 @@ struct KanbanReorderTests {
 
     private func titles(_ tasks: [TaskItem]) -> [String] {
         KanbanReorder.columnOrder(tasks).map(\.title)
+    }
+
+    @Test("Board checks actual rank and status writes while allowing a read-only anchor", arguments: [false, true])
+    @MainActor
+    func boardAdmissionChecksOnlyActualWrites(compaction: Bool) throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let readOnly = TaskList(serverURL: "/shared/", name: "Read only", colorHex: "#FF0000")
+        readOnly.isReadOnly = true
+        let first = card("First", order: 1_000)
+        let second = card("Second", order: compaction ? 1_001 : 3_000)
+        let moving = card("Moving", order: 4_000)
+        context.insert(readOnly)
+        for task in [first, second, moving] { context.insert(task) }
+        first.status = .inProcess
+        second.status = .inProcess
+        second.taskList = readOnly
+        try context.save()
+        let errors = ErrorState()
+
+        let outcome = KanbanBoardView.commitMove([moving], to: .inProcess, at: 1, among: [first, second],
+                                                 in: context, errorState: errors)
+        #expect(outcome.saved == !compaction)
+        #expect(outcome.changedStatus == !compaction)
+        #expect(errors.isPresented == compaction)
+        #expect(second.manualSortOrder == (compaction ? 1_001 : 3_000) && !second.isDirty)
+        let reader = ModelContext(container)
+        let rows = try reader.fetch(FetchDescriptor<TaskItem>())
+        let saved = try #require(rows.first { $0.title == "Moving" })
+        #expect(saved.status == (compaction ? .needsAction : .inProcess))
+        #expect(saved.manualSortOrder == (compaction ? 4_000 : 2_000))
+        #expect(saved.isDirty == !compaction)
     }
 
     // MARK: - Column order
@@ -113,16 +146,93 @@ struct KanbanReorderTests {
         #expect(KanbanReorder.sortOrders(count: 1, between: 7, and: 8) == nil)
         #expect(KanbanReorder.sortOrders(count: 1, between: 7, and: 7) == nil)
         #expect(KanbanReorder.sortOrders(count: 2, between: 7, and: 9) == nil)
+        // Zero is the legacy unset value and would render by creation time.
+        #expect(KanbanReorder.sortOrders(count: 1, between: -1, and: 1) == nil)
     }
 
-    @Test("The top and bottom of a column always have room")
-    func endsAlwaysHaveRoom() {
+    @Test("The top and bottom leave space for later drops when they can")
+    func ranksAtColumnEnds() {
         let spacing = TaskListHelpers.manualSortSpacing
 
         #expect(KanbanReorder.sortOrders(count: 1, between: nil, and: 5_000) == [5_000 - spacing])
         #expect(KanbanReorder.sortOrders(count: 1, between: 5_000, and: nil) == [5_000 + spacing])
         #expect(KanbanReorder.sortOrders(count: 2, between: 5_000, and: nil)
                 == [5_000 + spacing, 5_000 + 2 * spacing])
+        #expect(KanbanReorder.sortOrders(count: 1, between: nil, and: Int.min) == nil)
+        #expect(KanbanReorder.sortOrders(count: 1, between: Int.max - 1, and: nil) == nil)
+    }
+
+    @Test("Several cards fit strictly within a gap spanning nearly the whole Int range")
+    func severalRanksInWideGap() throws {
+        let ranks = try #require(KanbanReorder.sortOrders(count: 3, between: Int.min, and: Int.max - 1))
+        try #require(ranks.count == 3)
+        #expect(Int.min < ranks[0] && ranks[0] < ranks[1] && ranks[1] < ranks[2] && ranks[2] < Int.max - 1)
+        #expect(!ranks.contains(0))
+    }
+
+    @Test("Column placement handles imported extremes at both ends and in narrow and wide gaps",
+          arguments: ExtremePlacement.allCases)
+    @MainActor
+    func importedExtremePlacement(_ placement: ExtremePlacement) throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let list = TaskList(serverURL: "/board/", name: "Board", colorHex: "#007AFF")
+        context.insert(list)
+        let bounds = placement.bounds
+        let cards = try DAVSyncScenario.importRankedTasks(
+            [("First", bounds.0), ("Second", bounds.1), ("Moving", placement.movingRank), ("Other", Int.min)],
+            list: list, in: context)
+        let unrelated = cards[3]
+        unrelated.status = .completed
+        try context.save()
+        let snapshots = cards.map { ($0.uid, $0.manualSortOrder, $0.lastModifiedDate) }
+
+        let initialColumn = KanbanTaskProjection(tasks: cards).column(.needsAction, listID: list.id)
+        let moving = cards[2]
+        let others = initialColumn.filter { $0.id != moving.id }
+        #expect(others.map(\.title) == ["First", "Second"])
+        KanbanReorder.place([moving], at: placement.index, among: others)
+        #expect(ViewPersistence.saveOrReport(in: context))
+
+        let reload = ModelContext(container)
+        let persisted = try reload.fetch(FetchDescriptor<TaskItem>())
+        let ordered = KanbanTaskProjection(tasks: persisted).column(.needsAction, listID: list.id)
+        var expected = ["First", "Second"]
+        expected.insert("Moving", at: placement.index)
+        #expect(ordered.map(\.title) == expected)
+        #expect(Set(ordered.map(\.effectiveSortOrder)).count == ordered.count)
+        for (uid, rank, modified) in snapshots {
+            let task = try #require(persisted.first { $0.uid == uid })
+            let changed = task.manualSortOrder != rank
+            #expect(task.isDirty == changed)
+            #expect((task.lastModifiedDate != modified) == changed)
+            if uid == "other" || (placement == .wideGap && uid != "moving") {
+                #expect(!changed)
+            }
+        }
+    }
+
+    enum ExtremePlacement: CaseIterable {
+        case top, bottom, narrowGap, wideGap
+
+        var bounds: (Int, Int) {
+            switch self {
+            case .top: (Int.min, Int.min)
+            case .bottom: (Int.max - 1, Int.max - 1)
+            case .narrowGap: (Int.max - 2, Int.max - 1)
+            case .wideGap: (Int.min, Int.max - 1)
+            }
+        }
+
+        var movingRank: Int { self == .wideGap ? Int.max : 10 }
+
+        var index: Int {
+            switch self {
+            case .top: 0
+            case .bottom: 2
+            case .narrowGap, .wideGap: 1
+            }
+        }
     }
 
     // MARK: - Placing a card
@@ -144,6 +254,24 @@ struct KanbanReorderTests {
         #expect(!b.isDirty)
         #expect(a.manualSortOrder == 1_000)
         #expect(b.manualSortOrder == 2_000)
+    }
+
+    @Test("A group move leaves any matching rank and timestamp alone")
+    func matchingRankStaysClean() {
+        let above = card("Above", order: 1_000)
+        let below = card("Below", order: 7_000)
+        let first = card("First", order: 3_000)
+        let last = card("Last", order: 9_000)
+        let originalModified = Date(timeIntervalSinceReferenceDate: 1_000)
+        first.lastModifiedDate = originalModified
+
+        KanbanReorder.place([first, last], at: 1, among: [above, below])
+
+        #expect(titles([last, below, first, above]) == ["Above", "First", "Last", "Below"])
+        #expect(first.manualSortOrder == 3_000)
+        #expect(!first.isDirty)
+        #expect(first.lastModifiedDate == originalModified)
+        #expect(last.isDirty)
     }
 
     @Test("A card dropped back where it was is left alone and not uploaded")

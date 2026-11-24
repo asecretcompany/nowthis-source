@@ -80,7 +80,8 @@ struct NowThisApp: App {
 
     init() {
         let coordinator = Self.makeStoreOpenCoordinator()
-        let scheduler = SyncScheduler(syncEngine: Self.sharedSyncEngine)
+        let scheduler = SyncScheduler(syncEngine: Self.sharedSyncEngine,
+                                      onCommittedTaskChange: { GeofenceManager.shared.requestReconciliation() })
         _syncScheduler = StateObject(wrappedValue: scheduler)
 
         // SwiftUI constructs App before UIKit has finished launching. Prepare only;
@@ -97,6 +98,17 @@ struct NowThisApp: App {
             UNUserNotificationCenter.current().delegate = notificationDelegate
             spotlightIndexer.startObserving(modelContext: modelContainer.mainContext)
             scheduler.configureSpotlight(modelContext: modelContainer.mainContext, indexer: spotlightIndexer)
+            GeofenceManager.shared.configure(container: modelContainer)
+            #if NOWTHIS_PERFORMANCE_FIXTURES && targetEnvironment(simulator)
+            if let run = PerformanceLaunchFixture.calendarProbeRun {
+                scheduler.configureCalendarMirrors(container: modelContainer,
+                    apple: PerformanceLaunchFixture.calendarProbeManager(run: run), appleEnabled: { true })
+            } else {
+                scheduler.configureCalendarMirrors(container: modelContainer)
+            }
+            #else
+            scheduler.configureCalendarMirrors(container: modelContainer)
+            #endif
             backgroundSyncManager.configureStore(modelContainer: modelContainer)
             proEntitlement.start()
             appIconController.start(entitlement: proEntitlement)
@@ -131,15 +143,15 @@ struct NowThisApp: App {
                     handleSpotlightActivity(activity)
                 }
                 .task {
-                    // Badge count is fast — do it immediately
-                    await ReminderScheduler.updateBadgeCount(
-                        modelContext: modelContainer.mainContext
-                    )
-                    // Local recovery must not depend on successful CalDAV execution.
-                    await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
-                    syncScheduler.syncOnForeground(
-                        modelContext: modelContainer.mainContext
-                    )
+                    await syncScheduler.startForegroundWork(modelContext: modelContainer.mainContext) {
+                        // Preserve the launch permission prompt before background recovery.
+                        await ReminderScheduler.updateBadgeCount(
+                            modelContext: modelContainer.mainContext
+                        )
+                        // Local recovery must not depend on successful CalDAV execution.
+                        await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
+                        await syncScheduler.reconcileCalendarMirrors()
+                    }
                     // Defer Spotlight reindex (non-blocking)
                     Task {
                         await spotlightIndexer.reindexAll(
@@ -156,21 +168,30 @@ struct NowThisApp: App {
                         deepLinkTaskID = taskID
                     }
                 }
+                #if NOWTHIS_PERFORMANCE_FIXTURES && targetEnvironment(simulator)
+                .overlay(alignment: .bottom) {
+                    if let run = PerformanceLaunchFixture.calendarProbeRun {
+                        AppleCalendarProbePanel(container: modelContainer, run: run, scheduler: syncScheduler)
+                    }
+                }
+                #endif
                 .environmentObject(syncScheduler)
                 .environment(syncScheduler.progressState)
-                .environment(\.syncCommands, syncScheduler.commands)
+                .environment(\.syncCommands, PerformanceLaunchFixture.syncCommands(syncScheduler.commands))
                 .environmentObject(watchBridge)
                 .environment(proEntitlement)
                 .environment(appIconController)
                 .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
+                        GeofenceManager.shared.requestReconciliation()
                         Task {
                             await proEntitlement.refresh()
                             try? await appIconController.reconcileOwnership(proEntitlement.ownedCollectionIDs)
                         }
                         Task {
-                            await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
-                            syncScheduler.syncOnForeground(modelContext: modelContainer.mainContext)
+                            await syncScheduler.startForegroundWork(modelContext: modelContainer.mainContext) {
+                                await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)
+                            }
                         }
                     } else if newPhase == .background {
                         // Acquire synchronously while the scene callback still owns execution.
@@ -180,6 +201,7 @@ struct NowThisApp: App {
                                 policy: ReminderReconcilePolicy(allowsPermissionPrompt: false,
                                     deadline: assertion.budget.finalCutoff))
                         }
+                        syncScheduler.pauseCalendarMirrors()
                         syncScheduler.cancelInflightSync()
                         backgroundSyncManager.scheduleBackgroundSync()
                     }

@@ -36,6 +36,12 @@ struct RetryPolicy: Sendable {
     /// Base delay (seconds) for exponential backoff between retries.
     let baseDelay: TimeInterval
 
+    /// Setup is read-only, but only connection failures should repeat. In
+    /// particular a TLS handshake failure must not be treated as VPN startup.
+    var connectionFailuresOnly = false
+
+    static let connectionSetup = RetryPolicy(maxAttempts: 3, baseDelay: 0.5, connectionFailuresOnly: true)
+
     /// Default policy: 3 attempts with 0.5s → 1.0s backoff.
     static let `default` = RetryPolicy(maxAttempts: 3, baseDelay: 0.5)
 
@@ -43,6 +49,20 @@ struct RetryPolicy: Sendable {
     func isRetryable(_ error: Error) -> Bool {
         // Never retry a cancelled task — cancellation is intentional.
         if error is CancellationError || error is BackgroundBudgetExhausted { return false }
+
+        if connectionFailuresOnly {
+            let underlying: Error
+            if let dav = error as? CalDAVError, case .networkError(let wrapped) = dav {
+                underlying = wrapped
+            } else { underlying = error }
+            guard let urlError = underlying as? URLError else { return false }
+            switch urlError.code {
+            case .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost,
+                 .networkConnectionLost, .notConnectedToInternet, .timedOut:
+                return true
+            default: return false
+            }
+        }
 
         if let responseError = error as? HTTPRetryError {
             return responseError.statusCode == 429 || ((500...599).contains(responseError.statusCode) && responseError.statusCode != 507)
@@ -66,20 +86,22 @@ struct RetryPolicy: Sendable {
         return Self.isTransientURLError(error)
     }
 
-    /// Returns the delay for the given retry attempt, respecting `Retry-After` from 429s.
+    /// Returns the delay for the given retry attempt, respecting `Retry-After`.
     func delay(forRetry retryIndex: Int, error: Error? = nil) -> TimeInterval {
         guard retryIndex > 0 else { return 0 }
+        return Self.serverWait(for: error)?.interval ?? baseDelay * pow(2.0, Double(retryIndex - 1))
+    }
 
-        if let responseError = error as? HTTPRetryError, let delay = responseError.retryAfter { return delay }
-
-        // Respect the server's Retry-After header for rate-limited responses
+    fileprivate static func serverWait(for error: Error?) -> (interval: TimeInterval, statusCode: Int, deadline: Date?)? {
+        if let response = error as? HTTPRetryError, let delay = response.retryAfter {
+            return (delay, response.statusCode, response.retryDeadline)
+        }
         if let calDAVError = error as? CalDAVError,
            case .rateLimited(let retryAfter) = calDAVError,
            let retryAfter {
-            return retryAfter
+            return (retryAfter, 429, nil)
         }
-
-        return baseDelay * pow(2.0, Double(retryIndex - 1))
+        return nil
     }
 
     /// Connection-level `URLError`s that typically resolve on an immediate retry.
@@ -99,8 +121,6 @@ struct RetryPolicy: Sendable {
             return false
         }
     }
-
-
 }
 
 /// Runs `operation`, retrying transient failures according to `policy`.
@@ -119,30 +139,49 @@ func withRetry<T>(
 ) async throws -> T {
     var attempt = 1
     while true {
+        try await ServerRetryAdmission.current?.check()
         try BackgroundBudgetExhausted.checkAdmission(runBudget)
         if let deadline, now() >= deadline { throw RetryDeferredError(deadline: now()) }
         do {
             return try await operation()
         } catch {
+            let serverWait = RetryPolicy.serverWait(for: error)
+            let serverDeferral: RetryDeferredError?
+            if let serverWait, serverWait.interval > 0, !policy.connectionFailuresOnly {
+                let deferral = RetryDeferredError(deadline: serverWait.deadline ?? now().addingTimeInterval(serverWait.interval),
+                    httpStatusCode: serverWait.statusCode)
+                // The transport already recorded waits it received in HTTP headers.
+                if serverWait.deadline == nil { ServerRetryAdmission.current?.retain(deferral) }
+                serverDeferral = deferral
+            } else {
+                serverDeferral = nil
+            }
+
+            do {
+                try BackgroundBudgetExhausted.checkAdmission(runBudget)
+            } catch let budgetError as BackgroundBudgetExhausted {
+                if let serverDeferral { throw serverDeferral }
+                throw budgetError
+            }
             let isLastAttempt = attempt >= policy.maxAttempts
-            try BackgroundBudgetExhausted.checkAdmission(runBudget)
             if isLastAttempt || !policy.isRetryable(error) {
+                if let serverDeferral { throw serverDeferral }
+                if let response = error as? HTTPRetryError, response.statusCode == 429 {
+                    throw CalDAVError.rateLimited(retryAfter: response.retryAfter)
+                }
                 throw error
             }
-            let delay = policy.delay(forRetry: attempt, error: error)
-            let serverDelay: TimeInterval?
-            if case CalDAVError.rateLimited(let retryAfter) = error { serverDelay = retryAfter }
-            else { serverDelay = (error as? HTTPRetryError)?.retryAfter }
-            let wait = serverDelay ?? max(0, jitter(delay))
-            let retryDeadline = now().addingTimeInterval(wait)
+            let remainingServerWait = serverWait?.deadline.map { max(0, $0.timeIntervalSince(now())) }
+            let wait = remainingServerWait ?? serverWait?.interval ?? max(0, jitter(policy.delay(forRetry: attempt)))
+            let retryDeadline = serverDeferral?.deadline ?? now().addingTimeInterval(wait)
             if let runBudget, wait >= BackgroundBudgetExhausted.remainingSeconds(runBudget) {
                 // An explicit server delay remains authoritative across deliveries;
                 // only our own policy backoff is app-budget exhaustion.
-                if serverDelay != nil { throw RetryDeferredError(deadline: retryDeadline) }
+                if let serverDeferral { throw serverDeferral }
                 throw BackgroundBudgetExhausted()
             }
             if let deadline, retryDeadline >= deadline {
-                throw RetryDeferredError(deadline: retryDeadline)
+                throw serverDeferral ?? RetryDeferredError(deadline: retryDeadline)
             }
             try await DeadlineRequestExecutor.perform(deadline: runBudget?.remoteCutoff) {
                 try await sleep(wait)
@@ -155,6 +194,29 @@ func withRetry<T>(
 /// The coordinator can schedule a later run without violating Retry-After.
 struct RetryDeferredError: Error, Sendable {
     let deadline: Date
+    let httpStatusCode: Int?
+
+    init(deadline: Date, httpStatusCode: Int? = nil) {
+        self.deadline = deadline
+        self.httpStatusCode = httpStatusCode
+    }
+}
+
+/// Binds HTTP work to the account whose credentials it sends, including requests
+/// made by a destination sync to recover a source account's task or original.
+struct ServerRetryAdmission: Sendable {
+    @TaskLocal static var current: Self?
+
+    let accountID: String
+    let checkDeadline: @Sendable (String) async throws -> Void
+    let recordDeadline: @Sendable (String, RetryDeferredError) -> Void
+
+    func check() async throws { try await checkDeadline(accountID) }
+    func retain(_ deferral: RetryDeferredError) { recordDeadline(accountID, deferral) }
+
+    func forAccount(_ accountID: String) -> Self {
+        Self(accountID: accountID, checkDeadline: checkDeadline, recordDeadline: recordDeadline)
+    }
 }
 
 /// Retains Retry-After on transient HTTP failures such as a 503. Without a
@@ -162,4 +224,11 @@ struct RetryDeferredError: Error, Sendable {
 struct HTTPRetryError: Error, Sendable {
     let statusCode: Int
     let retryAfter: TimeInterval?
+    let retryDeadline: Date?
+
+    init(statusCode: Int, retryAfter: TimeInterval?, retryDeadline: Date? = nil) {
+        self.statusCode = statusCode
+        self.retryAfter = retryAfter
+        self.retryDeadline = retryDeadline
+    }
 }

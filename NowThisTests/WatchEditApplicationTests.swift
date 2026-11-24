@@ -42,6 +42,57 @@ struct WatchEditApplicationTests {
         return list
     }
 
+    @Test func readOnlyAddReturnsExistingInvalidResultWithoutStaging() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let list = makeList(in: context, name: "Read only")
+        list.isReadOnly = true
+        try context.save()
+
+        var saves = 0
+        let result = WatchEditApplier.apply(
+            .add(rawText: "Buy milk #Urgent", listID: list.id,
+                 dueDate: nil, priorityRaw: nil),
+            modelContext: context, isProUnlocked: true, now: now,
+            save: { saves += 1 })
+
+        #expect(result == .invalid)
+        #expect(saves == 0)
+        #expect(try context.fetch(FetchDescriptor<TaskItem>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<NowThis.Tag>()).isEmpty)
+        #expect(!context.hasChanges)
+        #expect(try ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
+    }
+
+    @Test func readOnlyCompletionReturnsExistingInvalidResultWithoutMutation() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let list = makeList(in: context, name: "Read only")
+        list.isReadOnly = true
+        let task = makeTask(in: context, uid: "read-only-watch-task", due: now)
+        task.taskList = list
+        task.status = .inProcess
+        task.percentComplete = 40
+        task.isDirty = false
+        try context.save()
+        var saves = 0
+
+        let result = WatchEditApplier.apply(.complete(uid: task.uid),
+            modelContext: context, isProUnlocked: true, now: now,
+            save: { saves += 1 })
+
+        #expect(result == .invalid)
+        #expect(saves == 0)
+        #expect(task.status == .inProcess)
+        #expect(task.percentComplete == 40)
+        #expect(task.dueDate == now)
+        #expect(!task.isDirty)
+        #expect(!context.hasChanges)
+        #expect(try ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
+    }
+
     @Test func watchSaveFailureCannotAcknowledgeReminder() throws {
         let container = try makeContainer()
         let context = ModelContext(container)
@@ -57,6 +108,24 @@ struct WatchEditApplicationTests {
         #expect(try ReminderSchedulingJournal.capture(in: read).isEmpty)
         #expect(try !ReminderSchedulingJournal.capture(in: context).isEmpty)
         context.rollback()
+    }
+
+    @Test(arguments: ["FREQ=MONTHLY;BYMONTHDAY=15", "FREQ=DAILY;COUNT=3"]) func unsupportedRuleRejectsWatchEditWithoutSavingOrJournaling(_ raw: String) throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let task = makeTask(in: context, uid: "unsupported", rrule: raw, due: now)
+        task.isDirty = false
+        try context.save()
+        var saves = 0
+        let result = WatchEditApplier.apply(.complete(uid: task.uid), modelContext: context,
+            isProUnlocked: true, now: now, save: { saves += 1 })
+        #expect(result == .unsupportedRecurrence)
+        #expect(saves == 0)
+        #expect(task.status == .needsAction)
+        #expect(task.dueDate == now)
+        #expect(!task.isDirty)
+        #expect(!context.hasChanges)
+        #expect(try ReminderSchedulingJournal.capture(in: ModelContext(container)).isEmpty)
     }
 
     @Test func completeByUIDMarksCompletedAndDirty() throws {
@@ -108,13 +177,19 @@ struct WatchEditApplicationTests {
         let context = ModelContext(container)
         let list = makeList(in: context)
         try context.save()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: "2026-03-07T20:00:00Z"))
+        let expectedDue = try #require(iso.date(from: "2026-03-09T00:00:00Z"))
 
         let outcome = WatchEditApplier.apply(
             .add(rawText: "Buy milk tomorrow at 5pm", listID: list.id,
                  dueDate: nil, priorityRaw: nil),
             modelContext: context,
             isProUnlocked: true,
-            now: now
+            now: now,
+            calendar: calendar
         )
 
         #expect(outcome == .applied)
@@ -122,7 +197,7 @@ struct WatchEditApplicationTests {
         #expect(tasks.count == 1)
         let task = try #require(tasks.first)
         #expect(task.title == "Buy milk")
-        #expect(task.dueDate != nil)
+        #expect(task.dueDate == expectedDue)
         #expect(task.isDueDateOnly == false)
         #expect(task.taskList?.id == list.id)
         #expect(task.isDirty)
@@ -135,18 +210,26 @@ struct WatchEditApplicationTests {
         let context = ModelContext(container)
         let list = makeList(in: context)
         try context.save()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: "2026-03-07T20:00:00Z"))
+        let expectedDue = try #require(iso.date(from: "2026-03-08T00:00:00Z"))
 
         let outcome = WatchEditApplier.apply(
-            .add(rawText: "Pay rent tomorrow", listID: list.id,
+            .add(rawText: "Buy milk tomorrow", listID: list.id,
                  dueDate: nil, priorityRaw: nil),
             modelContext: context,
             isProUnlocked: true,
-            now: now
+            now: now,
+            calendar: calendar
         )
 
         #expect(outcome == .applied)
         let tasks = try context.fetch(FetchDescriptor<TaskItem>())
         let task = try #require(tasks.first)
+        #expect(task.title == "Buy milk")
+        #expect(task.dueDate == expectedDue)
         #expect(task.isDueDateOnly == true)
     }
 
@@ -274,17 +357,21 @@ struct WatchEditApplicationTests {
         let list = makeList(in: context)
         try context.save()
         let pickerDate = Date(timeIntervalSince1970: 1_900_000_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: "2026-11-08T12:00:00Z"))
+        let expectedDue = try #require(iso.date(from: "2026-11-09T00:00:00Z"))
 
         WatchEditApplier.apply(
             .add(rawText: "Buy milk tomorrow", listID: list.id,
                  dueDate: pickerDate, priorityRaw: nil),
-            modelContext: context, isProUnlocked: true, now: now
+            modelContext: context, isProUnlocked: true, now: now, calendar: calendar
         )
 
         let task = try #require(try context.fetch(FetchDescriptor<TaskItem>()).first)
-        let due = try #require(task.dueDate)
-        #expect(due != pickerDate, "the typed token should have won")
-        #expect(Calendar.current.isDate(due, inSameDayAs: Date().addingTimeInterval(86_400)))
+        #expect(task.dueDate == expectedDue)
+        #expect(task.isDueDateOnly)
     }
 
     @Test func aTypedPriorityTokenBeatsThePicker() throws {

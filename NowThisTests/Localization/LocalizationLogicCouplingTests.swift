@@ -67,9 +67,9 @@ struct LocalizationLogicCouplingTests {
         let legacy = FilterRule(field: .priority, comparison: .equals, value: "High")
         let other = FilterRule(field: .priority, comparison: .equals, value: "low")
 
-        #expect(current.matches(task, allLists: []))
-        #expect(legacy.matches(task, allLists: []))
-        #expect(!other.matches(task, allLists: []))
+        #expect(current.matches(task))
+        #expect(legacy.matches(task))
+        #expect(!other.matches(task))
     }
 
     /// The behavioural tests above pass whichever way `matches` is written, because the suite

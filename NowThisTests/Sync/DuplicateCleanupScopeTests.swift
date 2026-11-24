@@ -56,7 +56,7 @@ struct DuplicateCleanupScopeTests {
         insertDuplicatePair(uid: "dupe-b", into: listB, context: context)
         try context.save()
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context, listID: listA.id)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context, listID: listA.id)
 
         #expect(removed == 1, "only list A's duplicate should go")
 
@@ -76,7 +76,7 @@ struct DuplicateCleanupScopeTests {
         insertDuplicatePair(uid: "dupe", into: list, context: context)
         try context.save()
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context, listID: list.id)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context, listID: list.id)
         try context.save()
 
         #expect(removed == 1)

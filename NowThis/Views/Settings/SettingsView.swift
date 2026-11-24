@@ -3,71 +3,102 @@ import SwiftData
 
 /// Application settings view.
 ///
-/// Shows account information, sync status, and app info.
+/// Groups settings by what the user wants to change.
 struct SettingsView: View {
+    enum Destination: Hashable {
+        case accountsAndSync
+    }
 
     @Query private var accounts: [ServerAccount]
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var syncScheduler: SyncScheduler
+    @Binding var path: [Destination]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Form {
-                WatchProNudgeSection()
-                AccountsSection(accounts: accounts)
-                SyncSection(syncScheduler: syncScheduler, modelContext: modelContext)
-                ProUpsellView()
-                QAToolsSection()
-                CalendarSection(accounts: accounts, modelContext: modelContext)
-                NotificationsSection()
-                TaskBehaviorSection()
-                TaskPhotoSettingsSection()
-                SiriShortcutsSection()
-                TabBarLayoutSection()
-                SidebarLayoutSection()
-                AppearanceSection()
-                AboutSection()
+                Section {
+                    pageLink("Tasks", systemImage: "checklist") {
+                        TaskBehaviorSection()
+                        TaskPhotoSettingsSection()
+                    }
+                    .accessibilityIdentifier("settings.tasks")
+
+                    pageLink("Appearance & Layout", systemImage: "paintbrush") {
+                        AppearanceSection()
+                        TabBarLayoutSection()
+                        SidebarLayoutSection()
+                    }
+
+                    NavigationLink(value: Destination.accountsAndSync) {
+                        Label("Accounts & Sync", systemImage: "person.crop.circle")
+                    }
+
+                    pageLink("Notifications", systemImage: "bell") {
+                        NotificationsSection()
+                    }
+
+                    pageLink("Integrations", systemImage: "puzzlepiece.extension") {
+                        CalendarSection(accounts: accounts, modelContext: modelContext)
+                        SiriShortcutsSection()
+                        SpotlightSettingsSection()
+                    }
+                }
+
+                Section {
+                    pageLink("Support Development", systemImage: "heart") {
+                        QAToolsSection()
+                        ProUpsellView()
+                    }
+
+                    pageLink("About", systemImage: "info.circle") {
+                        AboutSection()
+                    }
+                }
             }
             .navigationTitle("Settings")
+            .navigationDestination(for: Destination.self) { destination in
+                switch destination {
+                case .accountsAndSync:
+                    page("Accounts & Sync") {
+                        AccountsSection(accounts: accounts)
+                        SyncSection(syncScheduler: syncScheduler, modelContext: modelContext)
+                    }
+                }
+            }
         }
+    }
+
+    private func pageLink<Content: View>(
+        _ title: LocalizedStringKey,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        NavigationLink {
+            page(title, content: content)
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    private func page<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
+        Form(content: content)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-// MARK: - Watch Supporter Nudge Section
-
-/// Dismissible contextual nudge shown only when the user has a paired Apple
-/// Watch with the NowThis watch app installed but hasn't unlocked Supporter yet.
-/// The actual purchase controls live in `ProUpsellView` just below — this row
-/// only surfaces the offer and deep-links nowhere else (no cross-surface
-/// navigation plumbing; see Task 12 notes for the deferred sidebar variant).
-private struct WatchProNudgeSection: View {
-    @Environment(ProEntitlement.self) private var entitlement
-    @EnvironmentObject private var watchBridge: WatchBridge
-    @AppStorage("proUpsellDismissed") private var dismissed = false
+private struct SpotlightSettingsSection: View {
+    @AppStorage(SpotlightPreferences.notesKey) private var includeNotes = false
 
     var body: some View {
-        if !entitlement.isUnlocked && watchBridge.isWatchPairedAndInstalled && !dismissed {
-            Section {
-                HStack {
-                    Label("You have an Apple Watch — unlock editing with NowThis Supporter", systemImage: "applewatch")
-                        .accessibilityLabel("You have an Apple Watch. Unlock NowThis Supporter to check off and add tasks from your wrist.")
-
-                    Spacer()
-
-                    Button {
-                        dismissed = true
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Dismiss")
-                    .accessibilityHint(String(
-                        localized: "settings.watchNudge.a11y.dismissHint",
-                        defaultValue: "Dismisses the NowThis Supporter offer for Apple Watch",
-                        comment: "VoiceOver hint on the button that dismisses the NowThis Supporter suggestion shown to Apple Watch owners. Spoken, not shown. 'NowThis Supporter' is the product name and is never translated; there is no product called 'Apple Watch Supporter'."))
+        Section("Spotlight") {
+            Toggle("Include notes in Spotlight", isOn: $includeNotes)
+                .accessibilityLabel("Include notes in Spotlight")
+                .accessibilityHint("Allows task notes to appear in system search results")
+                .onChange(of: includeNotes) { _, enabled in
+                    SpotlightPreferences().setIncludesNotes(enabled)
                 }
-            }
         }
     }
 }
@@ -295,6 +326,18 @@ private struct SyncSection: View {
                 }
                 .foregroundStyle(.red)
                 .accessibilityLabel(Text("Sync error: \(error)"))
+                if let stage = syncScheduler.lastSyncFailure?.discoveryStage {
+                    LabeledContent("Sync phase", value: stage.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                }
+                if let method = syncScheduler.lastSyncFailure?.requestMethod {
+                    LabeledContent("Request method", value: method.rawValue)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                }
                 if let statusCode = syncScheduler.lastSyncFailure?.httpStatusCode {
                     LabeledContent {
                         Text(verbatim: "HTTP \(statusCode)")
@@ -382,6 +425,7 @@ private struct NotificationsSection: View {
     @AppStorage(NotificationPreferences.bannerEnabledKey) private var bannerEnabled = true
     @AppStorage(NotificationPreferences.badgeEnabledKey) private var badgeEnabled = true
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     var body: some View {
         Section {
@@ -395,7 +439,9 @@ private struct NotificationsSection: View {
             }
             .accessibilityHint("Show a count of overdue tasks on the app icon")
             .onChange(of: badgeEnabled) { _, _ in
-                ReminderScheduler.requestReconcile(modelContext: modelContext)
+                guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+                    ViewPersistence.report($0, to: errorState)
+                }) else { return }
             }
         } header: {
             Text("Notifications")
@@ -416,6 +462,7 @@ private struct ListChoice: Identifiable, Equatable {
 
 private struct TaskBehaviorSection: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @AppStorage(TaskDefaultsPreferences.defaultListIDKey) private var defaultNewTaskListID: String = ""
     @AppStorage("showCompletedTasks") private var showCompleted = false
     @AppStorage("startupScreen") private var startupScreen = "last"
@@ -460,6 +507,11 @@ private struct TaskBehaviorSection: View {
             }
             .accessibilityHint("When off, completed tasks are hidden from your lists and from the calendar view. The board's Completed column always shows them.")
 
+            NavigationLink {
+                TaskDetailLayoutView()
+            } label: {
+                Label("Task Detail Layout", systemImage: "list.bullet")
+            }
         } header: {
             Text("Task Behavior")
         } footer: {
@@ -585,7 +637,9 @@ private struct TaskBehaviorSection: View {
             set: { newDate in
                 let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
                 allDayReminderMinutes = (comps.hour ?? 9) * 60 + (comps.minute ?? 0)
-                ReminderScheduler.requestReconcile(modelContext: modelContext)
+                guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+                    ViewPersistence.report($0, to: errorState)
+                }) else { return }
             }
         )
     }
@@ -762,6 +816,8 @@ private struct AppearanceSection: View {
 // MARK: - Calendar Section
 
 private struct CalendarSection: View {
+    @Environment(\.saveErrorState) private var errorState
+    @EnvironmentObject private var syncScheduler: SyncScheduler
     let accounts: [ServerAccount]
     let modelContext: ModelContext
 
@@ -841,31 +897,40 @@ private struct CalendarSection: View {
     }
 
     private var hasNextcloudAccounts: Bool {
-        accounts.contains { $0.modelContext != nil && $0.mode != .vault }
+        accounts.contains { $0.modelContext != nil && !$0.isDeleted && $0.mode != .vault }
     }
 
     private func syncCalendarsNow() {
         isSyncing = true
-        // Resolve which accounts to sync *before* the awaits below. Reading
-        // `account.mode` after them risks touching a model that an account delete
-        // invalidated while the Apple leg was still running.
-        let calendarAccounts = accounts.filter { $0.modelContext != nil && $0.mode != .vault }
+        let accountIDs = accounts.filter { $0.modelContext != nil && !$0.isDeleted && $0.mode != .vault }.map(\.id)
+        let container = modelContext.container
         Task { @MainActor in
             // Apple Calendar sync
-            if appleCalendarEnabled {
+            if appleCalendarEnabled && !container.mainContext.hasChanges {
                 let appleSync = AppleCalendarSyncManager(permissionManager: permissionManager)
-                await appleSync.syncAll(modelContext: modelContext)
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                if await appleSync.syncAll(modelContext: context) {
+                    syncScheduler.publishLocalTaskCommit()
+                }
+                if let error = appleSync.lastError {
+                    ViewPersistence.reportCalendarFailure(error, to: errorState)
+                }
             }
 
             // Nextcloud Calendar sync
             if nextcloudCalendarEnabled {
                 let nextcloudSync = NextcloudCalendarSyncManager()
-                // Re-checked each iteration: the previous account's network round
-                // trip is another window for the delete to land.
-                for account in calendarAccounts where account.modelContext != nil {
-                    nonisolated(unsafe) let unsafeAccount = account
-                    nonisolated(unsafe) let unsafeContext = modelContext
-                    try? await nextcloudSync.syncAll(account: unsafeAccount, modelContext: unsafeContext)
+                for accountID in accountIDs {
+                    do {
+                        _ = try await nextcloudSync.syncAll(accountID: accountID, container: container) {
+                            syncScheduler.publishLocalTaskCommit()
+                        }
+                    } catch is CancellationError {
+                        // Cancellation is intentional, not a save failure.
+                    } catch {
+                        ViewPersistence.reportCalendarFailure(String(describing: error), to: errorState)
+                    }
                 }
             }
 
@@ -876,6 +941,7 @@ private struct CalendarSection: View {
 
 #if DEBUG
 #Preview("Settings sync controls") {
+    @Previewable @State var path: [SettingsView.Destination] = []
     let container = try! ModelContainer(for: Schema(SchemaV2.models),
         configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     let _ = try! AccountManager(modelContext: container.mainContext).createVaultAccount()
@@ -884,7 +950,7 @@ private struct CalendarSection: View {
                                      testerBuild: { false }, forcePaywall: { false })
     let bridge = WatchBridge(session: nil, entitlement: entitlement,
                              syncScheduler: scheduler, modelContainer: container)
-    return SettingsView()
+    return SettingsView(path: $path)
         .modelContainer(container)
         .environmentObject(scheduler)
         .environmentObject(bridge)

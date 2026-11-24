@@ -72,9 +72,10 @@ struct FilterBar: View {
                 CompletedChip(showCompleted: $showCompleted)
                 PriorityChips(priorityFilter: $priorityFilter)
             }
-            .padding(.horizontal, 16)
             .padding(.vertical, 6)
         }
+        .clipped()
+        .padding(.horizontal, 16)
     }
 }
 

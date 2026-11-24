@@ -403,15 +403,30 @@ struct ReminderScheduler {
     /// Fire-and-forget on purpose: the callers are button actions and intent bodies that must
     /// not block on notification work.
     @MainActor
-    static func requestReconcile(modelContext: ModelContext) {
-        // Persist before the debounce. Suspension or termination must leave recoverable work.
+    @discardableResult
+    static func requestReconcile(modelContext: ModelContext, onSaveFailure: (Error) -> Void) -> Bool {
         do {
-            try BackgroundRunBudget.protectingCurrent {
-                try ReminderSchedulingJournal.saveTaskChanges(in: modelContext, needsRecovery: true)
-            }
+            try requestReconcileOrThrow(modelContext: modelContext)
+            return true
         } catch {
-            logger.error("Failed to save reminder recovery intent: \(error.localizedDescription)")
-            return
+            onSaveFailure(error)
+            return false
+        }
+    }
+
+    @MainActor
+    static func requestReconcile(modelContext: ModelContext) {
+        requestReconcile(modelContext: modelContext, onSaveFailure: {
+            logger.error("Failed to save reminder recovery intent: \($0.localizedDescription)")
+        })
+    }
+
+    /// UI callers can surface a failed recovery save on the active presentation.
+    @MainActor
+    static func requestReconcileOrThrow(modelContext: ModelContext) throws {
+        // Persist before the debounce. Suspension or termination must leave recoverable work.
+        try BackgroundRunBudget.protectingCurrent {
+            try ReminderSchedulingJournal.saveTaskChanges(in: modelContext, needsRecovery: true)
         }
         coordinator(for: modelContext, store: SystemNotificationStore()).invalidate(taskIDs: [])
         pendingReconcile?.cancel()
@@ -623,8 +638,8 @@ struct ReminderScheduler {
     ///   day (`allDayReminderMinutes` since local midnight, default 9:00 AM) —
     ///   matching Apple Reminders — rather than at end-of-local-day, so an all-day
     ///   reminder pings in the morning instead of at midnight. The `reminderOffset`
-    ///   then shifts earlier from that anchor (e.g. 86400 = the day before at the
-    ///   same time).
+    ///   then shifts earlier by elapsed seconds from that anchor (86400 is 24 hours,
+    ///   which can differ from the previous day's local clock time across DST).
     /// - Date+time tasks fire at `dueDate - reminderOffset`, unchanged.
     static func computeFireDate(
         dueDate: Date,
@@ -636,9 +651,10 @@ struct ReminderScheduler {
         guard isDueDateOnly else {
             return dueDate.addingTimeInterval(-Double(reminderOffset))
         }
-        let anchor = DueDateHelper.localStartOfDay(
+        let localDay = DueDateHelper.localStartOfDay(
             for: dueDate, isDateOnly: true, regionCalendar: calendar)
-            .addingTimeInterval(Double(allDayReminderMinutes) * 60)
+        let anchor = DueDateHelper.timedValue(
+            for: localDay, minutesSinceMidnight: allDayReminderMinutes, calendar: calendar)
         return anchor.addingTimeInterval(-Double(reminderOffset))
     }
 
@@ -746,6 +762,13 @@ struct ReminderScheduler {
         return count
     }
 
+    @MainActor
+    struct BadgeAccess {
+        let authorizationStatus: () async -> UNAuthorizationStatus
+        let requestPermission: () async -> Void
+        let setBadgeCount: (Int) async -> Void
+    }
+
     /// Fetches active tasks and updates the app icon badge count.
     ///
     /// Requests notification permission if not yet determined, then sets the
@@ -755,12 +778,26 @@ struct ReminderScheduler {
     static func updateBadgeCount(modelContext: ModelContext, allowPrompt: Bool = true) async {
         guard !ReminderReconcilePolicy.background.shouldStop else { return }
         let center = UNUserNotificationCenter.current()
+        let access = BadgeAccess(
+            authorizationStatus: { await center.notificationSettings().authorizationStatus },
+            requestPermission: {
+                guard NotificationPrompt.isAllowed(applicationIsActive: UIApplication.shared.applicationState == .active) else { return }
+                _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            },
+            setBadgeCount: { count in try? await center.setBadgeCount(count) })
+        await updateBadgeCount(modelContext: modelContext, allowPrompt: allowPrompt,
+                               badgesEnabled: NotificationPreferences.isBadgeEnabled, access: access)
+    }
+
+    @MainActor
+    static func updateBadgeCount(modelContext: ModelContext, allowPrompt: Bool,
+                                 badgesEnabled: Bool, access: BadgeAccess) async {
+        guard !ReminderReconcilePolicy.background.shouldStop else { return }
         let generation = badgeCoalescer.beginRequest()
-        let badgesEnabled = NotificationPreferences.isBadgeEnabled
 
         // If the user disabled badges in app settings, clear and return.
         guard badgesEnabled else {
-            try? await center.setBadgeCount(0)
+            await access.setBadgeCount(0)
             return
         }
 
@@ -786,24 +823,24 @@ struct ReminderScheduler {
         // Request permission if not yet determined — this is the fix for
         // new users who never see badge counts because setBadgeCount
         // requires authorization.
-        let settings = await center.notificationSettings()
+        let authorization = await access.authorizationStatus()
         guard badgeCoalescer.isCurrent(generation), !ReminderReconcilePolicy.background.shouldStop else { return }
-        if allowPrompt, settings.authorizationStatus == .notDetermined, NotificationPrompt.isAllowed(applicationIsActive: UIApplication.shared.applicationState == .active) {
-            _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+        if allowPrompt, authorization == .notDetermined, NotificationPrompt.isAllowed(applicationIsActive: UIApplication.shared.applicationState == .active) {
+            await access.requestPermission()
         }
 
         // Check if permission was denied (either before or after the prompt)
-        let updatedSettings = await center.notificationSettings()
+        let updatedAuthorization = await access.authorizationStatus()
         guard badgeCoalescer.isCurrent(generation), !ReminderReconcilePolicy.background.shouldStop else { return }
-        guard updatedSettings.authorizationStatus != .denied else {
+        guard updatedAuthorization != .denied else {
             return
         }
 
-        guard let result = await worker.project(request) else {
+        guard let count = await worker.badgeCount(request) else {
             logger.error("Failed to update badge count: task fetch failed")
             return
         }
         guard badgeCoalescer.isCurrent(generation), !ReminderReconcilePolicy.background.shouldStop else { return }
-        try? await center.setBadgeCount(result.badgeCount)
+        await access.setBadgeCount(count)
     }
 }

@@ -26,11 +26,13 @@ struct WidgetReloadTests {
         let context = ModelContext(container)
         let task = TaskItem(title: "Test task")
         context.insert(task)
+        try context.save()
 
         var widgetReloaded = false
         let coordinator = TaskCompletionCoordinator(
             animationDelay: 0.05,
-            onWidgetReload: { widgetReloaded = true }
+            onWidgetReload: { widgetReloaded = true },
+            onCompletionDonation: { _ in }
         )
 
         coordinator.toggle(task) { }
@@ -49,11 +51,13 @@ struct WidgetReloadTests {
         task.completedDate = Date()
         task.percentComplete = 100
         context.insert(task)
+        try context.save()
 
         var widgetReloaded = false
         let coordinator = TaskCompletionCoordinator(
             animationDelay: 0.8,
-            onWidgetReload: { widgetReloaded = true }
+            onWidgetReload: { widgetReloaded = true },
+            onCompletionDonation: { _ in }
         )
 
         coordinator.toggle(task) { }
@@ -92,7 +96,7 @@ struct WidgetReloadTests {
         #expect(beforeResult.tasks.count == 2)
 
         // Complete the task via coordinator (simulating main app interaction)
-        let coordinator = TaskCompletionCoordinator(animationDelay: 0.05)
+        let coordinator = TaskCompletionCoordinator(animationDelay: 0.05, onCompletionDonation: { _ in })
         coordinator.toggle(task2) {
             try? context.save()
         }

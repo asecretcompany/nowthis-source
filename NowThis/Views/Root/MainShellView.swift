@@ -1,6 +1,28 @@
 import SwiftUI
 import SwiftData
 
+struct SavedFilterLoadState {
+    private var snapshots: [SavedFilterSnapshot] = []
+    private(set) var loadFailed = false
+
+    var verifiedFilters: [SavedFilterSnapshot] { loadFailed ? [] : snapshots }
+
+    mutating func reload(_ read: () throws -> [SavedFilterSnapshot]) {
+        do {
+            snapshots = try read()
+            loadFailed = false
+        } catch {
+            loadFailed = true
+        }
+    }
+
+    func verifiedFilter(id: String) -> SavedFilterSnapshot? {
+        verifiedFilters.first { $0.id == id }
+    }
+
+    func lastKnownName(id: String) -> String? { snapshots.first { $0.id == id }?.name }
+}
+
 /// Whether "Open App To" has already had its say in this launch.
 ///
 /// `MainShellView`'s own `@State` flag is not enough on its own. The Tasks tab's
@@ -26,11 +48,29 @@ enum SidebarStartupOverride {
 /// On iPhone: collapses to navigation stack with sidebar as root list.
 struct MainShellView: View {
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.modelContext) private var modelContext
     @SceneStorage("sidebarSelection") private var selectionKey = "smart:Today"
     @AppStorage("startupScreen") private var startupScreen = "last"
     @State private var selection: SidebarSelection? = .smart(.today)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var hasAppliedStartup = false
+    @State private var startedInRegularSizeClasses = false
+    @State private var savedFilters = SavedFilterLoadState()
+    @Binding private var deepLinkTaskID: String?
+    let allowsDeepLinkPresentation: Bool
+
+    init(deepLinkTaskID: Binding<String?> = .constant(nil), allowsDeepLinkPresentation: Bool = true) {
+        self._deepLinkTaskID = deepLinkTaskID
+        self.allowsDeepLinkPresentation = allowsDeepLinkPresentation
+    }
+
+    private func preparePendingTaskLink() {
+        guard deepLinkTaskID != nil else { return }
+        let next = Self.selectionForDeepLink(current: selection, allowsPresentation: allowsDeepLinkPresentation)
+        if next != selection { selection = next }
+    }
 
     /// Which `SidebarSelection` key to restore on appear.
     ///
@@ -51,22 +91,74 @@ struct MainShellView: View {
         return startupScreen.hasPrefix("smart:") ? startupScreen : selectionKey
     }
 
+    static func selectionForDeepLink(current: SidebarSelection?, allowsPresentation: Bool = true) -> SidebarSelection? {
+        guard allowsPresentation else { return current }
+        switch current {
+        case nil, .journals: return .smart(.today)
+        default: return current
+        }
+    }
+
+    static func selectionAfterSizeClassChange(
+        current: SidebarSelection?, storedKey: String, newClass: UserInterfaceSizeClass?
+    ) -> SidebarSelection? {
+        guard current == nil, newClass == .regular else { return current }
+        return SidebarSelection.decode(from: storedKey)
+    }
+
+    static func restoreSelectionAfterSizeClassChange(
+        _ selection: Binding<SidebarSelection?>, storedKey: String, newClass: UserInterfaceSizeClass?
+    ) {
+        let current = selection.wrappedValue
+        let restored = selectionAfterSizeClassChange(
+            current: current, storedKey: storedKey, newClass: newClass)
+        // Equal-value writes during adaptation can reset compact back navigation.
+        guard restored != current else { return }
+        selection.wrappedValue = restored
+    }
+
+    private var needsCompactSidebarButton: Bool {
+        if #available(iOS 27.1, *) {
+            return startedInRegularSizeClasses && horizontalSizeClass == .compact && selection != nil
+        }
+        return false
+    }
+
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selection: $selection)
+        let retry: (() -> Void)? = savedFilters.loadFailed ? { refreshSavedFilters() } : nil
+        return NavigationSplitView(columnVisibility: $columnVisibility) {
+            SidebarView(savedFilters: savedFilters.verifiedFilters, retrySavedFilters: retry, selection: $selection)
         } detail: {
-            DetailColumn(selection: selection)
+            DetailColumn(selection: selection, savedFilter: selectedFilter, lastKnownFilterName: selectedFilterName,
+                retrySavedFilters: retry, deepLinkTaskID: $deepLinkTaskID,
+                allowsDeepLinkPresentation: allowsDeepLinkPresentation && hasAppliedStartup,
+                showsSidebarButton: needsCompactSidebarButton)
         }
         .onAppear {
+            refreshSavedFilters()
             if !hasAppliedStartup {
                 hasAppliedStartup = true
+                startedInRegularSizeClasses = horizontalSizeClass == .regular && verticalSizeClass == .regular
                 let key = Self.resolveStartupKey(
                     startupScreen: startupScreen,
                     selectionKey: selectionKey,
                     startupWasConsumed: SidebarStartupOverride.isConsumed)
                 SidebarStartupOverride.consume()
-                selection = SidebarSelection.decode(from: key)
+                let restored = SidebarSelection.decode(from: key)
+                selection = deepLinkTaskID == nil ? restored : Self.selectionForDeepLink(current: restored, allowsPresentation: allowsDeepLinkPresentation)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SavedFilterStore.didCommit)) { notification in
+            guard notification.object as? String == CalendarMirrorState.storeKey(modelContext.container) else { return }
+            refreshSavedFilters()
+        }
+        .onChange(of: deepLinkTaskID, initial: true) { _, _ in preparePendingTaskLink() }
+        .onChange(of: allowsDeepLinkPresentation) { _, allowed in
+            if allowed { preparePendingTaskLink() }
+        }
+        .onChange(of: horizontalSizeClass) { _, newClass in
+            Self.restoreSelectionAfterSizeClassChange(
+                $selection, storedKey: selectionKey, newClass: newClass)
         }
         .onChange(of: selection) { _, newValue in
             if let newValue {
@@ -88,22 +180,42 @@ struct MainShellView: View {
             }
         }
     }
+
+    private var selectedFilter: SavedFilterSnapshot? {
+        guard case .savedFilter(let id) = selection else { return nil }
+        return savedFilters.verifiedFilter(id: id)
+    }
+
+    private var selectedFilterName: String? {
+        guard case .savedFilter(let id) = selection else { return nil }
+        return savedFilters.lastKnownName(id: id)
+    }
+
+    private func refreshSavedFilters() {
+        savedFilters.reload { try SavedFilterStore.snapshots(in: modelContext.container) }
+    }
 }
 
 // MARK: - Detail Column
 
 private struct DetailColumn: View {
     let selection: SidebarSelection?
+    let savedFilter: SavedFilterSnapshot?
+    let lastKnownFilterName: String?
+    let retrySavedFilters: (() -> Void)?
+    @Binding var deepLinkTaskID: String?
+    let allowsDeepLinkPresentation: Bool
+    let showsSidebarButton: Bool
 
     var body: some View {
         if let selection {
             switch selection {
             case .journals:
-                JournalListView()
-                    .refreshOnInboundSync()
+                JournalListView(showsSidebarButton: showsSidebarButton)
             case .tag, .smart, .taskList, .savedFilter:
-                TaskListView(selection: selection)
-                    .refreshOnInboundSync()
+                TaskListView(selection: selection, savedFilter: savedFilter, lastKnownFilterName: lastKnownFilterName,
+                    retrySavedFilters: retrySavedFilters, deepLinkTaskID: $deepLinkTaskID,
+                    allowsDeepLinkPresentation: allowsDeepLinkPresentation, showsSidebarButton: showsSidebarButton)
             }
         } else {
             ContentUnavailableView(
@@ -112,5 +224,27 @@ private struct DetailColumn: View {
                 description: Text("Choose a list from the sidebar to see your tasks.")
             )
         }
+    }
+}
+
+/// Reaches the existing sidebar when a Duo collapse drops its navigation toolbar control.
+struct CompactSidebarButton: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button {
+            dismiss()
+        } label: {
+            Label(String(localized: "sidebar.action.show",
+                defaultValue: "Show Sidebar",
+                comment: "Label for the button that returns from the Tasks detail to the sidebar."),
+                systemImage: "sidebar.leading")
+                .labelStyle(.iconOnly)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("tasks.showSidebar")
     }
 }

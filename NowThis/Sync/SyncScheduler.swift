@@ -75,6 +75,7 @@ final class SyncScheduler: ObservableObject {
 
     private let onWidgetReload: @MainActor () -> Void
     private let onNotificationFlush: @MainActor (ModelContext) async -> Void
+    private let onCommittedTaskChange: @MainActor () -> Void
     private weak var spotlightModelContext: ModelContext?
     private weak var spotlightIndexer: SpotlightIndexer?
 
@@ -82,21 +83,18 @@ final class SyncScheduler: ObservableObject {
     private var debounceTask: Task<Void, Never>?
     private var foregroundSyncTask: Task<Void, Never>?
     private var runnerTask: Task<Void, Never>?
-    private var needsFollowup = false
+    private var needsChangeFollowup = false
     private var pendingAccountSync = false
     private var isForeground = true
+    private var foregroundCalendarGeneration: UInt64 = 0
     private var changeListener: Task<Void, Never>?
     private var changeFlush: Task<Void, Never>?
     private var pendingChange: SyncChange?
+    private var calendarMirrors: CalendarMirrorCoordinator?
     @Published private(set) var unscopedRefreshRevision: UInt64 = 0
     @Published private(set) var latestCommittedChange: SyncChange?
     @Published private(set) var listRevisions: [String: UInt64] = [:]
     private let logger = Logger(subsystem: "com.nowthis", category: "sync-scheduler")
-
-    /// Tracks accounts whose credentials the server rejected (401), so automatic
-    /// syncs stop re-sending failing Basic-Auth and tripping Nextcloud's
-    /// brute-force protection. Auto-clears when the stored password changes.
-    private var authGate = AuthFailureGate()
 
     /// The interval between automatic syncs (in seconds). Default: 5 minutes.
     var autoSyncInterval: TimeInterval = 300
@@ -108,6 +106,7 @@ final class SyncScheduler: ObservableObject {
     /// Debounce delay for change-triggered syncs. Coalesces rapid mutations
     /// (e.g. checking off several tasks quickly) into a single sync.
     private let changeDebounceInterval: TimeInterval = 2
+    private let changeDebounceSleep: @MainActor (TimeInterval) async throws -> Void
 
     init(
         syncEngine: SyncEngine = SyncEngine(),
@@ -115,12 +114,18 @@ final class SyncScheduler: ObservableObject {
         onWidgetReload: @escaping @MainActor () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
         onNotificationFlush: @escaping @MainActor (ModelContext) async -> Void = {
             await ReminderScheduler.reconcileNow(modelContext: $0)
+        },
+        onCommittedTaskChange: @escaping @MainActor () -> Void = {},
+        changeDebounceSleep: @escaping @MainActor (TimeInterval) async throws -> Void = {
+            try await Task.sleep(for: .seconds($0))
         }
     ) {
         self.syncEngine = syncEngine
         self.keychainManager = keychainManager
         self.onWidgetReload = onWidgetReload
         self.onNotificationFlush = onNotificationFlush
+        self.onCommittedTaskChange = onCommittedTaskChange
+        self.changeDebounceSleep = changeDebounceSleep
         progressListener = Task { [weak self, syncEngine] in
             let stream = await syncEngine.progressUpdates()
             for await progress in stream {
@@ -143,6 +148,38 @@ final class SyncScheduler: ObservableObject {
     func configureSpotlight(modelContext: ModelContext, indexer: SpotlightIndexer) {
         spotlightModelContext = modelContext
         spotlightIndexer = indexer
+    }
+
+    func configureCalendarMirrors(container: ModelContainer, apple: AppleCalendarSyncManager? = nil,
+                                  appleEnabled: (@MainActor @Sendable () -> Bool)? = nil) {
+        guard calendarMirrors == nil else { return }
+        let coordinator = CalendarMirrorCoordinator(container: container, apple: apple,
+            appleEnabled: appleEnabled ?? { UserDefaults.standard.bool(forKey: "appleCalendarSyncEnabled") })
+        coordinator.startObserving()
+        calendarMirrors = coordinator
+    }
+
+    func reconcileCalendarMirrors() async {
+        guard isForeground else { return }
+        await calendarMirrors?.reconcileNow()
+    }
+    func pauseCalendarMirrors() {
+        isForeground = false
+        foregroundCalendarGeneration &+= 1
+        calendarMirrors?.pause()
+    }
+
+    /// A local edit saved by another context needs the same query/index invalidation as
+    /// a background commit. This separate UI revision never changes network sync counters
+    /// or the engine's monotonic revision, and never saves the main context's drafts.
+    func publishLocalTaskCommit() {
+        calendarMirrors?.request()
+        unscopedRefreshRevision &+= 1
+        dataRefreshToken = UUID()
+        if let spotlightModelContext, let spotlightIndexer {
+            spotlightIndexer.requestReindex(modelContext: spotlightModelContext)
+        }
+        onWidgetReload()
     }
 
     private func queueCommittedChange(_ change: SyncChange) {
@@ -168,6 +205,10 @@ final class SyncScheduler: ObservableObject {
         guard change.revision > (latestCommittedChange?.revision ?? 0) else { return }
         for id in change.listIDs { listRevisions[id] = change.revision }
         latestCommittedChange = change
+        calendarMirrors?.request()
+        if !change.changedIDs.isEmpty || !change.deletedIDs.isEmpty || change.kind == .lists {
+            onCommittedTaskChange()
+        }
         dataRefreshToken = UUID()
         if let spotlightModelContext, let spotlightIndexer {
             spotlightIndexer.requestReindex(modelContext: spotlightModelContext)
@@ -182,7 +223,7 @@ final class SyncScheduler: ObservableObject {
     func syncAfterAccountAdded(modelContext: ModelContext) {
         pendingAccountSync = true
         guard isForeground else { return }
-        if isSyncing { needsFollowup = true; return }
+        if isSyncing { return }
         debounceTask?.cancel()
         debounceTask = nil
         nonisolated(unsafe) let context = modelContext
@@ -201,15 +242,20 @@ final class SyncScheduler: ObservableObject {
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             repeat {
-                self.needsFollowup = false
                 await self.performSyncRun(modelContext: modelContext)
-            } while self.needsFollowup && !Task.isCancelled
+            } while self.pendingAccountSync && !Task.isCancelled
+            let debounceChanges = self.needsChangeFollowup && !Task.isCancelled && self.isForeground
+            self.needsChangeFollowup = false
             self.runnerTask = nil
             self.isSyncing = false
             // Foreground return can arrive before a cancelled runner finishes
             // its cleanup. Start the saved login request once ownership is free.
             if self.pendingAccountSync && self.isForeground {
                 self.syncAfterAccountAdded(modelContext: modelContext)
+            } else if debounceChanges {
+                // Ownership must be free before re-entering syncAfterChange, or it
+                // would only latch another follow-up instead of starting the delay.
+                self.syncAfterChange(modelContext: modelContext)
             }
         }
         runnerTask = task
@@ -252,40 +298,38 @@ final class SyncScheduler: ObservableObject {
 
             var inboundChanged = false
             var trashedFound: [TrashedList] = []
+            var incompleteRun = false
 
             for account in nextcloudAccounts {
                 try Task.checkCancellation()
 
-                guard let password = try await keychainManager.retrieve(for: account.id) else {
+                let expected = AccountCredentialScope(id: account.id, serverBaseURL: account.serverBaseURL,
+                                                      username: account.username)
+                let admitted: CommittedAccountCredentials
+                switch try await AccountManager.admitCredentials(
+                    accountID: account.id, expected: expected, container: modelContext.container,
+                    keychainManager: keychainManager
+                ) {
+                case .available(let credentials):
+                    admitted = credentials
+                case .missing:
                     recordAuthFailure(
                         message: String(localized: "Can't sign in to \(account.displayName) — sign in again in Settings."))
                     continue
-                }
-
-                // Circuit breaker: never re-send a password the server already
-                // rejected. Repeated failed Basic-Auth trips Nextcloud's
-                // brute-force protection and locks the user out. The gate
-                // auto-clears once the stored password changes (re-auth).
-                if authGate.shouldSkip(accountID: account.id, currentPassword: password) {
-                    recordAuthFailure(
-                        message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."))
+                case .deferred:
+                    incompleteRun = true
                     continue
                 }
 
                 try Task.checkCancellation()
-
-                let credentials = CalDAVClient.Credentials(
-                    username: account.username,
-                    password: password
-                )
 
                 let syncWindowMonths = SyncPreferences.windowMonths()
 
                 do {
                     if try await syncEngine.performFullSync(
                         accountID: account.id,
-                        serverBaseURL: account.serverBaseURL,
-                        credentials: credentials,
+                        serverBaseURL: admitted.scope.serverBaseURL,
+                        credentials: admitted.davCredentials,
                         modelContainer: modelContext.container,
                         syncWindowMonths: syncWindowMonths,
                         reconcileNotifications: false
@@ -304,12 +348,10 @@ final class SyncScheduler: ObservableObject {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch CalDAVError.unauthorized {
-                    // Pause this account so we don't keep hammering the server with
-                    // a credential it has already rejected.
-                    authGate.recordFailure(accountID: account.id, password: password)
                     recordAuthFailure(
-                        message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."))
-                    logger.error("Auth rejected (401) — pausing sync for account until re-auth")
+                        message: String(localized: "\(account.displayName) needs re-authentication. Sync is paused until you update your account in Settings."),
+                        httpStatusCode: 401)
+                    continue
                 } catch {
                     if Task.isCancelled { throw CancellationError() }
                     if let failure = SyncFailure.from(error) {
@@ -319,12 +361,15 @@ final class SyncScheduler: ObservableObject {
                     // Other accounts may be healthy; retain this account's failure and continue.
                 }
                 let outcome = await syncEngine.lastOutcome
-                if outcome.status == .partial, let failure = outcome.failures.first {
-                    lastSyncFailure = failure; lastError = failure.message
+                if outcome.status == .partial {
+                    incompleteRun = true
+                    if let failure = outcome.failures.first {
+                        lastSyncFailure = failure; lastError = failure.message
+                    }
                 }
             }
 
-            if lastSyncFailure == nil { lastSyncDate = Date() }
+            if !incompleteRun, lastSyncFailure == nil { lastSyncDate = Date() }
 
             // De-duplicated by href: two accounts could in principle report the same collection
             // path, and the user should not be shown the same row twice.
@@ -364,8 +409,8 @@ final class SyncScheduler: ObservableObject {
     /// Records an authentication failure for an account so it surfaces in the
     /// banner (tappable → Settings) and the Settings status line with the same
     /// account-specific, actionable wording.
-    private func recordAuthFailure(message: String) {
-        lastSyncFailure = SyncFailure(category: .authentication, message: message)
+    private func recordAuthFailure(message: String, httpStatusCode: Int? = nil) {
+        lastSyncFailure = SyncFailure(category: .authentication, message: message, httpStatusCode: httpStatusCode)
         lastError = message
     }
 
@@ -376,10 +421,10 @@ final class SyncScheduler: ObservableObject {
     /// Uses a 2-second debounce to coalesce rapid changes (e.g., checking
     /// off multiple tasks in sequence) into a single server round-trip.
     func syncAfterChange(modelContext: ModelContext) {
-        if isSyncing { needsFollowup = true; return }
+        if isSyncing { needsChangeFollowup = true; return }
         debounceTask?.cancel()
         debounceTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(changeDebounceInterval))
+            try? await changeDebounceSleep(changeDebounceInterval)
             guard !Task.isCancelled else { return }
             logger.debug("Debounced sync triggered after change")
             await syncNow(modelContext: modelContext)
@@ -407,6 +452,19 @@ final class SyncScheduler: ObservableObject {
         startTrackedTask {
             await self.syncNow(modelContext: ctx)
         }
+    }
+
+    /// Starts foreground network work before awaiting local notification recovery.
+    func startForegroundWork(
+        modelContext: ModelContext,
+        recoverNotifications: @escaping @MainActor () async -> Void
+    ) async {
+        foregroundCalendarGeneration &+= 1
+        let generation = foregroundCalendarGeneration
+        syncOnForeground(modelContext: modelContext)
+        await recoverNotifications()
+        guard isForeground, foregroundCalendarGeneration == generation else { return }
+        await reconcileCalendarMirrors()
     }
 
     // MARK: - Periodic Auto-Sync
@@ -442,12 +500,13 @@ final class SyncScheduler: ObservableObject {
     /// from killing the process due to blocked main-thread work.
     func cancelInflightSync() {
         isForeground = false
+        foregroundCalendarGeneration &+= 1
         debounceTask?.cancel()
         debounceTask = nil
         foregroundSyncTask?.cancel()
         foregroundSyncTask = nil
         runnerTask?.cancel()
-        needsFollowup = false
+        needsChangeFollowup = false
         stopAutoSync()
     }
 

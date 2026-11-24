@@ -11,7 +11,11 @@ struct ProEntitlementTests {
     /// Versioned purchased ownership; the legacy Boolean cannot grant access.
     private static let cacheKey = "proEntitlementSnapshot.v1"
 
-    private let sharedDefaults = UserDefaults(suiteName: AppConstants.appGroupID)
+    private let suite = "NowThis.ProStoreKit.\(UUID().uuidString)"
+    private var sharedDefaults: UserDefaults? { UserDefaults(suiteName: suite) }
+    private var cache: ProEntitlementCache {
+        ProEntitlementCache(defaults: sharedDefaults, keyProvider: { _ in Data(repeating: 0x16, count: 32) })
+    }
 
     /// Where `makeSession()` stages a writable copy of the StoreKit config.
     /// Rewritten per test; the suite is serialized.
@@ -36,9 +40,8 @@ struct ProEntitlementTests {
         session.resetToDefaultState()
         session.clearTransactions()
         session.disableDialogs = true
-        // The App Group cache outlives the test process, so a value left behind by
-        // an earlier test or an earlier run would otherwise silently satisfy the
-        // assertions below.
+        // Use the exact versioned key, with isolated defaults and signing keys,
+        // so prior ownership can never silently satisfy these assertions.
         try #require(sharedDefaults).removeObject(forKey: Self.cacheKey)
         return session
     }
@@ -62,12 +65,13 @@ struct ProEntitlementTests {
     @Test
     func freshInstallIsLocked() async throws {
         let session = try makeSession()
+        defer { sharedDefaults?.removePersistentDomain(forName: suite) }
 
-        let entitlement = ProEntitlement(testerBuild: { false }, forcePaywall: { false })
+        let entitlement = ProEntitlement(cache: cache, testerBuild: { false }, forcePaywall: { false })
         await entitlement.refresh()
 
         #expect(!entitlement.isUnlocked)
-        #expect(!ProEntitlement.cachedUnlocked())
+        #expect(!ProEntitlement.cachedUnlocked(cache: cache))
 
         withExtendedLifetime(session) {}
     }
@@ -75,16 +79,17 @@ struct ProEntitlementTests {
     @Test
     func purchaseUnlocks() async throws {
         let session = try makeSession()
+        defer { sharedDefaults?.removePersistentDomain(forName: suite) }
         _ = try await session.buyProduct(identifier: AppConstants.proProductID)
 
-        let entitlement = ProEntitlement(testerBuild: { false }, forcePaywall: { false })
+        let entitlement = ProEntitlement(cache: cache, testerBuild: { false }, forcePaywall: { false })
         try await waitUntil("purchased lifetime to enter verified history") {
             await entitlement.refresh()
             return entitlement.isUnlocked
         }
 
         #expect(entitlement.isUnlocked)
-        #expect(ProEntitlement.cachedUnlocked())
+        #expect(ProEntitlement.cachedUnlocked(cache: cache))
 
         withExtendedLifetime(session) {}
     }
@@ -92,12 +97,13 @@ struct ProEntitlementTests {
     @Test(.disabled("The iOS 27 CLI test host intermittently keeps signed history empty after the second same-SKU test purchase, although SKTestSession contains it; even a 10-second condition wait fails. Run this refund check separately in Xcode and Apple sandbox before release. Deterministic tests cover refund updates, failed rereads, and grant attribution."))
     func refundLocksAgain() async throws {
         let session = try makeSession()
+        defer { sharedDefaults?.removePersistentDomain(forName: suite) }
         let transaction = try await session.buyProduct(identifier: AppConstants.proProductID)
 
         // Precondition: the purchase really did unlock. Without this, the
         // assertion after the refund would pass against a `refresh()` that never
         // set the flag in the first place.
-        let entitlement = ProEntitlement(testerBuild: { false }, forcePaywall: { false })
+        let entitlement = ProEntitlement(cache: cache, testerBuild: { false }, forcePaywall: { false })
         try await waitUntil("purchased lifetime to enter verified history") {
             await entitlement.refresh()
             return entitlement.isUnlocked
@@ -108,7 +114,7 @@ struct ProEntitlementTests {
         await entitlement.refresh()
 
         #expect(!entitlement.isUnlocked)
-        #expect(!ProEntitlement.cachedUnlocked())
+        #expect(!ProEntitlement.cachedUnlocked(cache: cache))
 
         withExtendedLifetime(session) {}
     }
@@ -116,9 +122,10 @@ struct ProEntitlementTests {
     @Test
     func startObservesOutOfBandPurchase() async throws {
         let session = try makeSession()
+        defer { sharedDefaults?.removePersistentDomain(forName: suite) }
         let defaults = try #require(sharedDefaults)
 
-        let entitlement = ProEntitlement(testerBuild: { false }, forcePaywall: { false })
+        let entitlement = ProEntitlement(cache: cache, testerBuild: { false }, forcePaywall: { false })
         entitlement.start()
 
         // `start()`'s initial refresh writes the cache key that `makeSession()`
@@ -137,7 +144,7 @@ struct ProEntitlementTests {
         try await waitUntil("Transaction.updates to unlock the entitlement") {
             entitlement.isUnlocked
         }
-        #expect(ProEntitlement.cachedUnlocked())
+        #expect(ProEntitlement.cachedUnlocked(cache: cache))
 
         withExtendedLifetime(session) {}
     }
@@ -145,8 +152,9 @@ struct ProEntitlementTests {
     @Test
     func startLoadsTheConfiguredProduct() async throws {
         let session = try makeSession()
+        defer { sharedDefaults?.removePersistentDomain(forName: suite) }
 
-        let entitlement = ProEntitlement(testerBuild: { false }, forcePaywall: { false })
+        let entitlement = ProEntitlement(cache: cache, testerBuild: { false }, forcePaywall: { false })
         entitlement.start()
 
         try await waitUntil("start() to load the Pro product") { entitlement.products[.lifetime] != nil }
@@ -201,35 +209,30 @@ struct ProEntitlementTests {
 @MainActor
 struct ProEntitlementCacheTests {
     private func withCleanCache(_ body: @MainActor (UserDefaults, ProEntitlementCache) async throws -> Void) async throws {
-        let defaults = try #require(UserDefaults(suiteName: AppConstants.appGroupID))
-        let keys = ["proUnlocked", ProEntitlementCache.snapshotKey]
-        let previous = keys.map { defaults.object(forKey: $0) }
-        defer {
-            for (key, value) in zip(keys, previous) {
-                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
-            }
-        }
-        keys.forEach { defaults.removeObject(forKey: $0) }
-        try await body(defaults, ProEntitlementCache(defaults: defaults))
+        let suite = "NowThis.ProCache.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cache = ProEntitlementCache(defaults: defaults, keyProvider: { _ in Data(repeating: 0x16, count: 32) })
+        try await body(defaults, cache)
     }
 
     @Test func cachedUnlockReadsDeadlineAwareSnapshotInsteadOfLegacyBoolean() async throws {
         try await withCleanCache { defaults, cache in
             defaults.set(true, forKey: "proUnlocked")
-            #expect(!ProEntitlement.cachedUnlocked())
+            #expect(!ProEntitlement.cachedUnlocked(cache: cache))
             cache.save(ProAccessSnapshot(access: .lifetime))
-            #expect(ProEntitlement.cachedUnlocked())
+            #expect(ProEntitlement.cachedUnlocked(cache: cache))
             cache.save(ProAccessSnapshot(access: .monthly, validUntil: Date(timeIntervalSince1970: 100)))
-            #expect(!ProEntitlement.cachedUnlocked())
+            #expect(!ProEntitlement.cachedUnlocked(cache: cache))
         }
     }
 
     @Test func initSeedsFromPurchasedSnapshot() async throws {
         try await withCleanCache { _, cache in
             cache.save(ProAccessSnapshot(access: .lifetime))
-            #expect(ProEntitlement().isUnlocked)
+            #expect(ProEntitlement(cache: cache).isUnlocked)
             cache.save(ProAccessSnapshot())
-            #expect(!ProEntitlement().isUnlocked)
+            #expect(!ProEntitlement(cache: cache).isUnlocked)
         }
     }
 
@@ -251,7 +254,7 @@ struct ProEntitlementCacheTests {
             entitlement.isTesterBuild = true
             await entitlement.refresh()
             #expect(entitlement.isUnlocked)
-            #expect(!ProEntitlement.cachedUnlocked())
+            #expect(!ProEntitlement.cachedUnlocked(cache: cache))
             #expect(cache.load()?.earnedCollectionIDs.isEmpty == true)
         }
     }
@@ -272,7 +275,7 @@ struct ProEntitlementCacheTests {
             defaults.set(true, forKey: ProEntitlement.forcePaywallKey)
             await entitlement.refresh()
             #expect(!entitlement.isUnlocked)
-            #expect(!ProEntitlement.cachedUnlocked())
+            #expect(!ProEntitlement.cachedUnlocked(cache: cache))
             entitlement.isTesterBuild = false
             #expect(!entitlement.isUnlocked)
         }

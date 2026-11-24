@@ -6,6 +6,38 @@ import Testing
 @Suite("Board grouped projections")
 @MainActor
 struct KanbanTaskProjectionTests {
+    @Test("The Board's consumed descriptor scopes Status reads and keeps Lists reads global")
+    func boardDescriptorScopesTheQueryBeforeProjection() throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let lists = (0..<100).map { index in
+            TaskList(serverURL: "https://board.invalid/\(index)", name: "List \(index)", colorHex: "#3478F6")
+        }
+        lists.forEach(context.insert)
+        var rows: [TaskItem] = []
+        for index in 0..<10_000 {
+            let row = TaskItem(id: "task-\(index)", title: "Task \(index)")
+            row.taskList = lists[index % lists.count]
+            row.manualSortOrder = index
+            context.insert(row)
+            rows.append(row)
+        }
+        try context.save()
+
+        let descriptor = KanbanBoardView.taskDescriptor(mode: .statusBoard, selectedListID: lists[37].id)
+        let selectedRows = try context.fetch(descriptor)
+        #expect(selectedRows.count == 100)
+        let projected = KanbanTaskProjection(tasks: selectedRows)
+        #expect(projected.column(.needsAction, listID: lists[37].id).map(\.id) ==
+                rows.filter { $0.taskList?.id == lists[37].id }.sorted { $0.manualSortOrder < $1.manualSortOrder }.map(\.id))
+
+        let listSwipeDescriptor = KanbanBoardView.taskDescriptor(mode: .listSwipe, selectedListID: lists[37].id)
+        #expect(try context.fetch(listSwipeDescriptor).count == 10_000)
+        let noSelection = KanbanBoardView.taskDescriptor(mode: .statusBoard, selectedListID: nil)
+        #expect(try context.fetch(noSelection).isEmpty)
+        withExtendedLifetime(container) {}
+    }
+
     @Test("Columns and pages preserve manual order, root scope and hidden-completed emptiness")
     func groupedRowsMatchExistingScope() throws {
         let container = try DAVSyncScenario.container()

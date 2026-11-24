@@ -31,6 +31,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>NowThis uses the camera to add photos to your tasks. Synced photos are visible to everyone with access to the list.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>NowThis connects to your Nextcloud server on your local network to sync your lists and tasks.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>NowThis uses calendar access to show your tasks alongside your schedule and sync task due dates as calendar events.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

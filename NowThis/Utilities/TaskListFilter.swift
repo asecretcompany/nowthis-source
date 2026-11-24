@@ -19,14 +19,17 @@ enum TaskListFilter {
         dueDate: Date,
         isDueDateOnly: Bool,
         isCompleted: Bool,
-        now: Date = Date()
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> Bool {
         guard !isCompleted else { return false }
 
-        let endOfToday = Calendar.current.startOfDay(for: now).addingTimeInterval(86400)
-        let deadline = DueDateHelper.effectiveDeadline(for: dueDate, isDateOnly: isDueDateOnly)
+        let localCalendar = DueDateHelper.localCalendar(in: calendar)
+        guard let endOfToday = localCalendar.date(byAdding: .day, value: 1,
+                                                  to: localCalendar.startOfDay(for: now)) else { return false }
+        let deadline = DueDateHelper.effectiveDeadline(for: dueDate, isDateOnly: isDueDateOnly, regionCalendar: calendar)
 
-        // Include if overdue OR due by end of today (inclusive)
-        return deadline <= endOfToday
+        // All-day deadlines equal next midnight; timed next-midnight tasks belong to tomorrow.
+        return isDueDateOnly ? deadline <= endOfToday : deadline < endOfToday
     }
 }

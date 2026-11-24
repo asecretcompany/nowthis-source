@@ -32,8 +32,8 @@ struct BackgroundSyncFairnessTests {
     @Test(arguments: [false, true])
     func largeFirstListDoesNotStarveLaterLists(cutoff: Bool) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "list-fairness-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         var attemptedPaths: [String] = []
         for _ in 0..<3 {
             let gate = ScriptedDAVProtocol.Gate()
@@ -87,16 +87,17 @@ struct BackgroundSyncFairnessTests {
     // An advisory attempt must never replace the token used by the next real delta REPORT.
     @Test func partialDeltaResumesFromCommittedPage() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "page-resume-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try container.mainContext.fetch(FetchDescriptor<ServerAccount>()).first)
         let list = TaskList(id: "list", serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         container.mainContext.insert(list); list.account = account
         let task = TaskItem(uid: "keep", title: "Keep on partial inventory")
         container.mainContext.insert(task); task.taskList = list
         task.remoteHref = "/one/keep.ics"; task.etag = "e1"; task.isLocalOnly = false; task.isDirty = false
+        try SyncResourceFixture.prove(task, in: container.mainContext)
         try container.mainContext.save()
         SyncEngine.markCategoriesCaughtUp(listID: list.id)
-        let host = "page-resume-" + UUID().uuidString.lowercased() + ".invalid"
         let scope = SyncCollectionPuller.Scope(accountID: accountID, listID: list.id, historyScope: "0")
         let key = SyncImportCheckpoint.identity(accountID: accountID, listID: list.id,
             baseURL: "https://" + host, username: "fixture", months: 0)

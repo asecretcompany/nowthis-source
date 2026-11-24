@@ -191,4 +191,113 @@ struct AppIconControllerTests {
         #expect(fake.alternateIconName == "Supporter2026")
         #expect(controller.selectedIconID == "supporter-2026")
     }
+
+    // Literal approved inventory: missing or misregistered artwork must fail at its consumer.
+    private nonisolated static let holidayIconIDs = [
+        "holiday-new-year",
+        "holiday-valentine",
+        "holiday-spring",
+        "holiday-easter",
+        "holiday-halloween",
+        "holiday-harvest",
+        "holiday-winter",
+        "holiday-christmas",
+        "holiday-advent",
+        "holiday-nikolaus",
+        "holiday-saint-martin",
+        "holiday-carnival",
+        "holiday-oktoberfest",
+        "holiday-german-unity",
+        "holiday-swiss-national",
+        "holiday-kings-day",
+        "holiday-sinterklaas",
+        "holiday-france-national",
+        "holiday-france-may",
+        "holiday-epiphany",
+        "holiday-bonfire-night",
+        "holiday-hogmanay",
+        "holiday-saint-patrick",
+        "holiday-saint-david",
+        "holiday-canada-day",
+        "holiday-saint-jean",
+        "holiday-us-independence",
+        "holiday-midsummer",
+        "holiday-hanukkah",
+        "holiday-passover",
+        "holiday-ramadan",
+        "holiday-eid",
+        "holiday-diwali",
+        "holiday-holi",
+        "holiday-vaisakhi",
+        "holiday-vesak"
+    ]
+
+    @Test(arguments: holidayIconIDs)
+    func holidayArtworkIsBundledAndRegisteredForBothDeviceFamilies(iconID: String) throws {
+        let icon = try #require(AppIconCatalog.icons.first { $0.id == iconID })
+        let name = try #require(icon.alternateIconName)
+        #expect(UIImage(named: icon.previewAssetName) != nil)
+        // Bundle.infoDictionary resolves device-qualified keys for the current device.
+        // Read the shipped plist to verify both registrations in this universal app.
+        let plistData = try Data(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Info.plist"))
+        let plist = try #require(PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any])
+        for key in ["CFBundleIcons", "CFBundleIcons~ipad"] {
+            let definitions = try #require(plist[key] as? [String: Any])
+            let alternates = try #require(definitions["CFBundleAlternateIcons"] as? [String: Any])
+            #expect(alternates[name] != nil)
+        }
+    }
+
+    @Test(arguments: holidayIconIDs)
+    func holidayArtworkRequiresItsOwnCollection(iconID: String) async throws {
+        let icon = try #require(AppIconCatalog.icons.first { $0.id == iconID })
+        let fake = FakeIconClient()
+        let controller = AppIconController(client: fake)
+        await #expect(throws: AppIconError.self) {
+            try await controller.select(icon, ownedCollectionIDs: ["supporter-2026"])
+        }
+        #expect(controller.selectedIconID == "default")
+        #expect(fake.requestedNames.isEmpty)
+    }
+
+    @Test(arguments: holidayIconIDs)
+    func earnedHolidayArtworkSurvivesExpiryAndRelaunch(iconID: String) async throws {
+        let icon = try #require(AppIconCatalog.icons.first { $0.id == iconID })
+        let expired = ProAccessSnapshot(earnedCollectionIDs: ["supporter-holidays-2026"])
+        let owned = ProEntitlementPolicy.ownedCollectionIDs(in: expired, collections: AppIconCatalog.collections, at: .distantFuture)
+        #expect(!expired.isUnlocked(at: .distantFuture))
+        let fake = FakeIconClient()
+        let controller = AppIconController(client: fake)
+        try await controller.select(icon, ownedCollectionIDs: owned)
+        try await controller.reconcileOwnership(owned)
+        #expect(controller.selectedIconID == iconID)
+        #expect(AppIconController(client: fake).selectedIconID == iconID)
+        try await controller.reconcileOwnership([])
+        #expect(controller.selectedIconID == "default")
+    }
+
+    @Test func lifetimeSupportersCanSelectTheHolidayCollection() async throws {
+        let icon = try #require(AppIconCatalog.icons.first { $0.id == "holiday-hanukkah" })
+        let owned = ProEntitlementPolicy.ownedCollectionIDs(in: ProAccessSnapshot(access: .lifetime),
+            collections: AppIconCatalog.collections, at: .distantFuture)
+        let fake = FakeIconClient()
+        let controller = AppIconController(client: fake)
+        try await controller.select(icon, ownedCollectionIDs: owned)
+        #expect(controller.selectedIconID == "holiday-hanukkah")
+    }
+
+    @Test func paidPeriodEarnsHolidayArtworkOnlyAfterItsRelease() throws {
+        let collection = try #require(AppIconCatalog.collections.first { $0.id == "supporter-holidays-2026" })
+        let release = Date(timeIntervalSince1970: 1_792_800_000) // 2026-10-24 UTC
+        #expect(collection.releasedAt == release)
+        let status = VerifiedSubscriptionStatus(transactionID: 1, productID: "com.asecretcompany.nowthis.pro.monthlyg",
+            state: .expired, expirationDate: release.addingTimeInterval(1), graceExpirationDate: nil, willAutoRenew: false)
+        let snapshot = ProAccessSnapshot(access: .monthly, validUntil: status.expirationDate,
+            subscription: status)
+        #expect(!ProEntitlementPolicy.ownedCollectionIDs(in: snapshot, collections: AppIconCatalog.collections,
+            at: release.addingTimeInterval(-1)).contains("supporter-holidays-2026"))
+        #expect(ProEntitlementPolicy.ownedCollectionIDs(in: snapshot, collections: AppIconCatalog.collections,
+            at: release.addingTimeInterval(2)).contains("supporter-holidays-2026"))
+    }
+
 }

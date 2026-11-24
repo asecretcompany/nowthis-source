@@ -39,13 +39,19 @@ enum ReminderSchedulingJournal {
     /// The injectable save keeps task edits and recovery intent in one transaction.
     static func saveTaskChanges(in context: ModelContext,
                                 needsRecovery: Bool = false,
+                                retireCalendarAdvisory: Bool = true,
                                 save: (() throws -> Void)? = nil) throws {
+        let includesTaskChanges = context.insertedModelsArray.contains { $0 is TaskItem }
+            || context.changedModelsArray.contains { $0 is TaskItem }
+            || context.deletedModelsArray.contains { $0 is TaskItem || $0 is TaskList || $0 is ServerAccount }
+        try CalendarMirrorState.enqueueTaskChanges(in: context, retireAdvisory: retireCalendarAdvisory)
         if needsRecovery, isAvailable(in: context.container) {
             enqueue(in: context)
         } else {
             enqueueTaskChanges(in: context)
         }
         if let save { try save() } else { try context.save() }
+        CalendarMirrorState.publishCommit(in: context.container, includesTaskChanges: includesTaskChanges)
     }
 
     static func capture(in context: ModelContext) throws -> Set<String> {

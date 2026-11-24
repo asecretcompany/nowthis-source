@@ -45,39 +45,38 @@ enum DueDateFormatter {
     ///
     /// Prefer this overload when `isDueDateOnly` is available — it avoids
     /// the midnight-heuristic edge case where a task is actually due at
-    /// exactly midnight local time.
-    static func format(_ date: Date, isDateOnly: Bool) -> String {
-        if isDateOnly {
-            // Date-only values are stored as midnight UTC and represent a whole
-            // calendar day. Render the components in UTC so the stored day is
-            // preserved — local formatting would shift it (e.g. midnight-UTC
-            // Jun 29 reads as "Jun 28, 5:00 PM" in PDT). Mirrors DueDateHelper,
-            // which also extracts the calendar day in UTC.
-            var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
-            style.timeZone = TimeZone(identifier: "UTC")!
-            return allDayBadge(date.formatted(style))
-        } else {
-            return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
-        }
+    /// exactly midnight local time. A compact surface can supply a style
+    /// for timed dates while keeping the same all-day rendering.
+    static func format(_ date: Date, isDateOnly: Bool, timeZone: TimeZone = .current,
+                       timedStyle: Date.FormatStyle? = nil) -> String {
+        let day = formattedDate(date, isDateOnly: isDateOnly, timeZone: timeZone, timedStyle: timedStyle)
+        return isDateOnly ? allDayBadge(day) : day
     }
 
     /// A VoiceOver-friendly rendering of a due date.
     ///
-    /// Mirrors ``format(_:isDateOnly:)`` for display, but uses a spoken comma
+    /// Mirrors the explicit formatter for display, but uses a spoken comma
     /// separator instead of the visual middle dot — VoiceOver can announce "·"
     /// as "middle dot" at higher punctuation verbosity, so the badge keeps the
     /// dot while the accessibility label reads plain text. Date-only dates read
     /// `"Jul 6, All day"`; timed dates read the same clock time as the badge.
-    static func accessibilityLabel(_ date: Date, isDateOnly: Bool) -> String {
-        if isDateOnly {
-            // Match the badge's UTC day extraction so the spoken day equals the
-            // visible day — local formatting would shift it (see `format`).
-            var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
-            style.timeZone = TimeZone(identifier: "UTC")!
-            return allDaySpoken(date.formatted(style))
-        } else {
-            return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
-        }
+    static func accessibilityLabel(_ date: Date, isDateOnly: Bool, timeZone: TimeZone = .current,
+                                   timedStyle: Date.FormatStyle? = nil) -> String {
+        let day = formattedDate(date, isDateOnly: isDateOnly, timeZone: timeZone, timedStyle: timedStyle)
+        return isDateOnly ? allDaySpoken(day) : day
+    }
+
+    /// Midnight UTC carries the civil day for DATE values. Timed instants render locally.
+    static func formattingTimeZone(isDateOnly: Bool, localTimeZone: TimeZone) -> TimeZone {
+        isDateOnly ? .gmt : localTimeZone
+    }
+
+    private static func formattedDate(_ date: Date, isDateOnly: Bool, timeZone: TimeZone,
+                                      timedStyle: Date.FormatStyle?) -> String {
+        let day = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        var style = isDateOnly ? day : (timedStyle ?? day.hour().minute())
+        style.timeZone = formattingTimeZone(isDateOnly: isDateOnly, localTimeZone: timeZone)
+        return date.formatted(style)
     }
 
     /// Returns true if the date has a non-midnight time in the user's local timezone.

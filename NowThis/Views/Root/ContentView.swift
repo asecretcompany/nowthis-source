@@ -44,6 +44,7 @@ struct MainTabView: View {
     /// cannot change a key's type in place. Everyone lands on Tasks once after
     /// updating, which is the correct trade — the old value is meaningless.
     @SceneStorage("selectedTabToken") private var selectedTabToken = AppTab.tasks.token
+    @State private var settingsPath: [SettingsView.Destination] = []
 
     /// The user's chosen tabs, in order. Settings is pinned and never stored.
     @AppStorage("tabBarVisible") private var visibleTabsJSON = ""
@@ -53,6 +54,16 @@ struct MainTabView: View {
     @State private var hasAppliedStartupTab = false
 
     @Binding var deepLinkTaskID: String?
+    @State private var hasReceivedTaskLink = false
+    @State private var hasResolvedInitialNotices = false
+    @State private var taskLinkPresentations = TaskLinkPresentationState()
+    @State private var translationNoticeToken = UUID()
+    @State private var trashedNoticeToken = UUID()
+
+    init(deepLinkTaskID: Binding<String?>) {
+        self._deepLinkTaskID = deepLinkTaskID
+        self._hasReceivedTaskLink = State(initialValue: deepLinkTaskID.wrappedValue != nil)
+    }
 
     @EnvironmentObject private var syncScheduler: SyncScheduler
     @ScaledMetric(relativeTo: .subheadline) private var syncProgressHeight: CGFloat = 28
@@ -74,6 +85,16 @@ struct MainTabView: View {
     @AppStorage(TrashedListReporter.defaultsKey) private var reportedTrashedHrefsRaw = ""
     @State private var pendingTrashedLists: [TrashedList] = []
 
+    private var canPresentTaskLink: Bool {
+        hasResolvedInitialNotices && !taskLinkPresentations.isBlocked
+            && !showingTranslationDisclosure && pendingTrashedLists.isEmpty
+    }
+
+    private func activatePendingTaskTab() {
+        guard deepLinkTaskID != nil, canPresentTaskLink else { return }
+        if selectedTabToken != AppTab.tasks.token { selectedTabToken = AppTab.tasks.token }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Keep this space even while idle: changing the tab viewport's
@@ -94,6 +115,7 @@ struct MainTabView: View {
                     failure: failure,
                     onTap: failure.isUserActionable ? {
                         withAnimation {
+                            settingsPath = [.accountsAndSync]
                             selectedTabToken = AppTab.settings.token
                             dismissedFailure = syncScheduler.lastSyncFailure
                         }
@@ -109,14 +131,15 @@ struct MainTabView: View {
             tabView
                 // Attached here rather than beside the translation-disclosure sheet below:
                 // two `.sheet` modifiers on the same view contend, and only one presents.
-                .task { refreshPendingTrashedLists() }
                 .onChange(of: syncScheduler.trashedListsFound) { _, _ in
                     refreshPendingTrashedLists()
                 }
                 .sheet(isPresented: Binding(
                     get: { !pendingTrashedLists.isEmpty },
                     set: { if !$0 { acknowledgeTrashedLists() } }
-                )) {
+                ), onDismiss: {
+                    taskLinkPresentations.setActive(false, token: trashedNoticeToken)
+                }) {
                     TrashedListsNotice(lists: pendingTrashedLists,
                                        onDismiss: acknowledgeTrashedLists)
                 }
@@ -131,12 +154,21 @@ struct MainTabView: View {
         // Reaching MainTabView *is* the onboarding gate: ContentView only shows it once an
         // account exists, so there is no separate flag to consult.
         .task {
+            refreshPendingTrashedLists()
             showingTranslationDisclosure = TranslationDisclosure.shouldPresent(
                 language: TranslationDisclosure.currentLanguage,
                 acknowledged: TranslationDisclosure.decode(acknowledgedLanguagesRaw),
                 hasCompletedOnboarding: true)
+            taskLinkPresentations.setActive(showingTranslationDisclosure, token: translationNoticeToken)
+            hasResolvedInitialNotices = true
         }
-        .sheet(isPresented: $showingTranslationDisclosure) {
+        .environment(\.taskLinkPresentations, taskLinkPresentations)
+        .onChange(of: canPresentTaskLink) { _, allowed in
+            if allowed { activatePendingTaskTab() }
+        }
+        .sheet(isPresented: $showingTranslationDisclosure, onDismiss: {
+            taskLinkPresentations.setActive(false, token: translationNoticeToken)
+        }) {
             TranslationDisclosureSheet {
                 // Recorded here, on dismiss — a sheet the user never read must not consume
                 // the one time this language gets disclosed.
@@ -152,7 +184,10 @@ struct MainTabView: View {
         let pending = TrashedListReporter.unreported(
             syncScheduler.trashedListsFound,
             reported: TrashedListReporter.decode(reportedTrashedHrefsRaw))
-        if !pending.isEmpty { pendingTrashedLists = pending }
+        if !pending.isEmpty {
+            taskLinkPresentations.setActive(true, token: trashedNoticeToken)
+            pendingTrashedLists = pending
+        }
     }
 
     /// Records the shown lists and closes the sheet. Called from the Done button *and* from a
@@ -190,7 +225,8 @@ struct MainTabView: View {
     /// Three stored forms: `last`, the pre-existing `smart:<rawValue>` (a smart
     /// list shown *inside* the Tasks tab, still applied by `MainShellView`),
     /// and the new `tab:<token>`.
-    static func resolveStartupTab(_ stored: String, visible: [AppTab]) -> AppTab? {
+    static func resolveStartupTab(_ stored: String, visible: [AppTab], hasDeepLink: Bool = false) -> AppTab? {
+        if hasDeepLink { return .tasks }
         if stored == "last" { return nil }
         // Tasks is pinned, so the legacy form always has a tab to land on.
         if stored.hasPrefix("smart:") {
@@ -257,16 +293,17 @@ struct MainTabView: View {
             // what makes the sync-failure banner's jump to Settings safe.
             tabItem(for: .settings)
         }
-        .onChange(of: deepLinkTaskID) { _, newValue in
+        .onChange(of: deepLinkTaskID, initial: true) { _, newValue in
             guard newValue != nil else { return }
-            // A deep link opens a task, and the pinned Tasks tab is where the
-            // shell that shows one lives.
-            selectedTabToken = AppTab.tasks.token
+            hasReceivedTaskLink = true
+            // Wait for existing editors/notices before changing their presenting tab.
+            activatePendingTaskTab()
         }
         .onAppear {
             guard !hasAppliedStartupTab else { return }
             hasAppliedStartupTab = true
-            if let tab = Self.resolveStartupTab(startupScreen, visible: visibleTabs) {
+            if let tab = Self.resolveStartupTab(startupScreen, visible: visibleTabs,
+                hasDeepLink: hasReceivedTaskLink || deepLinkTaskID != nil) {
                 selectedTabToken = tab.token
             }
         }
@@ -285,13 +322,15 @@ struct MainTabView: View {
     private func destination(for tab: AppTab) -> some View {
         switch tab {
         case .tasks:
-            MainShellView()
+            MainShellView(deepLinkTaskID: $deepLinkTaskID,
+                allowsDeepLinkPresentation: canPresentTaskLink
+                    && Self.resolveSelection(selectedTabToken, visible: visibleTabs) == .tasks)
         case .board:
-            KanbanBoardView().refreshOnInboundSync()
+            KanbanBoardView()
         case .calendar:
-            CalendarContainerView().refreshOnInboundSync()
+            CalendarContainerView()
         case .matrix:
-            EisenhowerMatrixView().refreshOnInboundSync()
+            EisenhowerMatrixView()
         case .smart(let list):
             // `TaskListView` supplies no navigation container of its own — in
             // the Tasks tab, `MainShellView`'s split view provides it. Without
@@ -299,10 +338,9 @@ struct MainTabView: View {
             // a dead `.searchable`.
             NavigationStack {
                 TaskListView(selection: .smart(list))
-                    .refreshOnInboundSync()
             }
         case .settings:
-            SettingsView()
+            SettingsView(path: $settingsPath)
         }
     }
 }

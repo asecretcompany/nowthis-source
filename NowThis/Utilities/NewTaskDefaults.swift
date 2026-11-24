@@ -14,7 +14,7 @@ enum NewTaskDefaults {
     struct Resolved: Equatable {
         var dueDate: Date?
         var isDueDateOnly: Bool
-        /// Seconds before the (all-day–anchored) deadline to fire a reminder,
+        /// Seconds before the task's due date/time to fire a reminder,
         /// or `nil` for no reminder.
         var reminderOffset: Int?
     }
@@ -92,6 +92,39 @@ enum NewTaskDefaults {
 
     // MARK: - Which List
 
+    struct CreationList {
+        let list: TaskList?
+        let preferenceChange: PreferenceChange?
+
+        init(list: TaskList?, preferenceChange: PreferenceChange? = nil) {
+            self.list = list
+            self.preferenceChange = preferenceChange
+        }
+    }
+
+    struct PreferenceChange: Sendable {
+        let listID: String
+        let observed: TaskDefaultsPreferences.ListPreference
+
+        func commit() { observed.commit(listID) }
+    }
+
+    /// Resolve without adopting a fallback or migrating a legacy preference.
+    /// A creation owner applies the captured preference only after its task save.
+    static func creationList(explicit: TaskList?, in context: ModelContext) throws -> CreationList {
+        if let explicit { return CreationList(list: explicit) }
+        let preference = TaskDefaultsPreferences.ListPreference()
+        if let stored = preference.selectedID, let found = try list(withID: stored, in: context) {
+            let migration = preference.currentID == nil
+                ? PreferenceChange(listID: found.id, observed: preference) : nil
+            return CreationList(list: found, preferenceChange: migration)
+        }
+        let adopted = firstByLocalizedName(try adoptableLists(in: context))
+        return CreationList(list: adopted, preferenceChange: adopted.map {
+            PreferenceChange(listID: $0.id, observed: preference)
+        })
+    }
+
     /// Resolves the list a new task belongs to, without writing anything.
     ///
     /// Order: an explicitly supplied list (the user is viewing one, or typed a
@@ -101,19 +134,14 @@ enum NewTaskDefaults {
     ///
     /// Pure, and deliberately so: `TaskListView` reads this during `body` to label the
     /// add bar's due-date chip *before any task exists*, and a `UserDefaults` write
-    /// there would be a mutation during a render pass. Creation sites want
-    /// ``resolveListAdopting(explicit:in:)`` instead.
+    /// there would be a mutation during a render pass. Creation sites use
+    /// ``creationList(explicit:in:)`` to keep adoption until after the save.
     ///
     /// Always fetches from `context`; the result is never cached. A cascade delete
     /// (`ServerAccount → TaskList → TaskItem`) invalidates any retained model, so a
     /// memoized `TaskList` is a crash waiting for a sync.
     static func resolveList(explicit: TaskList?, in context: ModelContext) -> TaskList? {
-        if let explicit { return explicit }
-        if let stored = TaskDefaultsPreferences.defaultListID,
-           let found = list(withID: stored, in: context) {
-            return found
-        }
-        return firstByLocalizedName(adoptableLists(in: context))
+        (try? creationList(explicit: explicit, in: context))?.list
     }
 
     /// As ``resolveList(explicit:in:)``, but when resolution falls through to the
@@ -124,21 +152,11 @@ enum NewTaskDefaults {
     /// needs one, so the default stops moving when lists are renamed or added. It
     /// doubles as the self-heal when the chosen list is deleted server-side.
     ///
-    /// Call from real creation moments and from Settings' `onAppear` — never from a
-    /// view's render path.
+    /// Call from Settings' `onAppear`, outside a view's render path.
     static func resolveListAdopting(explicit: TaskList?, in context: ModelContext) -> TaskList? {
-        if let explicit { return explicit }
-        if let stored = TaskDefaultsPreferences.defaultListID,
-           let found = list(withID: stored, in: context) {
-            return found
-        }
-        guard let adopted = firstByLocalizedName(adoptableLists(in: context)) else {
-            // No lists to adopt. Leave the preference alone so the next call — after
-            // the first list syncs down — still adopts rather than seeing a stale write.
-            return nil
-        }
-        TaskDefaultsPreferences.setDefaultListID(adopted.id)
-        return adopted
+        guard let choice = try? creationList(explicit: explicit, in: context) else { return nil }
+        choice.preferenceChange?.commit()
+        return choice.list
     }
 
     /// The first list in localized order — the same order a person reading the names
@@ -150,14 +168,10 @@ enum NewTaskDefaults {
 
     // MARK: - Fetch Helpers
 
-    private static func list(withID id: String, in context: ModelContext) -> TaskList? {
+    private static func list(withID id: String, in context: ModelContext) throws -> TaskList? {
         var descriptor = FetchDescriptor<TaskList>(predicate: #Predicate<TaskList> { $0.id == id })
         descriptor.fetchLimit = 1
-        return (try? context.fetch(descriptor))?.first
-    }
-
-    private static func allLists(in context: ModelContext) -> [TaskList] {
-        (try? context.fetch(FetchDescriptor<TaskList>())) ?? []
+        return try context.fetch(descriptor).first
     }
 
     /// The lists the app may silently adopt as the user's default.
@@ -170,8 +184,8 @@ enum NewTaskDefaults {
     ///
     /// It stays eligible when it is the only list there is — excluding it outright would
     /// leave a new task with nowhere to go.
-    private static func adoptableLists(in context: ModelContext) -> [TaskList] {
-        let all = allLists(in: context)
+    private static func adoptableLists(in context: ModelContext) throws -> [TaskList] {
+        let all = try context.fetch(FetchDescriptor<TaskList>())
         let ordinary = all.filter { !$0.isRecoveryList }
         return ordinary.isEmpty ? all : ordinary
     }

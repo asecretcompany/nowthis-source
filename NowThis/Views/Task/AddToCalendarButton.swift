@@ -10,21 +10,24 @@ import SwiftData
 struct AddToCalendarButton: View {
 
     let task: TaskItem
+    let errorState: ErrorState
 
     @StateObject private var permissionManager = CalendarPermissionManager()
     @State private var showingPicker = false
     @State private var showingEventEditor = false
     @State private var showingPermissionDenied = false
     @State private var selectedCalendarID: String?
+    @State private var appleEventLocation: String?
 
     @Query(sort: \ServerAccount.displayName)
     private var allAccounts: [ServerAccount]
 
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var syncScheduler: SyncScheduler
 
     /// Nextcloud accounts (non-vault) filtered locally.
     private var nextcloudAccounts: [ServerAccount] {
-        allAccounts.filter { $0.mode != .vault }
+        allAccounts.filter { $0.modelContext != nil && !$0.isDeleted && $0.mode != .vault }
     }
 
     var body: some View {
@@ -70,7 +73,8 @@ struct AddToCalendarButton: View {
             EventEditSheet(
                 task: task,
                 eventStore: permissionManager.eventStore,
-                calendarID: selectedCalendarID
+                calendarID: selectedCalendarID,
+                location: appleEventLocation
             )
         }
     }
@@ -108,20 +112,30 @@ struct AddToCalendarButton: View {
     }
 
     private func addToAppleCalendar(calendarID: String) {
-        selectedCalendarID = calendarID
-        showingEventEditor = true
+        do {
+            appleEventLocation = try LocationDraft.committedFields(for: task, in: modelContext).name
+            selectedCalendarID = calendarID
+            showingEventEditor = true
+        } catch {
+            ViewPersistence.report(error, to: errorState)
+        }
     }
 
     private func addToNextcloudCalendar(account: ServerAccount) {
+        guard task.modelContext != nil, !task.isDeleted, account.modelContext != nil, !account.isDeleted else { return }
+        let taskID = task.id
+        let accountID = account.id
+        let container = modelContext.container
         Task { @MainActor in
             let manager = NextcloudCalendarSyncManager()
             do {
-                nonisolated(unsafe) let unsafeTask = task
-                nonisolated(unsafe) let unsafeAccount = account
-                try await manager.syncSingleTask(unsafeTask, account: unsafeAccount)
-                try modelContext.save()
+                try await manager.syncSingleTask(taskID: taskID, accountID: accountID, role: .manualExport, container: container) {
+                    syncScheduler.publishLocalTaskCommit()
+                }
+            } catch is CancellationError {
+                return
             } catch {
-                // Silently fail — could add error toast later
+                ViewPersistence.reportCalendarFailure(String(describing: error), to: errorState)
             }
         }
     }
@@ -137,6 +151,7 @@ struct EventEditSheet: UIViewControllerRepresentable {
     let task: TaskItem
     let eventStore: EKEventStore
     let calendarID: String?
+    let location: String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -148,7 +163,7 @@ struct EventEditSheet: UIViewControllerRepresentable {
         let event = EKEvent(eventStore: eventStore)
         event.title = task.title
         event.notes = task.descriptionText
-        event.location = task.locationName
+        event.location = location
 
         if let dueDate = task.dueDate {
             let start = task.startDate ?? dueDate

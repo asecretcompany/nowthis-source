@@ -3,7 +3,7 @@ import Foundation
 /// Parses complete DAV multistatus documents. Properties are committed only
 /// after their own propstat succeeds; response status and property status differ.
 final class DAVXMLParser: NSObject, XMLParserDelegate {
-    struct DAVResource {
+    struct DAVResource: Sendable {
         var href = ""
         var etag = ""
         var calendarData = ""
@@ -11,11 +11,13 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
         var ctag = ""
         var isCalendar = false
         var isVTODOSupported = false
+        var veventComponentCount = 0
         var calendarColor = ""
         var currentUserPrincipal = ""
         var calendarHomeSet = ""
         var syncToken = ""
         var deletedAt = ""
+        var creationID = ""
         var privileges: Set<String> = []
         var supportsSyncCollection = false
         var statusCode = 200
@@ -23,9 +25,16 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
         /// Keys use expanded XML names so a foreign namespace cannot impersonate DAV.
         var propertyStatusCodes: [String: Int] = [:]
         var propstatStatusCodes: [Int] = []
+        var propertyOccurrences: [String: Int] = [:]
+        var hrefOccurrences = 0
 
         func propertyStatus(_ name: String, namespace: String = "DAV:") -> Int? {
             propertyStatusCodes["{\(namespace)}\(name)"]
+        }
+
+        func uniquePropertyStatus(_ name: String, namespace: String = "DAV:") -> Int? {
+            guard propertyOccurrences["{\(namespace)}\(name)"] == 1 else { return nil }
+            return propertyStatus(name, namespace: namespace)
         }
     }
 
@@ -36,19 +45,23 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
     private var properties = DAVResource()
     private var propertyNames: Set<String> = []
     private var propstatStatus: Int?
+    private var propCount = 0
+    private var strictPropertyEvidence = false
     private var invalidStructure = false
     private var tokenCount = 0
     private var rootIsMultistatus = false
+    private let maxDepth = 64
 
     private struct Element {
         let name: String
         let namespace: String
         var text = ""
+        var hasChildren = false
         var key: String { "{\(namespace)}\(name)" }
     }
     private var elements: [Element] = []
 
-    func parse(data: Data) throws -> [DAVResource] {
+    func parse(data: Data, strictPropertyEvidence: Bool = false) throws -> [DAVResource] {
         let interval = PerformanceTrace.begin("DAVXML", bytes: data.count)
         defer { PerformanceTrace.end("DAVXML", interval) }
         resources = []
@@ -57,6 +70,8 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
         properties = DAVResource()
         propertyNames = []
         propstatStatus = nil
+        propCount = 0
+        self.strictPropertyEvidence = strictPropertyEvidence
         invalidStructure = false
         tokenCount = 0
         syncToken = ""
@@ -78,31 +93,55 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didStartElement elementName: String,
                 namespaceURI: String?, qualifiedName qName: String?,
                 attributes: [String: String] = [:]) {
+        if elements.count >= maxDepth {
+            invalidStructure = true
+            parser.abortParsing()
+            return
+        }
         let element = Element(name: elementName, namespace: namespaceURI ?? "")
         if elements.isEmpty {
             rootIsMultistatus = element.key == "{DAV:}multistatus"
         }
         let parent = elements.last?.key
+        if !elements.isEmpty { elements[elements.count - 1].hasChildren = true }
         if element.key == "{DAV:}response" {
-            if parent != "{DAV:}multistatus" || resource != nil { invalidStructure = true }
+            if parent != "{DAV:}multistatus" || resource != nil || (strictPropertyEvidence && elements.count != 1) {
+                invalidStructure = true
+            }
             resource = DAVResource()
         } else if element.key == "{DAV:}propstat" {
             if parent != "{DAV:}response" { invalidStructure = true }
             properties = DAVResource()
             propertyNames = []
             propstatStatus = nil
+            propCount = 0
+        } else if strictPropertyEvidence, element.key == "{DAV:}prop" {
+            if parent != "{DAV:}propstat" { invalidStructure = true }
+            propCount += 1
         }
-        if parent == "{DAV:}prop" { propertyNames.insert(element.key) }
+        if parent == "{DAV:}prop" {
+            propertyNames.insert(element.key)
+            if strictPropertyEvidence { resource?.propertyOccurrences[element.key, default: 0] += 1 }
+        }
         let ancestors = elements.map(\.key)
         if ancestors.contains("{DAV:}prop") {
             if element.key == "{urn:ietf:params:xml:ns:caldav}comp",
                ancestors.contains("{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set"),
-               attributes["name"]?.uppercased() == "VTODO" {
-                properties.isVTODOSupported = true
+               !strictPropertyEvidence || parent == "{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set"
+                   && elements.dropLast().last?.key == "{DAV:}prop" {
+                switch attributes["name"]?.uppercased() {
+                case "VTODO": properties.isVTODOSupported = true
+                case "VEVENT": properties.veventComponentCount += 1
+                default: break
+                }
             }
             if ["{urn:ietf:params:xml:ns:caldav}calendar", "{urn:ietf:params:xml:ns:caldav}vevent-collection"].contains(element.key),
+               !strictPropertyEvidence || element.name == "calendar" && parent == "{DAV:}resourcetype"
+                   && elements.dropLast().last?.key == "{DAV:}prop",
                ancestors.contains("{DAV:}resourcetype") { properties.isCalendar = true }
-            if parent == "{DAV:}privilege", ancestors.contains("{DAV:}current-user-privilege-set"), element.namespace == "DAV:" {
+            if parent == "{DAV:}privilege", ancestors.contains("{DAV:}current-user-privilege-set"), element.namespace == "DAV:",
+               !strictPropertyEvidence || elements.dropLast().last?.key == "{DAV:}current-user-privilege-set"
+                   && elements.dropLast(2).last?.key == "{DAV:}prop" {
                 properties.privileges.insert(element.name)
             }
             if element.key == "{DAV:}sync-collection", parent == "{DAV:}report",
@@ -122,6 +161,10 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
         case "{DAV:}href":
             if parent == "{DAV:}response" {
                 if resource?.href.isEmpty == false { invalidStructure = true }
+                if strictPropertyEvidence {
+                    if element.hasChildren { invalidStructure = true }
+                    resource?.hrefOccurrences += 1
+                }
                 resource?.href = text
             } else if parent == "{DAV:}current-user-principal" {
                 properties.currentUserPrincipal = text
@@ -131,6 +174,15 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
         case "{DAV:}status":
             let parts = text.split(whereSeparator: \.isWhitespace)
             let code = parts.count >= 2 && parts[0].hasPrefix("HTTP/") ? Int(parts[1]) : nil
+            if strictPropertyEvidence {
+                let statusLine = text.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: false)
+                if element.hasChildren || (parent != "{DAV:}propstat" && parent != "{DAV:}response")
+                    || statusLine.count < 2 || statusLine[0].wholeMatch(of: #/HTTP/[0-9]\.[0-9]/#) == nil
+                    || statusLine[1].utf8.count != 3 || Int(statusLine[1]) != code
+                    || !(100...599).contains(code ?? 0) || text.contains(where: \.isNewline) {
+                    invalidStructure = true
+                }
+            }
             if parent == "{DAV:}propstat" {
                 if propstatStatus != nil { invalidStructure = true }
                 propstatStatus = code
@@ -147,6 +199,9 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
             // Legacy parse callers accept an omitted status. Strict REPORT accounting
             // uses propertyStatusCodes and rejects that unspecified status (zero).
             let code = propstatStatus ?? 0
+            if strictPropertyEvidence, propCount != 1 || propertyNames.isEmpty || code == 0 {
+                invalidStructure = true
+            }
             resource?.propstatStatusCodes.append(code)
             for name in propertyNames where resource?.propertyStatusCodes[name] != 200 {
                 resource?.propertyStatusCodes[name] = code
@@ -169,6 +224,10 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
                 case "{http://apple.com/ns/ical/}calendar-color": properties.calendarColor = text
                 case "{DAV:}sync-token": properties.syncToken = text
                 case "{http://nextcloud.com/ns}deleted-at": properties.deletedAt = text
+                    if strictPropertyEvidence && element.hasChildren { invalidStructure = true }
+                case "{https://nowthis.app/ns/caldav}creation-id":
+                    if strictPropertyEvidence && element.hasChildren { invalidStructure = true }
+                    properties.creationID = element.text
                 default: break
                 }
             }
@@ -184,12 +243,15 @@ final class DAVXMLParser: NSObject, XMLParserDelegate {
             case "{DAV:}displayname": found.displayName = properties.displayName
             case "{http://calendarserver.org/ns/}getctag": found.ctag = properties.ctag
             case "{DAV:}resourcetype": found.isCalendar = properties.isCalendar
-            case "{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set": found.isVTODOSupported = properties.isVTODOSupported
+            case "{urn:ietf:params:xml:ns:caldav}supported-calendar-component-set":
+                found.isVTODOSupported = properties.isVTODOSupported
+                found.veventComponentCount = properties.veventComponentCount
             case "{http://apple.com/ns/ical/}calendar-color": found.calendarColor = properties.calendarColor
             case "{DAV:}current-user-principal": found.currentUserPrincipal = properties.currentUserPrincipal
             case "{urn:ietf:params:xml:ns:caldav}calendar-home-set": found.calendarHomeSet = properties.calendarHomeSet
             case "{DAV:}sync-token": found.syncToken = properties.syncToken
             case "{http://nextcloud.com/ns}deleted-at": found.deletedAt = properties.deletedAt
+            case "{https://nowthis.app/ns/caldav}creation-id": found.creationID = properties.creationID
             case "{DAV:}current-user-privilege-set": found.privileges = properties.privileges
             case "{DAV:}supported-report-set": found.supportsSyncCollection = properties.supportsSyncCollection
             default: break

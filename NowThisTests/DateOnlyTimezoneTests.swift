@@ -74,6 +74,28 @@ struct ParserDateOnlyTests {
 @Suite("Serializer Date-Only Round-Trip")
 struct SerializerDateOnlyTests {
 
+    @Test(arguments: [
+        ("Buy milk tomorrow", "DUE;VALUE=DATE:20260308", "2026-03-08T00:00:00Z", true),
+        ("Buy milk tomorrow at 5pm", "DUE:20260309T000000Z", "2026-03-09T00:00:00Z", false),
+    ])
+    func parsedDueDateRoundTrips(phrase: String, dueLine: String, instant: String, isDateOnly: Bool) throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: "2026-03-07T20:00:00Z"))
+        let expected = try #require(iso.date(from: instant))
+        let parsed = NaturalLanguageParser.parse(phrase, now: now, calendar: calendar)
+        let wire = ICalendarSerializer.serialize(
+            uid: "parsed-date", summary: parsed.cleanTitle,
+            dueDate: parsed.dueDate, isDueDateOnly: !parsed.dueHasTime
+        )
+        let task = try #require(try ICalendarParser.parseVTODOs(from: wire).first)
+
+        #expect(wire.contains(dueLine))
+        #expect(task.dueDate == expected)
+        #expect(task.isDueDateOnly == isDateOnly)
+    }
+
     @Test("Date-only task serializes as VALUE=DATE")
     func serializeDateOnly() {
         // Create a date-only due date (midnight UTC for May 28, 2026)

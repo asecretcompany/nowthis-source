@@ -15,9 +15,11 @@ struct AccountSetupView: View {
     @Environment(\.syncCommands) private var syncCommands
 
     @State private var serverURL = ""
+    @State private var loginDiscoverySeed: URL?
     @State private var connectionError: String?
     @State private var accountCreated = false
-    @StateObject private var loginCoordinator = LoginFlowCoordinator()
+    @State private var loginSaveTask: Task<Void, Never>?
+    @StateObject private var loginCoordinator = PerformanceLaunchFixture.makeLoginCoordinator()
 
     // Manual entry fallback
     @State private var showManualEntry = false
@@ -73,9 +75,14 @@ struct AccountSetupView: View {
         }
         .navigationTitle("Add Nextcloud")
         .navigationBarTitleDisplayMode(.inline)
-        .disabled(isConnecting)
+        .disabled(isConnecting || loginSaveTask != nil)
         .onChange(of: loginCoordinator.state) { _, newState in
             handleLoginFlowState(newState)
+        }
+        .onDisappear {
+            loginCoordinator.cancel()
+            loginSaveTask?.cancel()
+            loginSaveTask = nil
         }
     }
 
@@ -94,27 +101,32 @@ struct AccountSetupView: View {
             connectionError = validation.errorMessage
             return
         }
+        loginDiscoverySeed = (try? NextcloudServerAddress.parse(serverURL))?.discoverySeed
         loginCoordinator.startLoginFlow(serverURL: validation.normalizedURL)
     }
 
     private func handleLoginFlowState(_ state: LoginFlowCoordinator.State) {
         switch state {
         case .success(let server, let loginName, let appPassword):
-            Task {
-                do {
-                    let manager = AccountManager(modelContext: modelContext)
+            guard loginSaveTask == nil else { return }
+            let discoverySeed = loginDiscoverySeed
+            loginSaveTask = Task {
+                defer { if !Task.isCancelled { loginSaveTask = nil } }
+                await AccountLoginSave.perform(save: {
+                    let manager = PerformanceLaunchFixture.loginAccountManager(in: modelContext)
                     try await manager.addNextcloudAccountViaLoginFlow(
                         serverURL: server,
                         loginName: loginName,
-                        appPassword: appPassword
+                        appPassword: appPassword,
+                        discoverySeed: discoverySeed
                     )
+                }, onSuccess: {
                     accountCreated = true
                     syncCommands.syncAfterAccountAdded(modelContext)
                     dismiss()
-                } catch {
-                    connectionError = error.localizedDescription
-                }
+                }, onFailure: { connectionError = $0 })
             }
+            loginCoordinator.cancel()
         case .error(let message):
             connectionError = message
         default:
@@ -142,12 +154,11 @@ struct AccountSetupView: View {
             return
         }
 
-        let normalizedURL = validation.normalizedURL
         let trimmedUsername = username.trimmingCharacters(in: .whitespaces)
 
         do {
             let success = try await ServerURLValidator.testConnection(
-                baseURL: normalizedURL,
+                baseURL: serverURL,
                 username: trimmedUsername,
                 password: password
             )
@@ -156,7 +167,7 @@ struct AccountSetupView: View {
                 let manager = AccountManager(modelContext: modelContext)
                 try await manager.addNextcloudAccount(
                     displayName: trimmedUsername,
-                    serverURL: normalizedURL,
+                    serverURL: serverURL,
                     username: trimmedUsername,
                     password: password
                 )
@@ -171,7 +182,7 @@ struct AccountSetupView: View {
             }
         } catch {
             connectionError = String(
-                localized: "Connection failed: \(error.localizedDescription)"
+                localized: "Connection failed: \(SyncFailure.connectionGuidance(for: error) ?? error.localizedDescription)"
             )
         }
 
@@ -196,6 +207,11 @@ private struct ServerURLSection: View {
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
                     .accessibilityLabel("Server URL")
+            }
+            if let address = try? NextcloudServerAddress.parse(serverURL), address.discoverySeed != nil {
+                Text(String(format: String(localized: "account.server.normalization", defaultValue: "Server address: %@", comment: "Shows the installation server address extracted from a pasted CalDAV endpoint. The placeholder is the server URL."), address.baseURL.absoluteString))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         } header: {
             Text("Server URL")

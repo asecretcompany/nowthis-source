@@ -61,18 +61,42 @@ struct CreateTaskIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let container = try SharedModelContainer.create()
+        let result: IntentDialogResult
+        if #available(iOS 26.0, *) {
+            result = try await performWithDueDateQuestion(makeContainer: { try SharedModelContainer.create() }, askDueDate: {
+                try await requestDueDateRule(default: $0)
+            })
+        } else {
+            result = try await performWithDueDateQuestion(makeContainer: { try SharedModelContainer.create() }, askDueDate: nil)
+        }
+        return .result(dialog: IntentDialog(result.dialog))
+    }
+
+    @MainActor
+    func performWithDueDateQuestion(makeContainer: () throws -> ModelContainer,
+                                    askDueDate: ((DefaultDueDateRule) async throws -> DefaultDueDateRule)?,
+                                    onWidgetReload: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
+    ) async throws -> IntentDialogResult {
+        _ = try TaskTextValidation.title(taskTitle)
+        try TaskTextValidation.notes(notes)
+        let container = try makeContainer()
         // `requestChoice` is iOS 26. Earlier systems skip the question, and an undated task
         // takes the configured default instead.
-        var chosenRule: DefaultDueDateRule?
-        if shouldAskForDueDate, #available(iOS 26.0, *) {
-            let list = try resolveTargetList(in: container.mainContext)
-            chosenRule = try await requestDueDateRule(
-                default: NewTaskDefaults.effectiveDueDateRule(for: list)
-            )
+        if shouldAskForDueDate, let askDueDate {
+            let preview = try creationPreview(in: ModelContext(container))
+            let chosenRule = try await askDueDate(preview.rule)
+            return try await create(in: ModelContext(container), dueDateRule: chosenRule,
+                expectedDestination: preview.destination, onWidgetReload: onWidgetReload)
         }
-        let result = try await performWithContainer(container, dueDateRule: chosenRule)
-        return .result(dialog: IntentDialog(result.dialog))
+        return try await perform(in: ModelContext(container), onWidgetReload: onWidgetReload)
+    }
+
+    @MainActor
+    private func creationPreview(in context: ModelContext) throws ->
+        (rule: DefaultDueDateRule, destination: TaskWriteEligibility.CreationDestination) {
+        let (list, _) = try resolveTargetList(in: context)
+        return (NewTaskDefaults.effectiveDueDateRule(for: list),
+                .list(id: list.id, expectedPersistentID: list.persistentModelID))
     }
 
     /// Siri asks for a due date only when the invocation didn't carry one.
@@ -154,8 +178,24 @@ struct CreateTaskIntent: AppIntent {
                               dueDateRule: DefaultDueDateRule? = nil,
                               onWidgetReload: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
     ) async throws -> IntentDialogResult {
-        let context = container.mainContext
-        let targetList = try resolveTargetList(in: context)
+        try await perform(in: container.mainContext, dueDateRule: dueDateRule, onWidgetReload: onWidgetReload)
+    }
+
+    @MainActor
+    func perform(in context: ModelContext,
+                 dueDateRule: DefaultDueDateRule? = nil,
+                 onWidgetReload: () -> Void = { WidgetCenter.shared.reloadAllTimelines() }
+    ) async throws -> IntentDialogResult {
+        try await create(in: context, dueDateRule: dueDateRule, expectedDestination: nil, onWidgetReload: onWidgetReload)
+    }
+
+    @MainActor
+    private func create(in context: ModelContext, dueDateRule: DefaultDueDateRule?,
+                        expectedDestination: TaskWriteEligibility.CreationDestination?,
+                        onWidgetReload: () -> Void) async throws -> IntentDialogResult {
+        _ = try TaskTextValidation.title(taskTitle)
+        try TaskTextValidation.notes(notes)
+        let (targetList, preferenceChange) = try resolveTargetList(in: context, expected: expectedDestination)
 
         // Done on an empty Title prompt arrives here as "" — named as Quick Add names it, so no
         // untitled task is saved and uploaded. The same key, so one translation serves both.
@@ -214,6 +254,8 @@ struct CreateTaskIntent: AppIntent {
 
         context.insert(task)
         try ReminderSchedulingJournal.saveTaskChanges(in: context)
+        preferenceChange?.commit()
+        let listName = targetList.name
         // Before the reminder pass, so the widgets start refreshing while it runs. With a Today
         // default the new task belongs in the Today widget at once, and nothing else reloads it:
         // the app's SyncScheduler only learns of saves the views tell it about.
@@ -224,7 +266,6 @@ struct CreateTaskIntent: AppIntent {
         // pass deferred past that point would fetch through a context with no container behind it.
         await ReminderScheduler.reconcileNow(modelContext: context)
 
-        let listName = targetList.name
         return IntentDialogResult(
             dialog: LocalizedStringResource(
                 "intent.dialog.createTask.added",
@@ -237,70 +278,28 @@ struct CreateTaskIntent: AppIntent {
     /// back to the default would silently put the task somewhere the user didn't ask
     /// for. Without one, the user's default list applies.
     @MainActor
-    private func resolveTargetList(in context: ModelContext) throws -> TaskList {
-        if let listEntity = list {
-            let listID = listEntity.id
-            let listPredicate = #Predicate<TaskList> { $0.id == listID }
-            var descriptor = FetchDescriptor<TaskList>(
-                predicate: listPredicate
-            )
-            descriptor.fetchLimit = 1
-            guard let found = try context.fetch(descriptor).first else {
+    private func resolveTargetList(in context: ModelContext, expected: TaskWriteEligibility.CreationDestination? = nil)
+        throws -> (TaskList, NewTaskDefaults.PreferenceChange?) {
+        let eligibility = TaskWriteEligibility(writingIn: context)
+        let choice = list == nil ? try NewTaskDefaults.creationList(explicit: nil, in: context) : nil
+        let destination: TaskWriteEligibility.CreationDestination
+        if let list {
+            destination = expected ?? .list(id: list.id, expectedPersistentID: nil)
+        } else if let candidate = choice?.list {
+            if case .list(let id, let persistentID) = expected,
+               id != candidate.id || persistentID != candidate.persistentModelID {
                 throw IntentError.listNotFound
             }
-            return found
-        }
-        guard let resolved = NewTaskDefaults.resolveListAdopting(explicit: nil, in: context) else {
+            destination = expected ?? .list(id: candidate.id, expectedPersistentID: candidate.persistentModelID)
+        } else {
             throw IntentError.listNotFound
         }
-        return resolved
-    }
-}
-
-// MARK: - Task List Entity
-
-/// An AppEntity representing a `TaskList` for use in Intents and Shortcuts.
-struct TaskListEntity: AppEntity {
-
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "List"
-    static let defaultQuery = TaskListEntityQuery()
-
-    var id: String
-    var name: String
-
-    var displayRepresentation: DisplayRepresentation {
-        // `stringLiteral:` and not `"\(name)"`. A list's name is the user's own text, and
-        // interpolating it into a LocalizedStringResource mints the catalog key "%@" — one key
-        // shared by every entity in the app, offered to five translators as a bare specifier.
-        DisplayRepresentation(title: LocalizedStringResource(stringLiteral: name))
-    }
-}
-
-// MARK: - Task List Entity Query
-
-/// Provides task list lookup for Siri parameter resolution.
-struct TaskListEntityQuery: EntityQuery {
-
-    @MainActor
-    func entities(for identifiers: [String]) async throws -> [TaskListEntity] {
-        let container = try SharedModelContainer.create()
-        let context = container.mainContext
-
-        let allLists = try context.fetch(FetchDescriptor<TaskList>())
-        return allLists
-            .filter { identifiers.contains($0.id) }
-            .map { TaskListEntity(id: $0.id, name: $0.name) }
-    }
-
-    @MainActor
-    func suggestedEntities() async throws -> [TaskListEntity] {
-        let container = try SharedModelContainer.create()
-        let context = container.mainContext
-
-        let lists = try context.fetch(
-            FetchDescriptor<TaskList>(sortBy: [SortDescriptor<TaskList>(\TaskList.name)])
-        )
-        return lists.map { TaskListEntity(id: $0.id, name: $0.name) }
+        do {
+            guard let target = try eligibility.destination(destination) else { throw IntentError.listNotFound }
+            return (target, choice?.preferenceChange)
+        } catch let refusal as TaskWriteEligibility.Refusal {
+            throw IntentError.writeFailure(refusal, fallback: .listNotFound, creating: true)
+        }
     }
 }
 

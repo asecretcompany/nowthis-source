@@ -11,34 +11,32 @@ struct CalendarWeekView: View {
     let tasks: [TaskItem]
     @Binding var selectedDate: Date
     @Binding var displayedMonth: Date
-    var projection: CalendarTaskProjection? = nil
+    let projection: CalendarTaskProjection
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     var body: some View {
-        // Snapshot once for the whole strip: seven columns each used to re-walk
-        // the task array, and each walk read `dueDate`/`status` off live models.
-        let buckets = projection ?? CalendarTaskProjection(rows: tasks.glanceRows())
-        let overdueTasks = buckets.overdueRows
-        return VStack(spacing: 8) {
+        VStack(spacing: 8) {
             // Week navigation
             weekHeader
 
             // Day columns
             HStack(alignment: .top, spacing: 4) {
                 ForEach(weekDates, id: \.self) { date in
+                    let sections = projection.sections(on: date)
                     WeekDayColumn(
                         date: date,
                         isToday: Calendar.current.isDateInToday(date),
                         isSelected: Calendar.current.isDate(date, inSameDayAs: selectedDate),
-                        tasks: buckets.bucket(on: date).rows.filter { $0.data.status != .completed },
-                        overdueTasks: buckets.isToday(date) ? overdueTasks : []
+                        tasks: sections.due,
+                        overdueTasks: sections.overdue
                     )
                     .onTapGesture {
                         selectedDate = date
                     }
                     .dropDestination(for: String.self) { droppedIDs, _ in
-                        reschedule(taskIDs: droppedIDs, to: date)
-                        return true
+                        CalendarTaskRescheduling.drop(taskIDs: droppedIDs, to: date, among: tasks,
+                                                      in: modelContext, errorState: errorState)
                     }
                 }
             }
@@ -113,31 +111,6 @@ struct CalendarWeekView: View {
                 displayedMonth = newDate
             }
         }
-    }
-
-    /// Reschedules tasks to a new date when dropped on a week day column.
-    private func reschedule(taskIDs: [String], to newDate: Date) {
-        for id in taskIDs {
-            guard let task = tasks.first(where: { $0.modelContext != nil && $0.id == id })
-            else { continue }
-            if let oldDue = task.dueDate {
-                let calendar = Calendar.current
-                let timeComponents = calendar.dateComponents([.hour, .minute], from: oldDue)
-                var newComponents = calendar.dateComponents([.year, .month, .day], from: newDate)
-                newComponents.hour = timeComponents.hour
-                newComponents.minute = timeComponents.minute
-                task.dueDate = calendar.date(from: newComponents) ?? newDate
-            } else {
-                task.dueDate = newDate
-            }
-            task.isDirty = true
-            task.lastModifiedDate = Date()
-        }
-        HapticManager.softImpact()
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
-        // The dragged task's already-pending notification is pinned to its old deadline, so
-        // without this it alerts at the wrong time and carries a badge count for the wrong day.
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 

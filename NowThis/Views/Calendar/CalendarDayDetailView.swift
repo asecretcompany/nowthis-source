@@ -1,30 +1,18 @@
 import SwiftUI
-import SwiftData
 
 /// Detail view showing all tasks due on a specific date.
 ///
 /// Includes an overdue carry-forward section at the top for past-due
 /// incomplete tasks, followed by tasks due on the selected day.
-/// The "Add Task" button pre-fills the selected date as due date.
 struct CalendarDayDetailView: View {
 
     let date: Date
-    let tasks: [TaskItem]
-    var projection: CalendarTaskProjection? = nil
-
-    @Environment(\.modelContext) private var modelContext
-    @State private var showingAddTask = false
-
-    /// Settings > Show Completed Tasks. The day list applied no status filter at all, so
-    /// completed tasks appeared here whatever the setting said.
-    @AppStorage("showCompletedTasks") private var showCompleted = false
+    let projection: CalendarTaskProjection
 
     var body: some View {
-        // Snapshot once per pass. Both lists are read several times below, and
-        // every read used to re-walk the whole task array.
-        let buckets = projection ?? CalendarTaskProjection(rows: tasks.glanceRows())
-        let overdueTasks = buckets.isToday(date) ? buckets.overdueRows : []
-        let dueTasks = buckets.bucket(on: date).rows.filter { showCompleted || $0.data.status != .completed }
+        let sections = projection.sections(on: date)
+        let overdueTasks = sections.overdue
+        let dueTasks = sections.due
         return List {
             // Overdue carry-forward
             if !overdueTasks.isEmpty {
@@ -63,45 +51,12 @@ struct CalendarDayDetailView: View {
                 }
             }
         }
-        .navigationTitle(dayTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    addTask()
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Add task due on this date")
-            }
-        }
-    }
-
-    // MARK: - Title
-
-    private var dayTitle: String {
-        date.formatted(.dateTime.month(.abbreviated).day())
-    }
-
-    // MARK: - Actions
-
-    private func addTask() {
-        let task = TaskItem(title: "")
-        task.dueDate = date
-        // Was: inherit from `tasks.first`. But `tasks` is the calendar-wide filtered
-        // array, not this day's — day-scoping happens in `dueTasks(from:)`, which this
-        // never calls. So an empty day inherited whichever task sorted first across the
-        // entire range. Use the user's default list like every other creation surface.
-        task.taskList = NewTaskDefaults.resolveListAdopting(explicit: nil, in: modelContext)
-        modelContext.insert(task)
-        // Created with a due date and never a reminder — the case that scheduled nothing at all.
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
 // MARK: - Overdue Task Row
 
-private struct OverdueTaskRow: View {
+struct OverdueTaskRow: View {
     let data: TaskGlanceData
 
     var body: some View {
@@ -114,8 +69,8 @@ private struct OverdueTaskRow: View {
                 Text(verbatim: data.title)
                     .font(.subheadline)
 
-                if let due = data.dueDate {
-                    Text("Due \(due, format: .relative(presentation: .named))")
+                if let dueLabel = dueDateLabel() {
+                    Text("Due \(dueLabel)")
                         .font(.caption2)
                         .foregroundStyle(.red)
                 }
@@ -123,12 +78,23 @@ private struct OverdueTaskRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(data.title), overdue")
+        .accessibilityValue(data.spokenAllDayDueDate() ?? "")
+    }
+
+    func dueDateLabel(timeZone: TimeZone = .current) -> String? {
+        guard let due = data.dueDate else { return nil }
+        if data.isDueDateOnly {
+            return DueDateFormatter.format(due, isDateOnly: data.isDueDateOnly, timeZone: timeZone)
+        }
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+        return due.formatted(Date.RelativeFormatStyle(presentation: .named, calendar: calendar))
     }
 }
 
 // MARK: - Day Task Row
 
-private struct DayTaskRow: View {
+struct DayTaskRow: View {
     let data: TaskGlanceData
 
     var body: some View {
@@ -152,8 +118,8 @@ private struct DayTaskRow: View {
 
             Spacer()
 
-            if let due = data.dueDate {
-                Text(due, format: .dateTime.hour().minute())
+            if let dueLabel = dueDateLabel() {
+                Text(dueLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -168,6 +134,14 @@ private struct DayTaskRow: View {
             : String(localized: "calendar.day.task.a11y.pending",
                      defaultValue: "\(data.title), pending",
                      comment: "VoiceOver label for a task row in the calendar's day list when the task is not done yet. The placeholder is the user-entered task title."))
+        .accessibilityValue(data.spokenAllDayDueDate() ?? "")
+    }
+
+    func dueDateLabel(timeZone: TimeZone = .current) -> String? {
+        data.dueDate.map {
+            DueDateFormatter.format($0, isDateOnly: data.isDueDateOnly, timeZone: timeZone,
+                                    timedStyle: .dateTime.hour().minute())
+        }
     }
 
     private var priorityColor: Color {

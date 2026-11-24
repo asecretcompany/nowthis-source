@@ -6,7 +6,7 @@ import SwiftData
 /// Each saved filter stores criteria that can be combined with AND/OR logic
 /// to create complex queries across status, priority, tag, list, and date range.
 ///
-/// Criteria are stored as JSON-encoded `FilterCriteria` for flexibility.
+/// Criteria are stored as JSON-encoded `FilterRule` values for flexibility.
 @Model
 final class SavedFilter {
 
@@ -56,11 +56,13 @@ final class SavedFilter {
 
     // MARK: - Computed
 
-    /// Decoded filter rules.
+    var decodedRules: [FilterRule]? {
+        try? JSONDecoder().decode([FilterRule].self, from: rulesData)
+    }
+
+    /// Compatibility accessor for model callers. Evaluation uses validated criteria.
     var rules: [FilterRule] {
-        get {
-            (try? JSONDecoder().decode([FilterRule].self, from: rulesData)) ?? []
-        }
+        get { decodedRules ?? [] }
         set {
             rulesData = (try? JSONEncoder().encode(newValue)) ?? Data()
         }
@@ -69,6 +71,61 @@ final class SavedFilter {
     var logic: FilterLogic {
         get { FilterLogic(rawValue: logicOperator) ?? .and }
         set { logicOperator = newValue.rawValue }
+    }
+
+    var snapshot: SavedFilterSnapshot {
+        SavedFilterSnapshot(id: id, name: name, icon: icon, colorHex: colorHex, sortOrder: sortOrder,
+                            rulesData: rulesData, logicOperator: logicOperator)
+    }
+}
+
+struct SavedFilterSnapshot: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let icon: String
+    let colorHex: String
+    let sortOrder: Int
+    let rulesData: Data
+    let logicOperator: String
+    let rules: [FilterRule]?
+    let logic: FilterLogic?
+    let criteria: SavedFilterCriteria?
+
+    init(id: String, name: String, icon: String, colorHex: String, sortOrder: Int,
+         rulesData: Data, logicOperator: String) {
+        self.id = id
+        self.name = name
+        self.icon = icon
+        self.colorHex = colorHex
+        self.sortOrder = sortOrder
+        self.rulesData = rulesData
+        self.logicOperator = logicOperator
+        let decoded = try? JSONDecoder().decode([FilterRule].self, from: rulesData)
+        let operatorValue = FilterLogic(rawValue: logicOperator)
+        rules = decoded
+        logic = operatorValue
+        criteria = decoded.flatMap { SavedFilterCriteria(rules: $0, logic: operatorValue) }
+    }
+}
+
+struct SavedFilterCriteria: Equatable {
+    let rules: [FilterRule]
+    let logic: FilterLogic
+
+    init?(rules: [FilterRule], logic: FilterLogic?) {
+        guard let logic, !rules.isEmpty, Set(rules.map(\.id)).count == rules.count,
+              rules.allSatisfy(\.isValid) else { return nil }
+        self.rules = rules
+        self.logic = logic
+    }
+
+    func matchingTasks(_ tasks: [TaskItem]) -> [TaskItem] {
+        return tasks.filter { task in
+            switch logic {
+            case .and: return rules.allSatisfy { $0.matches(task) }
+            case .or: return rules.contains { $0.matches(task) }
+            }
+        }
     }
 }
 
@@ -106,8 +163,48 @@ struct FilterRule: Codable, Identifiable, Hashable {
 
     nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
 
+    var canonicalValue: String? {
+        switch field {
+        case .status: return TaskStatus(rawValue: value.uppercased())?.rawValue
+        case .priority: return TaskPriority(filterToken: value)?.filterToken
+        case .hasDueDate:
+            let boolean = value.lowercased()
+            return boolean == "true" || boolean == "false" ? boolean : nil
+        case .dueDateBefore, .dueDateAfter: return dateValue == nil ? nil : value
+        case .tag, .list, .title:
+            return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+        }
+    }
+
+    var isValid: Bool { field.comparisons.contains(comparison) && canonicalValue != nil }
+
+    var dateValue: Date? { Self.isoFormatter.date(from: value) }
+
+    mutating func setDate(_ date: Date) { value = Self.isoFormatter.string(from: date) }
+
+    mutating func changeField(to field: FilterField, now: Date = Date(), firstTag: String? = nil,
+                              firstList: String? = nil) {
+        guard self.field != field else { return }
+        reset(to: field, now: now, firstTag: firstTag, firstList: firstList)
+    }
+
+    mutating func reset(to field: FilterField, now: Date = Date(), firstTag: String? = nil,
+                        firstList: String? = nil) {
+        self.field = field
+        comparison = .equals
+        switch field {
+        case .status: value = TaskStatus.needsAction.rawValue
+        case .priority: value = TaskPriority.high.filterToken
+        case .hasDueDate: value = "true"
+        case .dueDateBefore, .dueDateAfter: setDate(now)
+        case .tag: value = firstTag ?? ""
+        case .list: value = firstList ?? ""
+        case .title: value = ""
+        }
+    }
+
     /// Evaluates this rule against a task.
-    func matches(_ task: TaskItem, allLists: [TaskList]) -> Bool {
+    func matches(_ task: TaskItem) -> Bool {
         switch field {
         case .status:
             let taskStatus = task.status.rawValue.lowercased()
@@ -138,12 +235,12 @@ struct FilterRule: Codable, Identifiable, Hashable {
 
         case .dueDateBefore:
             guard let due = task.dueDate,
-                  let target = Self.isoFormatter.date(from: value) else { return false }
+                  let target = dateValue else { return false }
             return due < target
 
         case .dueDateAfter:
             guard let due = task.dueDate,
-                  let target = Self.isoFormatter.date(from: value) else { return false }
+                  let target = dateValue else { return false }
             return due > target
 
         case .hasDueDate:

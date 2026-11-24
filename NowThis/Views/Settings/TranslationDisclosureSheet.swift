@@ -6,12 +6,10 @@ import SwiftUI
 /// Presented once per language (see ``TranslationDisclosure``) and permanently reachable from
 /// Settings afterwards, because a disclosure the user can never find again is a formality.
 ///
-/// The layout is deliberate. This is a multi-paragraph sheet, which is the exact shape that
-/// shipped broken in an earlier app of ours: `presentationDetents` with no `ScrollView` compressed every
-/// paragraph to one line and truncated with ellipses, while the accessibility tree still carried
-/// the full text — so it read correctly to VoiceOver and showed a sighted user three dots. Hence
-/// the `ScrollView` and the `.fixedSize(horizontal: false, vertical: true)` on every paragraph,
-/// present from the first commit rather than added after a screenshot caught it.
+/// The layout is deliberate. This is a multi-paragraph sheet: without a `ScrollView`,
+/// `presentationDetents` can compress paragraphs to one line and truncate them with ellipses,
+/// while the accessibility tree still carries the full text. Hence the `ScrollView` and the
+/// `.fixedSize(horizontal: false, vertical: true)` on every paragraph.
 struct TranslationDisclosureSheet: View {
     /// Called when the user dismisses. The caller records the acknowledgement here — on dismiss,
     /// never on present, so a sheet the user never actually saw does not count as read.

@@ -121,15 +121,6 @@ struct ReminderProjectionTests {
         context.insert(task)
         try context.save()
         let taskValue = ReminderTaskInput(task: task)
-        let fireDate = Date().addingTimeInterval(3_600)
-        let plan = ReminderScheduler.PlannedNotification(
-            taskID: "deleted",
-            fireDate: fireDate,
-            badge: 1,
-            kind: .reminder,
-            isNagging: false,
-            title: task.title
-        )
         let worker = PausedReminderProjectionWorker()
         let store = RecordingNotificationStore(stored: [
             ReminderScheduler.PendingSnapshot(
@@ -152,8 +143,7 @@ struct ReminderProjectionTests {
             badgesEnabled: true,
             worker: ImmediateReminderProjectionWorker()
         )
-        await worker.resume(with: ReminderProjectionResult(
-            tasks: [taskValue], plan: [plan], badgeCount: 1))
+        await worker.resume(with: ReminderProjectionResult(tasks: [taskValue]))
         _ = await reconcile.value
 
         #expect(store.addedIdentifiers.isEmpty)

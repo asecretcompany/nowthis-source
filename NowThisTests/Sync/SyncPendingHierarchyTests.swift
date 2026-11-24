@@ -10,8 +10,8 @@ struct SyncPendingHierarchyTests {
           arguments: [false, true])
     func unchangedCollectionCompletesPendingWork(background: Bool) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "pending-hierarchy-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let credentials = CalDAVClient.Credentials(username: "fixture", password: "fixture")
         let initial = DAVSyncScenario.discovery(paths: ["/one/"])
             + [.init(body: DAVSyncScenario.manifest(count: 2)), .init(body: DAVSyncScenario.tasks(count: 2))]

@@ -89,14 +89,10 @@ struct ReminderProjectionRequest: Sendable {
     let maxCount: Int
     let badgesEnabled: Bool
     let overlay: ReminderTaskOverlay
-    var foreignPendingCount = 0
 }
 
 struct ReminderProjectionResult: Sendable {
     let tasks: [ReminderTaskInput]
-    let plan: [ReminderScheduler.PlannedNotification]
-    let badgeCount: Int
-    var requestPlan: ReminderRequestPlan? = nil
     var ticketIDs: Set<String> = []
     var overlayIsSaved = true
 }
@@ -119,35 +115,36 @@ actor ReminderProjectionWorker: ReminderProjectionWorking {
                 let context = ModelContext(container)
                 // Capture tickets before task rows: a concurrent commit can only leave extra
                 // work pending, never let a newer ticket acknowledge an older task snapshot.
-                let ticketIDs: Set<String>
-                do {
-                    ticketIDs = ReminderSchedulingJournal.isAvailable(in: container)
-                        ? try ReminderSchedulingJournal.capture(in: context) : []
-                } catch { return nil }
-                let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate {
-                    $0.dueDate != nil && !$0.isDeletedLocally
-                })
-                guard let saved = try? context.fetch(descriptor) else { return nil }
-
-                let tasks = request.overlay.applying(to: saved.map(ReminderTaskInput.init(task:)))
-                let requestPlan = ReminderNotificationPlanner.planRequests(
-                    tasks: tasks,
-                    now: request.now,
-                    maxRequests: request.maxCount,
-                    foreignPendingCount: request.foreignPendingCount,
-                    badgesEnabled: request.badgesEnabled,
-                    allDayReminderMinutes: request.allDayReminderMinutes,
-                    calendar: request.calendar
-                )
-                let badgeCount = request.badgesEnabled
-                    ? BadgeTimeline(inputs: tasks, allDayReminderMinutes: request.allDayReminderMinutes,
-                                    calendar: request.calendar).count(asOf: request.now)
-                    : 0
-                return ReminderProjectionResult(tasks: tasks, plan: requestPlan.primaryEntries,
-                    badgeCount: badgeCount, requestPlan: requestPlan, ticketIDs: ticketIDs,
+                let ticketIDs = try recoveryTickets(in: context)
+                let tasks = try taskInputs(in: context, overlay: request.overlay)
+                return ReminderProjectionResult(tasks: tasks, ticketIDs: ticketIDs,
                     overlayIsSaved: request.overlay.upserts.isEmpty && request.overlay.deletedIDs.isEmpty)
             }
         } catch { return nil }
+    }
+
+    func badgeCount(_ request: ReminderProjectionRequest) -> Int? {
+        try? BackgroundRunBudget.protectingCurrent {
+            let context = ModelContext(container)
+            // Keep the existing hold if the recovery journal cannot be read.
+            _ = try recoveryTickets(in: context)
+            let tasks = try taskInputs(in: context, overlay: request.overlay)
+            return BadgeTimeline(inputs: tasks, allDayReminderMinutes: request.allDayReminderMinutes,
+                                 calendar: request.calendar).count(asOf: request.now)
+        }
+    }
+
+    private func recoveryTickets(in context: ModelContext) throws -> Set<String> {
+        ReminderSchedulingJournal.isAvailable(in: container)
+            ? try ReminderSchedulingJournal.capture(in: context) : []
+    }
+
+    private func taskInputs(in context: ModelContext, overlay: ReminderTaskOverlay) throws -> [ReminderTaskInput] {
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate {
+            $0.dueDate != nil && !$0.isDeletedLocally
+        })
+        let saved = try context.fetch(descriptor)
+        return overlay.applying(to: saved.map(ReminderTaskInput.init(task:)))
     }
 }
 

@@ -24,7 +24,7 @@ final class RecurrenceRuleTests: XCTestCase {
         let rule = RecurrenceRule.parse("FREQ=WEEKLY;BYDAY=MO,WE,FR")
         XCTAssertNotNil(rule)
         XCTAssertEqual(rule?.frequency, .weekly)
-        XCTAssertEqual(rule?.byDay, [.monday, .wednesday, .friday])
+        XCTAssertEqual(rule?.plainWeekdays, [.monday, .wednesday, .friday])
     }
 
     func testParseMonthly() {
@@ -69,7 +69,7 @@ final class RecurrenceRuleTests: XCTestCase {
     }
 
     func testSerializeWeeklyWithByDay() {
-        let rule = RecurrenceRule(frequency: .weekly, interval: 1, byDay: [.monday, .friday])
+        let rule = RecurrenceRule(frequency: .weekly, interval: 1, byDay: [.init(weekday: .monday), .init(weekday: .friday)])
         XCTAssertEqual(rule.toRRULEString(), "FREQ=WEEKLY;BYDAY=MO,FR")
     }
 
@@ -107,7 +107,7 @@ final class RecurrenceRuleTests: XCTestCase {
     /// in every language. Asserting against a **German** calendar's own symbols fails on the old
     /// implementation and passes on the new one, without needing a German translation to exist.
     func testDisplayWeeklyWithDaysUsesTheCalendarsWeekdayNames() {
-        let rule = RecurrenceRule(frequency: .weekly, interval: 1, byDay: [.monday, .wednesday])
+        let rule = RecurrenceRule(frequency: .weekly, interval: 1, byDay: [.init(weekday: .monday), .init(weekday: .wednesday)])
 
         var german = Calendar(identifier: .gregorian)
         german.locale = Locale(identifier: "de_DE")
@@ -150,29 +150,23 @@ final class RecurrenceRuleTests: XCTestCase {
     }
 
     func testNextDateMonthly() {
-        let now = Date()
         let rule = RecurrenceRule(frequency: .monthly, interval: 1, byDay: [])
-        let next = rule.nextDate(after: now)
-        XCTAssertNotNil(next)
-
-        let expected = Calendar.current.date(byAdding: .month, value: 1, to: now)!
-        XCTAssertEqual(
-            Calendar.current.startOfDay(for: next!),
-            Calendar.current.startOfDay(for: expected)
-        )
+        let formatter = ISO8601DateFormatter()
+        let due = formatter.date(from: "2026-01-15T09:00:00Z")!
+        let expected = formatter.date(from: "2026-02-15T09:00:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        XCTAssertEqual(rule.nextDate(after: due, calendar: calendar), expected)
     }
 
     func testNextDateYearly() {
-        let now = Date()
         let rule = RecurrenceRule(frequency: .yearly, interval: 1, byDay: [])
-        let next = rule.nextDate(after: now)
-        XCTAssertNotNil(next)
-
-        let expected = Calendar.current.date(byAdding: .year, value: 1, to: now)!
-        XCTAssertEqual(
-            Calendar.current.startOfDay(for: next!),
-            Calendar.current.startOfDay(for: expected)
-        )
+        let formatter = ISO8601DateFormatter()
+        let due = formatter.date(from: "2026-04-15T09:00:00Z")!
+        let expected = formatter.date(from: "2027-04-15T09:00:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        XCTAssertEqual(rule.nextDate(after: due, calendar: calendar), expected)
     }
 
     func testNextDateCountExhausted() {

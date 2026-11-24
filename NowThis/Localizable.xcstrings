@@ -274,6 +274,7 @@
       }
     },
     "%lld percent" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -647,6 +648,42 @@
         }
       }
     },
+    "A server task is too complex to process safely. Sync stopped before importing that task." : {
+      "comment" : "Shown when an imported iCalendar task exceeds the parser work limit. Compiled into the app and widget.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Serveraufgabe ist zu komplex, um sie sicher zu verarbeiten. Die Synchronisierung wurde beendet, bevor diese Aufgabe importiert wurde."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una tarea del servidor es demasiado compleja para procesarla de forma segura. La sincronización se detuvo antes de importar esa tarea."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une tâche du serveur est trop complexe pour être traitée en toute sécurité. La synchronisation s’est arrêtée avant l’importation de cette tâche."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un’attività del server è troppo complessa per essere elaborata in sicurezza. La sincronizzazione è stata interrotta prima di importare l’attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Een servertak is te complex om veilig te verwerken. De synchronisatie is gestopt voordat die taak werd geïmporteerd."
+          }
+        }
+      }
+    },
     "A task photo could not be synced because its attachment is invalid or too large. Ask the list owner to replace it." : {
       "localizations" : {
         "de" : {
@@ -717,6 +754,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Info"
+          }
+        }
+      }
+    },
+    "Account discovery" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kontosuche"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Búsqueda de la cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recherche du compte"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca account"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account zoeken"
           }
         }
       }
@@ -965,6 +1036,47 @@
         }
       }
     },
+    "account.server.normalization" : {
+      "comment" : "Shows the installation server address extracted from a pasted CalDAV endpoint. The placeholder is the server URL.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveradresse: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server address: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dirección del servidor: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adresse du serveur : %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indirizzo del server: %@"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveradres: %@"
+          }
+        }
+      }
+    },
     "account.vault.defaultName" : {
       "comment" : "Default name of a local-only account, shown in Settings under Accounts. The feature is called Vault Mode, which is itself translated.",
       "extractionState" : "extracted_with_value",
@@ -1037,6 +1149,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Accounts"
+          }
+        }
+      }
+    },
+    "Accounts & Sync" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Konten & Synchronisierung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuentas y sincronización"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comptes et synchronisation"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account e sincronizzazione"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accounts en synchronisatie"
           }
         }
       }
@@ -1733,6 +1879,48 @@
         }
       }
     },
+    "Allows task notes to appear in system search results" : {
+      "comment" : "VoiceOver hint for the Spotlight notes opt-in toggle. Spoken, not shown.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erlaubt, dass Aufgabennotizen in den Suchergebnissen des Systems erscheinen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allows task notes to appear in system search results"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permite que las notas de las tareas aparezcan en los resultados de búsqueda del sistema"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permet aux notes des tâches d’apparaître dans les résultats de recherche du système"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Consente di mostrare le note delle attività nei risultati di ricerca del sistema"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laat notities bij taken verschijnen in de zoekresultaten van het systeem"
+          }
+        }
+      }
+    },
     "Also works: \"add a task\", \"what's due today\", \"complete a task\"" : {
       "localizations" : {
         "de" : {
@@ -1899,6 +2087,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Weergave"
+          }
+        }
+      }
+    },
+    "Appearance & Layout" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erscheinungsbild & Layout"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aspecto y diseño"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apparence et disposition"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aspetto e disposizione"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weergave en indeling"
           }
         }
       }
@@ -3128,8 +3350,50 @@
         }
       }
     },
+    "calendar.syncFailed" : {
+      "comment" : "Generic alert after a manual calendar sync fails. Details are logged privately; the user can retry the sync.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Kalender konnten nicht synchronisiert werden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't sync your calendars"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se han podido sincronizar tus calendarios"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de synchroniser vos calendriers"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile sincronizzare i tuoi calendari"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je agenda’s konden niet worden gesynchroniseerd"
+          }
+        }
+      }
+    },
     "calendar.title.allLists" : {
-      "comment" : "Toolbar title shown where a selected list's name would otherwise appear, used when no specific list is selected (effectively all lists); previously said Calendar in English here, changed to respect the glossary since Calendar is reserved for the separate Apple/EventKit calendar feature in Settings and a CalDAV collection is called a List\nToolbar title shown where a selected list's name would otherwise appear, used when no specific list is selected (effectively all lists); previously said List in English here, changed to respect the glossary since Calendar is reserved for the separate Apple/EventKit calendar feature in Settings and a CalDAV collection is called a List",
+      "comment" : "Title shown when the calendar is not scoped to a particular list.\nToolbar title shown where a selected list's name would otherwise appear, used when no specific list is selected (effectively all lists); previously said List in English here, changed to respect the glossary since Calendar is reserved for the separate Apple/EventKit calendar feature in Settings and a CalDAV collection is called a List",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "de" : {
@@ -3805,6 +4069,47 @@
         }
       }
     },
+    "calendarSync.error.ownershipUncertain" : {
+      "comment" : "Apple Calendar mirror safety error: local ownership is missing or uncertain; existing events are preserved.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Synchronisierung mit Kalender wurde pausiert, weil sich nicht bestätigen ließ, welche Ereignisse ihr zugeordnet sind."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calendar sync paused because ownership could not be verified."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se ha pausado la sincronización con Calendario porque no se ha podido confirmar qué eventos le pertenecen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La synchronisation avec Calendrier est suspendue, car il n’a pas été possible de vérifier quels événements lui appartiennent."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La sincronizzazione con Calendario è stata sospesa perché non è stato possibile verificare l’appartenenza degli eventi."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agendasynchronisatie is gepauzeerd omdat niet kon worden bevestigd welke gebeurtenissen erbij horen."
+          }
+        }
+      }
+    },
     "Camera access is unavailable. Allow access in Settings or choose a photo from your library." : {
       "comment" : "Alert when camera access is denied or restricted.",
       "localizations" : {
@@ -3842,6 +4147,76 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cameratoegang is niet beschikbaar. Geef toegang in Instellingen of kies een foto uit je fotobibliotheek."
+          }
+        }
+      }
+    },
+    "Can't find the server. Check the server name, DNS settings and any VPN connection. For a Tailscale machine name, use the full name ending in .ts.net." : {
+      "comment" : "DNS failure; custom split-DNS hostnames remain supported. Never include the user's actual server name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server nicht gefunden. Prüfe den Servernamen, die DNS-Einstellungen und deine VPN-Verbindung. Für einen Tailscale-Gerätenamen verwende den vollständigen Namen mit der Endung .ts.net."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encuentra el servidor. Comprueba el nombre del servidor, los ajustes de DNS y la conexión VPN. Si usas el nombre de un dispositivo de Tailscale, utiliza el nombre completo que termina en .ts.net."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serveur introuvable. Vérifiez le nom du serveur, les réglages DNS et votre connexion VPN. Pour un nom de machine Tailscale, utilisez le nom complet se terminant par .ts.net."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile trovare il server. Controlla il nome del server, le impostazioni DNS e la connessione VPN. Per il nome di un dispositivo Tailscale, usa il nome completo che termina in .ts.net."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server niet gevonden. Controleer de servernaam, DNS-instellingen en je VPN-verbinding. Gebruik voor een Tailscale-machinenaam de volledige naam die eindigt op .ts.net."
+          }
+        }
+      }
+    },
+    "Can't reach the server. Check your internet and VPN connections. For a local server, also check NowThis's Local Network access in Settings." : {
+      "comment" : "Possible reachability causes, not a claim that Local Network permission is denied.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server nicht erreichbar. Prüfe deine Internet- und VPN-Verbindungen. Prüfe bei einem lokalen Server auch in den Einstellungen, ob NowThis Zugriff auf das lokale Netzwerk hat."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede conectar con el servidor. Comprueba tu conexión a internet y la conexión VPN. Si es un servidor local, comprueba también en Ajustes que NowThis tenga acceso a la red local."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de joindre le serveur. Vérifiez vos connexions Internet et VPN. Pour un serveur local, vérifiez également dans Réglages que NowThis a accès au réseau local."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile raggiungere il server. Controlla la connessione internet e quella VPN. Se il server è locale, controlla anche in Impostazioni che NowThis abbia accesso alla rete locale."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server niet bereikbaar. Controleer je internet- en VPN-verbinding. Controleer bij een lokale server ook in Instellingen of NowThis toegang heeft tot het lokale netwerk."
           }
         }
       }
@@ -4363,6 +4738,41 @@
         }
       }
     },
+    "Collapse Notes" : {
+      "comment" : "Button that returns the task notes editor to its default height.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizfeld verkleinern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reducir el campo de notas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réduire la zone de notes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Riduci il campo delle note"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notitieveld verkleinen"
+          }
+        }
+      }
+    },
     "Collapse subtasks" : {
       "localizations" : {
         "de" : {
@@ -4869,6 +5279,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Kan geen verbinding maken met de server. Controleer je URL en inloggegevens."
+          }
+        }
+      }
+    },
+    "Couldn't establish a secure connection. Use the HTTPS server name that matches its certificate, not a replacement IP address. For Tailscale HTTPS, use the full name ending in .ts.net." : {
+      "comment" : "TLS or certificate failure; do not suggest bypassing certificate validation.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sichere Verbindung konnte nicht hergestellt werden. Verwende den HTTPS-Servernamen, der zum Zertifikat passt, und keine ersatzweise IP-Adresse. Für Tailscale-HTTPS verwende den vollständigen Namen mit der Endung .ts.net."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido establecer una conexión segura. Usa el nombre HTTPS del servidor que coincida con su certificado, no una dirección IP alternativa. Para HTTPS de Tailscale, utiliza el nombre completo que termina en .ts.net."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’établir une connexion sécurisée. Utilisez le nom HTTPS du serveur correspondant à son certificat, et non une adresse IP de remplacement. Pour HTTPS avec Tailscale, utilisez le nom complet se terminant par .ts.net."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile stabilire una connessione sicura. Usa il nome HTTPS del server corrispondente al certificato, non un indirizzo IP sostitutivo. Per HTTPS con Tailscale, usa il nome completo che termina in .ts.net."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Er kan geen beveiligde verbinding tot stand worden gebracht. Gebruik de HTTPS-servernaam die bij het certificaat hoort, geen vervangend IP-adres. Gebruik voor HTTPS via Tailscale de volledige naam die eindigt op .ts.net."
           }
         }
       }
@@ -6264,6 +6709,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Herkende onderdelen"
+          }
+        }
+      }
+    },
+    "Discard Text Changes" : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textänderungen verwerfen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discard Text Changes"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar cambios de texto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annuler les modifications du texte"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scarta le modifiche al testo"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tekstwijzigingen verwerpen"
           }
         }
       }
@@ -7742,6 +8229,41 @@
         }
       }
     },
+    "Expand Notes" : {
+      "comment" : "Button that makes the task notes editor taller.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizfeld vergrößern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ampliar el campo de notas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agrandir la zone de notes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espandi il campo delle note"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notitieveld vergroten"
+          }
+        }
+      }
+    },
     "Expand subtasks" : {
       "localizations" : {
         "de" : {
@@ -7806,6 +8328,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vouw uit naar volledige taakinvoer"
+          }
+        }
+      }
+    },
+    "Fewer Icons" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weniger Symbole"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver menos iconos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher moins d’icônes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra meno icone"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minder iconen"
           }
         }
       }
@@ -8118,6 +8674,174 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "is niet"
+          }
+        }
+      }
+    },
+    "filter.editor.changed" : {
+      "comment" : "Error when a saved filter was edited or deleted while its editor was open.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Filter wurde während der Bearbeitung geändert. Schließe und öffne ihn erneut, um die aktuellen Regeln zu prüfen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This filter changed while you were editing. Close and reopen it to review the current rules."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este filtro ha cambiado mientras lo editabas. Ciérralo y vuelve a abrirlo para revisar las reglas actuales."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce filtre a changé pendant que vous le modifiiez. Fermez-le et rouvrez-le pour vérifier les règles actuelles."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo filtro è cambiato mentre lo modificavi. Chiudilo e riaprilo per controllare le regole attuali."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dit filter is gewijzigd terwijl je het bewerkte. Sluit het en open het opnieuw om de huidige regels te bekijken."
+          }
+        }
+      }
+    },
+    "filter.editor.chooseValue" : {
+      "comment" : "Unselected placeholder for an unsupported filter value, comparison, or match option.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Option auswählen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose an option"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige una opción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez une option"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli un’opzione"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kies een optie"
+          }
+        }
+      }
+    },
+    "filter.editor.invalidCriteria" : {
+      "comment" : "Error when an editor tries to save a filter with incomplete or unsupported criteria.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle aus, wie die Regeln verknüpft werden, und vervollständige jede Regel, bevor du speicherst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose a match option and complete every rule before saving."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige cómo combinar las reglas y complétalas todas antes de guardar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez comment combiner les règles et complétez chacune d’elles avant d’enregistrer."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli come combinare le regole e completale tutte prima di salvare."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kies hoe de regels worden gecombineerd en vul elke regel in voordat je opslaat."
+          }
+        }
+      }
+    },
+    "filter.editor.resetRule" : {
+      "comment" : "Resets the comparison and value of an invalid saved filter rule for its currently selected field.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regel zurücksetzen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reset Rule"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restablecer regla"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réinitialiser la règle"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reimposta regola"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Herstel regel"
           }
         }
       }
@@ -9046,6 +9770,132 @@
         }
       }
     },
+    "filter.repair.loadFailed" : {
+      "comment" : "Shown with a Retry button when the app could not read its saved filters.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gespeicherte Filter konnten nicht geladen werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn’t load saved filters."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se han podido cargar los filtros guardados."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de charger les filtres enregistrés."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile caricare i filtri salvati."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opgeslagen filters konden niet worden geladen."
+          }
+        }
+      }
+    },
+    "filter.repair.required" : {
+      "comment" : "Shown when a saved filter has rules that cannot be applied.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prüfe oder ersetze die Filterregeln, um passende Aufgaben zu sehen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Review or replace the filter’s rules to see matching tasks."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisa o sustituye las reglas del filtro para ver las tareas que coinciden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiez ou remplacez les règles du filtre pour voir les tâches correspondantes."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controlla o sostituisci le regole del filtro per vedere le attività corrispondenti."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controleer of vervang de filterregels om passende taken te zien."
+          }
+        }
+      }
+    },
+    "filter.repair.unavailable" : {
+      "comment" : "The selected saved filter no longer exists or could not be opened.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Filter ist nicht mehr verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This filter is no longer available."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este filtro ya no está disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce filtre n’est plus disponible."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo filtro non è più disponibile."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dit filter is niet meer beschikbaar."
+          }
+        }
+      }
+    },
     "Filters" : {
       "localizations" : {
         "de" : {
@@ -9804,6 +10654,1602 @@
         }
       }
     },
+    "icon.future.hint" : {
+      "comment" : "Hint in the supporter icon picker inviting people to suggest future designs through the NowThis support website.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weitere Supporter-Icons sind in Arbeit. Hast du eine Idee für ein künftiges Design? Teile sie uns über den Support mit."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "More supporter icons are on the way. Have an idea for a future design? Let us know through support."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pronto habrá más iconos para Supporter. ¿Tienes alguna idea para un diseño futuro? Cuéntanoslo a través del soporte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "D’autres icônes Supporter arrivent bientôt. Vous avez une idée pour un prochain modèle ? Faites-nous-en part via le support."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stanno arrivando altre icone Supporter. Hai un’idea per un design futuro? Faccelo sapere tramite il supporto."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Er komen meer Supporter-iconen aan. Heb je een idee voor een toekomstig ontwerp? Laat het ons weten via support."
+          }
+        }
+      }
+    },
+    "icon.holiday.advent.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Advent"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Advent"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adviento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avent"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avvento"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Advent"
+          }
+        }
+      }
+    },
+    "icon.holiday.bonfire-night.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonfire Night"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bonfire Night"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noche de las Hogueras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nuit des feux de joie"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notte dei falò"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bonfire Night"
+          }
+        }
+      }
+    },
+    "icon.holiday.canada-day.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kanada-Tag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Canada Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día de Canadá"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fête du Canada"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Festa del Canada"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canada Day"
+          }
+        }
+      }
+    },
+    "icon.holiday.carnival.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karneval / Fasching / Fasnacht"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Karneval / Fasching / Fasnacht"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carnaval"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carnaval"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carnevale"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carnaval"
+          }
+        }
+      }
+    },
+    "icon.holiday.christmas.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weihnachten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Christmas"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Navidad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noël"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natale"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kerstmis"
+          }
+        }
+      }
+    },
+    "icon.holiday.collection.title" : {
+      "comment" : "Title for the section containing holiday-themed supporter app icons.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feiertagssammlung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Holiday Collection"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colección de celebraciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collection de fêtes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raccolta di festività"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feestdagenverzameling"
+          }
+        }
+      }
+    },
+    "icon.holiday.diwali.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diwali"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Diwali"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diwali"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diwali"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diwali"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diwali"
+          }
+        }
+      }
+    },
+    "icon.holiday.easter.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ostern"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Easter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pascua"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pâques"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasqua"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasen"
+          }
+        }
+      }
+    },
+    "icon.holiday.eid.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eid"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Eid"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eid"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aïd"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eid"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eid"
+          }
+        }
+      }
+    },
+    "icon.holiday.epiphany.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heilige Drei Könige"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Epiphany / Three Kings"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Epifanía / Día de Reyes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Épiphanie / fête des Rois"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Epifania / Tre Re"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Driekoningen"
+          }
+        }
+      }
+    },
+    "icon.holiday.france-may.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frankreich — Tag der Arbeit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "France — May Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Francia — Día del Trabajo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "France — Fête du Travail"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Francia — Festa del Lavoro"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frankrijk — Dag van de Arbeid"
+          }
+        }
+      }
+    },
+    "icon.holiday.france-national.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frankreich — 14. Juli"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "France — 14 July"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Francia — 14 de julio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "France — 14 juillet"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Francia — 14 luglio"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frankrijk — 14 juli"
+          }
+        }
+      }
+    },
+    "icon.holiday.german-unity.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag der Deutschen Einheit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "German Unity Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día de la Unidad Alemana"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Journée de l’unité allemande"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Giorno dell’Unità tedesca"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dag van de Duitse Eenheid"
+          }
+        }
+      }
+    },
+    "icon.holiday.halloween.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Halloween"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Halloween"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Halloween"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Halloween"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Halloween"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Halloween"
+          }
+        }
+      }
+    },
+    "icon.holiday.hanukkah.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chanukka"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Hanukkah"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Janucá"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hanoucca"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hanukkah"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chanoeka"
+          }
+        }
+      }
+    },
+    "icon.holiday.harvest.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erntedank / Thanksgiving"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Harvest / Thanksgiving"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción de Gracias / cosecha"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action de grâce / récoltes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ringraziamento / raccolto"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oogstfeest / Thanksgiving"
+          }
+        }
+      }
+    },
+    "icon.holiday.hogmanay.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hogmanay"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Hogmanay"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hogmanay"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hogmanay"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hogmanay"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hogmanay"
+          }
+        }
+      }
+    },
+    "icon.holiday.holi.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holi"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Holi"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holi"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holi"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Holi"
+          }
+        }
+      }
+    },
+    "icon.holiday.kings-day.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Königstag / Koningsdag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "King’s Day / Koningsdag"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día del Rey / Koningsdag"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fête du Roi / Koningsdag"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Festa del Re / Koningsdag"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Koningsdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.midsummer.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mittsommer"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Midsummer"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solsticio de verano"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solstice d’été"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mezza estate"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Midzomer"
+          }
+        }
+      }
+    },
+    "icon.holiday.new-year.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neujahr / Silvester"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New Year / Silvester"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Año Nuevo / Nochevieja"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nouvel An / réveillon de la Saint-Sylvestre"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capodanno / San Silvestro"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nieuwjaar / oudejaarsavond"
+          }
+        }
+      }
+    },
+    "icon.holiday.nikolaus.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nikolaus"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nikolaus"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Nicolás"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint Nicolas"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Nicola"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sint-Nicolaasdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.oktoberfest.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oktoberfest"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Oktoberfest"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oktoberfest"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oktoberfest"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oktoberfest"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oktoberfest"
+          }
+        }
+      }
+    },
+    "icon.holiday.passover.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pessach"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Passover / Pesach"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pésaj"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pessa’h"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pesach"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pesach"
+          }
+        }
+      }
+    },
+    "icon.holiday.ramadan.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ramadan"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ramadan"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ramadán"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ramadan"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ramadan"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ramadan"
+          }
+        }
+      }
+    },
+    "icon.holiday.saint-david.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "St. David’s Day"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saint David’s Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día de San David"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-David"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Davide"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-David’s Day"
+          }
+        }
+      }
+    },
+    "icon.holiday.saint-jean.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-Jean-Baptiste"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saint-Jean-Baptiste"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Juan Bautista"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-Jean-Baptiste"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Giovanni Battista"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sint-Jan-Baptist"
+          }
+        }
+      }
+    },
+    "icon.holiday.saint-martin.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sankt Martin"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saint Martin"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Martín"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint Martin"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Martino"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sint-Maarten"
+          }
+        }
+      }
+    },
+    "icon.holiday.saint-patrick.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "St. Patrick’s Day"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saint Patrick’s Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día de San Patricio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-Patrick"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Patrizio"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sint-Patricksdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.sinterklaas.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sinterklaas"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sinterklaas"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sinterklaas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sinterklaas"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sinterklaas"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sinterklaas"
+          }
+        }
+      }
+    },
+    "icon.holiday.spring.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frühling"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spring"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primavera"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Printemps"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primavera"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lente"
+          }
+        }
+      }
+    },
+    "icon.holiday.swiss-national.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schweizer Nationalfeiertag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swiss National Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fiesta Nacional de Suiza"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fête nationale suisse"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Festa nazionale svizzera"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zwitserse Nationale Feestdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.us-independence.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USA — Unabhängigkeitstag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "US — Independence Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EE. UU. — Día de la Independencia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "États-Unis — fête de l’Indépendance"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USA — Giorno dell’Indipendenza"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "VS — Onafhankelijkheidsdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.vaisakhi.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaisakhi"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Vaisakhi"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaisakhi"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaisakhi"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaisakhi"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaisakhi"
+          }
+        }
+      }
+    },
+    "icon.holiday.valentine.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Valentinstag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Valentine’s Day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Día de San Valentín"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saint-Valentin"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "San Valentino"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Valentijnsdag"
+          }
+        }
+      }
+    },
+    "icon.holiday.vesak.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vesak"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Vesak"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vesak"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vesak"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vesak"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vesak"
+          }
+        }
+      }
+    },
+    "icon.holiday.winter.title" : {
+      "comment" : "Name shown for this holiday-themed supporter app icon in the icon picker.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Winter"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Winter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invierno"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hiver"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inverno"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Winter"
+          }
+        }
+      }
+    },
     "icon.locked" : {
       "comment" : "Cosmetic collection requires Supporter ownership.",
       "localizations" : {
@@ -10018,37 +12464,37 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wähle ein Design, das dir gefällt. Verdiente Symbole gehören dir, auch nach Ablauf eines Abos."
+            "value" : "Verdiente Symbole gehören dir, auch nach Ablauf eines Abos."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choose a look you love. Earned icons are yours to keep, even after a subscription ends."
+            "value" : "You keep earned icons after your subscription ends."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige el diseño que más te guste. Conservas los iconos que hayas obtenido, aunque termine la suscripción."
+            "value" : "Conservas los iconos que hayas obtenido, aunque termine la suscripción."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez le style qui vous plaît. Les icônes obtenues restent à vous, même après la fin de l’abonnement."
+            "value" : "Les icônes obtenues restent à vous, même après la fin de l’abonnement."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Scegli lo stile che preferisci. Le icone ottenute restano tue anche dopo la fine dell’abbonamento."
+            "value" : "Le icone ottenute restano tue anche dopo la fine dell’abbonamento."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kies de stijl die je mooi vindt. Verdiende iconen blijven van jou, ook als je abonnement afloopt."
+            "value" : "Verdiende iconen blijven van jou, ook als je abonnement afloopt."
           }
         }
       }
@@ -10178,6 +12624,90 @@
         }
       }
     },
+    "icon.suggest.action" : {
+      "comment" : "Action button that opens the NowThis support website so people can suggest an app icon.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Icon vorschlagen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Suggest an Icon"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sugerir un icono"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suggérer une icône"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suggerisci un’icona"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stel een icoon voor"
+          }
+        }
+      }
+    },
+    "icon.suggest.hint" : {
+      "comment" : "VoiceOver hint for the Suggest an Icon button. It explains that the button opens NowThis support to share icon suggestions.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet die NowThis-Supportwebsite, um Icon-Vorschläge zu teilen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Opens the NowThis support website to share icon suggestions."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre el sitio de soporte de NowThis para compartir sugerencias de iconos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre le site d’assistance NowThis pour partager des suggestions d’icônes."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apre il sito di supporto NowThis per condividere suggerimenti per le icone."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opent de NowThis-supportwebsite om icoonsuggesties te delen."
+          }
+        }
+      }
+    },
     "icon.support.action" : {
       "comment" : "Button that opens optional support options.",
       "extractionState" : "manual",
@@ -10303,6 +12833,40 @@
         }
       }
     },
+    "If you send tasks to Apple Calendar, your calendar provider may sync the resulting events." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn du Aufgaben an Apple Kalender sendest, kann dein Kalenderanbieter die erstellten Termine synchronisieren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si envías tareas a Calendario de Apple, tu proveedor de calendario puede sincronizar los eventos resultantes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si vous envoyez des tâches à Calendrier d’Apple, votre fournisseur de calendrier peut synchroniser les événements créés."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se invii attività al Calendario Apple, il fornitore del calendario può sincronizzare gli eventi creati."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als je taken naar Apple Agenda stuurt, kan je agenda-aanbieder de aangemaakte activiteiten synchroniseren."
+          }
+        }
+      }
+    },
     "In your server's trash" : {
       "comment" : "Section header above the list of task lists that are sitting in the server's trash.",
       "localizations" : {
@@ -10368,6 +12932,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Postvak IN"
+          }
+        }
+      }
+    },
+    "Include notes in Spotlight" : {
+      "comment" : "Settings toggle and VoiceOver label. Opt-in to include task notes in system search results; off by default.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen in Spotlight einbeziehen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include notes in Spotlight"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Incluir notas en Spotlight"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inclure les notes dans Spotlight"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Includi le note in Spotlight"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notities opnemen in Spotlight"
           }
         }
       }
@@ -10444,6 +13050,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Voeg taak snel toe"
+          }
+        }
+      }
+    },
+    "Integrations" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Integrationen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Integraciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intégrations"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Integrazioni"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Integraties"
           }
         }
       }
@@ -10528,6 +13168,47 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Wanneer moet het af zijn?"
+          }
+        }
+      }
+    },
+    "intent.deleteTask.confirm" : {
+      "comment" : "Siri's spoken question before deleting a task and its entire subtree. The placeholder is the current saved task title. Quotation marks follow the language's convention.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ und alle zugehörigen Unteraufgaben löschen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete “%@” and any subtasks?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Eliminar «%@» y todas sus subtareas?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer « %@ » et toutes ses sous-tâches ?"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuoi eliminare «%@» e tutte le sue sottoattività?"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wil je ‘%@’ en alle bijbehorende subtaken verwijderen?"
           }
         }
       }
@@ -12019,6 +14700,457 @@
         }
       }
     },
+    "intent.entity.accountName" : {
+      "comment" : "Shortcuts property for the account's display name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kontoname"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre de la cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du compte"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome dell’account"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accountnaam"
+          }
+        }
+      }
+    },
+    "intent.entity.dueDate" : {
+      "comment" : "Shortcuts property for the due date of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de vencimiento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date d’échéance"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di scadenza"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum"
+          }
+        }
+      }
+    },
+    "intent.entity.dueDateOnly" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a date-only due date.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum ohne Uhrzeit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due Date Without Time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de vencimiento sin hora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date d’échéance sans heure"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di scadenza senza orario"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum zonder tijd"
+          }
+        }
+      }
+    },
+    "intent.entity.listName" : {
+      "comment" : "Shortcuts property for the user-entered list name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listenname"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre de la lista"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom de la liste"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome dell’elenco"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijstnaam"
+          }
+        }
+      }
+    },
+    "intent.entity.priority" : {
+      "comment" : "Shortcuts property for the current priority of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priority"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prioridad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorité"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorità"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prioriteit"
+          }
+        }
+      }
+    },
+    "intent.entity.repeating" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a recurrence rule.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wiederkehrend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repeating"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recurrente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récurrente"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricorrente"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terugkerend"
+          }
+        }
+      }
+    },
+    "intent.entity.startDate" : {
+      "comment" : "Shortcuts property for the start date of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de inicio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date de début"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di inizio"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum"
+          }
+        }
+      }
+    },
+    "intent.entity.startDateOnly" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a date-only start date.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum ohne Uhrzeit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Date Without Time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de inicio sin hora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date de début sans heure"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di inizio senza orario"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum zonder tijd"
+          }
+        }
+      }
+    },
+    "intent.entity.status" : {
+      "comment" : "Shortcuts property for the current status of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "État"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stato"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        }
+      }
+    },
+    "intent.entity.tags" : {
+      "comment" : "Shortcuts property listing the names of tags assigned to a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        }
+      }
+    },
+    "intent.entity.taskTitle" : {
+      "comment" : "Shortcuts property for the user-entered title of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titre"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titolo"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel"
+          }
+        }
+      }
+    },
     "intent.quickAdd.description" : {
       "comment" : "Shortcuts description for the quick-add action. The parser is English-only and stays that way, so the copy says so outright rather than inviting the user's own language — translate the sentence but leave the quoted example in English exactly as written.",
       "extractionState" : "extracted_with_value",
@@ -12057,6 +15189,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Voegt een taak toe op basis van een Engelse zin zoals 'buy milk tomorrow at 5pm'. Datums en tijden worden alleen in het Engels herkend."
+          }
+        }
+      }
+    },
+    "intent.task.changed" : {
+      "comment" : "Shown in Siri or Shortcuts when an operation's task or subtree changed before the write.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Aufgabe wurde geändert. Prüfe sie und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This task changed. Review it and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta tarea ha cambiado. Revísala e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette tâche a changé. Vérifiez-la et réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questa attività è cambiata. Controllala e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze taak is gewijzigd. Controleer de taak en probeer het opnieuw."
           }
         }
       }
@@ -12358,6 +15532,42 @@
         }
       }
     },
+    "Journals stay on this device and don’t currently sync to Nextcloud." : {
+      "comment" : "Explains current journal storage in the list and editor. Entries remain on this device and are not synchronized to Nextcloud. This does not describe device backup behavior or promise future sync.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Journale bleiben auf diesem Gerät und werden derzeit nicht mit Nextcloud synchronisiert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los diarios se guardan en este dispositivo y actualmente no se sincronizan con Nextcloud."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les journaux restent sur cet appareil et ne sont actuellement pas synchronisés avec Nextcloud."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I diari restano su questo dispositivo e al momento non si sincronizzano con Nextcloud."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dagboeken blijven op dit apparaat en worden momenteel niet met Nextcloud gesynchroniseerd."
+          }
+        }
+      }
+    },
     "kanban.card.a11y.completed" : {
       "comment" : "Kanban card accessibility label fragment appended mid-label to mark the task complete; lowercase because it is appended mid-label, not sentence-initial.",
       "extractionState" : "extracted_with_value",
@@ -12401,7 +15611,7 @@
       }
     },
     "kanban.card.a11y.due" : {
-      "comment" : "Kanban card accessibility label fragment appended mid-label (lowercase, not sentence-initial), stating the due date; the interpolated value is a system-localized relative date string, e.g. 'in 3 days'.",
+      "comment" : "Kanban card accessibility label fragment appended mid-label (lowercase, not sentence-initial), stating the due date; the placeholder is a localized due date, e.g. 'in 3 days' or 'Nov 10, All day'.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "de" : {
@@ -13022,40 +16232,6 @@
         }
       }
     },
-    "Keep everything on this device. Private. No account needed." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alles bleibt auf diesem Gerät. Privat. Kein Konto nötig."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Guarda todo en este dispositivo. Privado. No necesitas ninguna cuenta."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tout reste sur cet appareil. Privé. Aucun compte requis."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tieni tutto su questo dispositivo. Privato. Nessun account necessario."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Houd alles op dit apparaat. Privé. Geen account nodig."
-          }
-        }
-      }
-    },
     "Keychain error: %d" : {
       "localizations" : {
         "de" : {
@@ -13528,6 +16704,108 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lijst"
+          }
+        }
+      }
+    },
+    "List discovery" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listensuche"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Búsqueda de listas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recherche des listes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca delle liste"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijsten zoeken"
+          }
+        }
+      }
+    },
+    "List discovery succeeded" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listen gefunden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se han encontrado las listas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listes détectées"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste individuate"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijsten gevonden"
+          }
+        }
+      }
+    },
+    "List home discovery" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suche des Listenverzeichnisses"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Búsqueda del directorio de listas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recherche du répertoire des listes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca della raccolta delle liste"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijstenmap zoeken"
           }
         }
       }
@@ -14097,6 +17375,174 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Geen"
+          }
+        }
+      }
+    },
+    "location.reminders.denied" : {
+      "comment" : "Shown when the user has denied location access for task reminders. Settings is the Apple app.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erlaube NowThis in den Einstellungen den Zugriff auf deinen Standort, um ortsbezogene Erinnerungen zu erhalten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Allow location access for NowThis in Settings to receive location reminders."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para recibir recordatorios según la ubicación, permite que NowThis acceda a tu ubicación en Ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pour recevoir des rappels liés à un lieu, autorisez NowThis à accéder à votre position dans Réglages."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Per ricevere promemoria basati sulla posizione, consenti a NowThis di accedere alla tua posizione in Impostazioni."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geef NowThis in Instellingen toegang tot je locatie om locatiegebonden herinneringen te ontvangen."
+          }
+        }
+      }
+    },
+    "location.reminders.restricted" : {
+      "comment" : "Shown when system restrictions block location access for task reminders.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Standortzugriff ist auf diesem Gerät eingeschränkt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Location access is restricted on this device."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El acceso a la ubicación está restringido en este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’accès à la position est restreint sur cet appareil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’accesso alla posizione è limitato su questo dispositivo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toegang tot je locatie is beperkt op dit apparaat."
+          }
+        }
+      }
+    },
+    "location.reminders.unavailable" : {
+      "comment" : "Shown when the device does not support location region monitoring.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ortsbezogene Erinnerungen sind auf diesem Gerät nicht verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Location reminders are unavailable on this device."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los recordatorios según la ubicación no están disponibles en este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les rappels liés à un lieu sont indisponibles sur cet appareil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "I promemoria basati sulla posizione non sono disponibili su questo dispositivo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Locatiegebonden herinneringen zijn niet beschikbaar op dit apparaat."
+          }
+        }
+      }
+    },
+    "location.reminders.updateFailed" : {
+      "comment" : "Shown when a saved location reminder cannot be registered or refreshed.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ortsbezogene Erinnerungen konnten nicht aktualisiert werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't update location reminders."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se han podido actualizar los recordatorios según la ubicación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de mettre à jour les rappels liés à un lieu."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile aggiornare i promemoria basati sulla posizione."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Locatiegebonden herinneringen konden niet worden bijgewerkt."
           }
         }
       }
@@ -15005,6 +18451,40 @@
         }
       }
     },
+    "More Icons" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehr Symbole"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver más iconos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher plus d’icônes"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra altre icone"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meer iconen"
+          }
+        }
+      }
+    },
     "Move" : {
       "comment" : "Confirms moving a subtask to another list. A verb, as on an action button.",
       "localizations" : {
@@ -15036,6 +18516,76 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Verplaats"
+          }
+        }
+      }
+    },
+    "Move %@" : {
+      "comment" : "Accessibility label for the move menu of a task detail section. The placeholder is the localized section name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déplacer %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sposta %@"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ verplaatsen"
+          }
+        }
+      }
+    },
+    "Move Down" : {
+      "comment" : "Menu command to move a task detail section one place in the list.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach unten verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bajar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descendre"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sposta in basso"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Omlaag verplaatsen"
           }
         }
       }
@@ -15141,6 +18691,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Verplaats naar lijst…"
+          }
+        }
+      }
+    },
+    "Move Up" : {
+      "comment" : "Menu command to move a task detail section one place in the list.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach oben verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monter"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sposta in alto"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Omhoog verplaatsen"
           }
         }
       }
@@ -15762,6 +19347,7 @@
       }
     },
     "No tags available" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -16766,6 +20352,83 @@
     "NowThis" : {
 
     },
+    "NowThis cannot complete tasks with this repeat rule. The task has not been changed." : {
+      "comment" : "Explains a rejected completion of an unsupported imported recurrence rule. The task stays unchanged.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kann Aufgaben mit dieser Wiederholungsregel nicht abschließen. Die Aufgabe wurde nicht geändert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis cannot complete tasks with this repeat rule. The task has not been changed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis no puede completar tareas con esta regla de repetición. La tarea no se ha modificado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis ne peut pas terminer les tâches utilisant cette règle de répétition. La tâche n’a pas été modifiée."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis non può completare le attività con questa regola di ripetizione. L’attività non è stata modificata."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kan taken met deze herhalingsregel niet voltooien. De taak is niet gewijzigd."
+          }
+        }
+      }
+    },
+    "NowThis couldn’t safely open your saved tasks yet. Please bring the app to the foreground and tap Retry." : {
+      "comment" : "Shown on the saved-task recovery screen when iOS refuses extra execution time for opening the database. Retry is the existing button.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis konnte deine gespeicherten Aufgaben noch nicht sicher öffnen. Hole die App in den Vordergrund und tippe auf „Erneut versuchen“."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis aún no ha podido abrir tus tareas guardadas de forma segura. Vuelve a poner la app en primer plano y toca «Reintentar»."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis n’a pas encore pu ouvrir vos tâches enregistrées en toute sécurité. Ramenez l’app au premier plan et touchez « Réessayer »."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis non è ancora riuscita ad aprire in sicurezza le tue attività salvate. Riporta l’app in primo piano e tocca «Riprova»."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kon je opgeslagen taken nog niet veilig openen. Zet de app op de voorgrond en tik op ‘Probeer opnieuw’."
+          }
+        }
+      }
+    },
     "NowThis Lists" : {
       "localizations" : {
         "de" : {
@@ -16864,41 +20527,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "NowThis heeft toegang tot je agenda nodig om activiteiten toe te voegen. Schakel dit in bij Instellingen."
-          }
-        }
-      }
-    },
-    "NowThis couldn’t safely open your saved tasks yet. Please bring the app to the foreground and tap Retry." : {
-      "comment" : "Shown on the saved-task recovery screen when iOS refuses extra execution time for opening the database. Retry is the existing button.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis konnte deine gespeicherten Aufgaben noch nicht sicher öffnen. Hole die App in den Vordergrund und tippe auf „Erneut versuchen“."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis aún no ha podido abrir tus tareas guardadas de forma segura. Vuelve a poner la app en primer plano y toca «Reintentar»."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis n’a pas encore pu ouvrir vos tâches enregistrées en toute sécurité. Ramenez l’app au premier plan et touchez « Réessayer »."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis non è ancora riuscita ad aprire in sicurezza le tue attività salvate. Riporta l’app in primo piano e tocca «Riprova»."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis kon je opgeslagen taken nog niet veilig openen. Zet de app op de voorgrond en tik op ‘Probeer opnieuw’."
           }
         }
       }
@@ -17725,6 +21353,90 @@
         }
       }
     },
+    "persistence.reminderRecoveryFailed" : {
+      "comment" : "Partial-success alert: the task change is already saved. Retry repeats only reminder recovery and never repeats completion, reopening, or recurrence advancement.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Änderung wurde gespeichert, aber die Erinnerungen konnten nicht aktualisiert werden. Versuche es erneut, um die Erinnerungen zu aktualisieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your change was saved, but reminders couldn't be updated. Retry to update reminders."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu cambio se ha guardado, pero no se han podido actualizar los recordatorios. Vuelve a intentarlo para actualizarlos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre modification a été enregistrée, mais les rappels n’ont pas pu être mis à jour. Réessayez pour les mettre à jour."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La tua modifica è stata salvata, ma non è stato possibile aggiornare i promemoria. Riprova per aggiornarli."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je wijziging is opgeslagen, maar de herinneringen konden niet worden bijgewerkt. Probeer het opnieuw om de herinneringen bij te werken."
+          }
+        }
+      }
+    },
+    "persistence.saveFailed" : {
+      "comment" : "Generic persistence failure alert. The editor keeps the user's draft so they can retry; never include private task or server details.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Änderung konnte nicht gespeichert werden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save your change"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido guardar tu cambio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’enregistrer votre modification"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile salvare la tua modifica"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je wijziging kon niet worden opgeslagen"
+          }
+        }
+      }
+    },
     "Photo" : {
       "localizations" : {
         "de" : {
@@ -18337,37 +22049,37 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alle iOS-Produktivitätsfunktionen, auch künftige Ergänzungen, sind in der App enthalten. Supporter ist eine optionale Möglichkeit, die Weiterentwicklung zu unterstützen."
+            "value" : "Alle iOS-Produktivitätsfunktionen, auch künftige Ergänzungen, sind in der App enthalten."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "All iOS productivity features, including future additions, are included with the app. Supporter is an optional way to support continued development."
+            "value" : "All iOS productivity features, including future additions, are included with the app."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todas las funciones de productividad de iOS, incluidas las que se añadan en el futuro, están incluidas en la app. Supporter es una forma opcional de apoyar el desarrollo continuo."
+            "value" : "Todas las funciones de productividad de iOS, incluidas las que se añadan en el futuro, están incluidas en la app."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Toutes les fonctionnalités de productivité iOS, y compris les ajouts futurs, sont incluses dans l’app. Supporter est un moyen facultatif de soutenir la poursuite du développement."
+            "value" : "Toutes les fonctionnalités de productivité iOS, y compris les ajouts futurs, sont incluses dans l’app."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tutte le funzioni di produttività di iOS, comprese quelle future, sono incluse nell’app. Supporter è un modo facoltativo per sostenere lo sviluppo continuo."
+            "value" : "Tutte le funzioni di produttività di iOS, comprese quelle future, sono incluse nell’app."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alle productiviteitsfuncties van iOS, ook toekomstige toevoegingen, zijn inbegrepen bij de app. Supporter is een optionele manier om de verdere ontwikkeling te steunen."
+            "value" : "Alle productiviteitsfuncties van iOS, ook toekomstige toevoegingen, zijn inbegrepen bij de app."
           }
         }
       }
@@ -18990,89 +22702,6 @@
         }
       }
     },
-    "pro.support.body" : {
-      "comment" : "Optional support funds development; no ads or tracking.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis enthält keine Werbung und kein Tracking. Mit deiner Unterstützung finanzierst du die Weiterentwicklung."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis has no ads and no tracking. Becoming a Supporter helps fund continued development."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis no tiene anuncios ni te rastrea. Hacerte Supporter ayuda a financiar el desarrollo continuo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis n’affiche aucune publicité et ne vous suit pas. Devenir Supporter aide à financer la poursuite du développement."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis non contiene pubblicità e non ti traccia. Diventare Supporter aiuta a finanziare lo sviluppo continuo."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "NowThis bevat geen advertenties en volgt je niet. Supporter worden helpt de verdere ontwikkeling te financieren."
-          }
-        }
-      }
-    },
-    "pro.support.title" : {
-      "comment" : "Heading: optional support funds ongoing development. Keep NowThis and Supporter unchanged.",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unterstütze die Weiterentwicklung"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Help support continued development"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apoya el desarrollo continuo"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Soutenez le développement continu"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sostieni lo sviluppo continuo"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Steun de verdere ontwikkeling"
-          }
-        }
-      }
-    },
     "pro.tip.body" : {
       "comment" : "Consumable tips support development only, never Supporter or artwork.",
       "localizations" : {
@@ -19411,6 +23040,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vervaldatum"
+          }
+        }
+      }
+    },
+    "quickAdd.calendar.destinationChanged" : {
+      "comment" : "Alert when the list shown in the calendar's new-task sheet no longer matches the live destination at save time.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Zielliste hat sich geändert. Prüfe die Liste, bevor du die Aufgabe hinzufügst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The destination list changed. Review the list before adding the task."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La lista de destino ha cambiado. Comprueba la lista antes de añadir la tarea."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La liste de destination a changé. Vérifiez la liste avant d’ajouter la tâche."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’elenco di destinazione è cambiato. Controlla l’elenco prima di aggiungere l’attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De doellijst is gewijzigd. Controleer de lijst voordat je de taak toevoegt."
           }
         }
       }
@@ -20926,6 +24597,40 @@
         }
       }
     },
+    "Request method" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anfragemethode"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Método de solicitud"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Méthode de requête"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Metodo della richiesta"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aanvraagmethode"
+          }
+        }
+      }
+    },
     "Reset to Default" : {
       "localizations" : {
         "de" : {
@@ -21572,6 +25277,40 @@
         }
       }
     },
+    "Server discovery took too long. Check the connection and try again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Serversuche hat zu lange gedauert. Prüfe die Verbindung und versuche es erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La búsqueda del servidor ha tardado demasiado. Comprueba la conexión y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La recherche du serveur a pris trop de temps. Vérifiez la connexion et réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ricerca del server ha richiesto troppo tempo. Controlla la connessione e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Het zoeken naar de server duurde te lang. Controleer de verbinding en probeer opnieuw."
+          }
+        }
+      }
+    },
     "Server does not support automatic login. Use an app password instead." : {
       "localizations" : {
         "de" : {
@@ -21876,6 +25615,48 @@
         }
       }
     },
+    "settings.sync.errorDetails" : {
+      "comment" : "Label beside the HTTP response code for the last failed sync. Lets users report the specific error without sharing account or task data.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fehlerdetails"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error details"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detalles del error"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Détails de l’erreur"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dettagli dell’errore"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foutdetails"
+          }
+        }
+      }
+    },
     "settings.sync.window.footer" : {
       "comment" : "Footer under the sync settings explaining that the sync window limits how far back completed tasks are fetched. The placeholder is a whole number of months.",
       "localizations" : {
@@ -21985,48 +25766,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "settings.watchNudge.a11y.dismissHint" : {
-      "comment" : "VoiceOver hint on the button that dismisses the NowThis Supporter suggestion shown to Apple Watch owners. Spoken, not shown. 'NowThis Supporter' is the product name and is never translated; there is no product called 'Apple Watch Supporter'.",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Blendet das NowThis Supporter-Angebot für die Apple Watch aus"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Dismisses the NowThis Supporter offer for Apple Watch"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Descarta la oferta de NowThis Supporter para el Apple Watch"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Masque l'offre NowThis Supporter pour Apple Watch"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chiude la proposta di NowThis Supporter per Apple Watch"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Verbergt het NowThis Supporter-aanbod voor Apple Watch"
           }
         }
       }
@@ -22475,6 +26214,47 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Indeling navigatiekolom"
+          }
+        }
+      }
+    },
+    "sidebar.action.show" : {
+      "comment" : "Label for the button that returns from the Tasks detail to the sidebar.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seitenleiste einblenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Sidebar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar barra lateral"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher la barre latérale"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra barra laterale"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toon navigatiekolom"
           }
         }
       }
@@ -23712,6 +27492,48 @@
         }
       }
     },
+    "Spotlight" : {
+      "comment" : "Settings section for system search; Spotlight is Apple’s product name.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spotlight"
+          }
+        }
+      }
+    },
     "Start" : {
       "localizations" : {
         "de" : {
@@ -24016,6 +27838,40 @@
         }
       }
     },
+    "Store tasks on this device. No account needed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speichere Aufgaben auf diesem Gerät. Kein Konto nötig."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda las tareas en este dispositivo. No necesitas una cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stockez les tâches sur cet appareil. Aucun compte requis."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva le attività su questo dispositivo. Non serve un account."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bewaar taken op dit apparaat. Geen account nodig."
+          }
+        }
+      }
+    },
     "Subtask name" : {
       "localizations" : {
         "de" : {
@@ -24052,7 +27908,7 @@
     },
     "subtask.a11y.level" : {
       "comment" : "VoiceOver label for a nested subtask row; first interpolated value is the numeric nesting depth, second is the user's task title",
-      "extractionState" : "extracted_with_value",
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -24688,6 +28544,40 @@
         }
       }
     },
+    "Sync phase" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisierungsphase"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase de sincronización"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Phase de synchronisation"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase di sincronizzazione"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisatiefase"
+          }
+        }
+      }
+    },
     "Sync Status" : {
       "localizations" : {
         "de" : {
@@ -24718,6 +28608,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Synchronisatiestatus"
+          }
+        }
+      }
+    },
+    "Sync this task before trying again. Its server content needs to be checked." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisiere diese Aufgabe, bevor du es erneut versuchst. Ihr Inhalt auf dem Server muss geprüft werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sincroniza esta tarea antes de volver a intentarlo. Es necesario comprobar su contenido en el servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisez cette tâche avant de réessayer. Son contenu sur le serveur doit être vérifié."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sincronizza questa attività prima di riprovare. È necessario verificarne il contenuto sul server."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchroniseer deze taak voordat je het opnieuw probeert. De inhoud op de server moet worden gecontroleerd."
           }
         }
       }
@@ -25732,6 +29656,40 @@
         }
       }
     },
+    "Tap Edit, then drag sections or use their Move menus. This order applies to every task on this device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe auf „Bearbeiten“ und ziehe die Abschnitte oder nutze ihre Menüs zum Verschieben. Die Reihenfolge gilt für alle Aufgaben auf diesem Gerät."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca «Editar» y arrastra las secciones o usa sus menús para moverlas. El orden se aplica a todas las tareas de este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touchez « Modifier », puis faites glisser les sections ou utilisez leurs menus de déplacement. Cet ordre s’applique à toutes les tâches sur cet appareil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocca «Modifica», poi trascina le sezioni o usa i relativi menu per spostarle. L’ordine vale per tutte le attività su questo dispositivo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tik op ‘Wijzig’ en versleep de onderdelen of verplaats ze via hun menu’s. De volgorde geldt voor alle taken op dit apparaat."
+          }
+        }
+      }
+    },
     "Tap to fix" : {
       "localizations" : {
         "de" : {
@@ -25864,6 +29822,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aantal taken"
+          }
+        }
+      }
+    },
+    "Task Detail Layout" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Layout der Aufgabendetails"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diseño de detalles de tarea"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposition des détails"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Layout dettagli attività"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indeling taakdetails"
           }
         }
       }
@@ -26122,6 +30114,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nieuwe taak"
+          }
+        }
+      }
+    },
+    "task.write.readOnly.create" : {
+      "comment" : "Shown when a task cannot be added to a read-only list. The creation draft stays available.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Wähle eine andere Liste oder bitte die Person, der die Liste gehört, um Bearbeitungsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Choose another list or ask the list owner for permission to edit it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Elige otra lista o pide permiso para editarla a quien la comparte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Choisissez une autre liste ou demandez à son propriétaire l’autorisation de la modifier."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Scegli un altro elenco o chiedi a chi lo condivide il permesso di modificarlo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Kies een andere lijst of vraag de eigenaar om toestemming om deze te bewerken."
+          }
+        }
+      }
+    },
+    "task.write.readOnly.edit" : {
+      "comment" : "Shown when editing a task is refused because its list is read-only. The list owner can grant edit permission.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Bitte die Person, der die Liste gehört, um Bearbeitungsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Ask the list owner for permission to edit it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Pide permiso para editarla a quien la comparte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Demandez à son propriétaire l’autorisation de la modifier."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Chiedi a chi lo condivide il permesso di modificarlo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Vraag de eigenaar van de lijst om toestemming om deze te bewerken."
           }
         }
       }
@@ -27241,6 +31317,137 @@
         }
       }
     },
+    "tasks.row.deleteConfirmation" : {
+      "comment" : "Destructive task deletion confirmation. The number is all active descendants, including nested subtasks, that will be deleted together with this task. Plural forms are in the catalog.",
+      "localizations" : {
+        "de" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Diese Aufgabe und %lld Teilaufgabe löschen?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Diese Aufgabe und %lld Teilaufgaben löschen?"
+                }
+              }
+            }
+          }
+        },
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Delete this task and %lld subtask?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Delete this task and %lld subtasks?"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "¿Eliminar esta tarea y %lld subtareas?"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "¿Eliminar esta tarea y %lld subtarea?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "¿Eliminar esta tarea y %lld subtareas?"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Supprimer cette tâche et %lld sous-tâches ?"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Supprimer cette tâche et %lld sous-tâche ?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Supprimer cette tâche et %lld sous-tâches ?"
+                }
+              }
+            }
+          }
+        },
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Eliminare questa attività e %lld sottoattività?"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Eliminare questa attività e %lld sottoattività?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Eliminare questa attività e %lld sottoattività?"
+                }
+              }
+            }
+          }
+        },
+        "nl" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deze taak en %lld subtaak verwijderen?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deze taak en %lld subtaken verwijderen?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "tasks.swipe.complete" : {
       "comment" : "Swipe-action button that marks a task completed. A VERB, in this language's usual mood for an action button — not the adjective for the completed state, and not plural: it acts on the one task being swiped. Swipe buttons are narrow: keep it to one short word.",
       "extractionState" : "extracted_with_value",
@@ -27663,6 +31870,48 @@
         }
       }
     },
+    "The notes are too long. Use up to 20,000 characters and shorten unusually complex characters." : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Notizen sind zu lang. Verwende höchstens 20.000 Zeichen und vereinfache ungewöhnlich komplexe Zeichen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The notes are too long. Use up to 20,000 characters and shorten unusually complex characters."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las notas son demasiado largas. Usa hasta 20.000 caracteres y simplifica los caracteres inusualmente complejos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les notes sont trop longues. Utilisez au maximum 20 000 caractères et simplifiez les caractères particulièrement complexes."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le note sono troppo lunghe. Usa al massimo 20.000 caratteri e semplifica quelli particolarmente complessi."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De notities zijn te lang. Gebruik maximaal 20.000 tekens en vereenvoudig ongewoon complexe tekens."
+          }
+        }
+      }
+    },
     "The original could not be saved on this device. Check available storage and try again." : {
       "comment" : "Alert when the local original cache cannot be written; the requested original is not silently discarded.",
       "localizations" : {
@@ -27908,6 +32157,108 @@
         }
       }
     },
+    "The server could not find a requested list or task. Your other lists may still be available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server konnte eine angeforderte Liste oder Aufgabe nicht finden. Deine anderen Listen sind möglicherweise weiterhin verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no ha encontrado una lista o tarea solicitada. Es posible que tus otras listas sigan disponibles."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur n'a pas trouvé une liste ou une tâche demandée. Vos autres listes sont peut-être toujours disponibles."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server non ha trovato un elenco o un’attività richiesta. Gli altri elenchi potrebbero essere ancora disponibili."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server heeft een opgevraagde lijst of taak niet gevonden. Je andere lijsten zijn mogelijk nog beschikbaar."
+          }
+        }
+      }
+    },
+    "The server did not provide the information needed to find your lists." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat die Informationen zum Finden deiner Listen nicht bereitgestellt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no ha proporcionado la información necesaria para encontrar tus listas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur n’a pas fourni les informations nécessaires pour trouver vos listes."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server non ha fornito le informazioni necessarie per trovare le tue liste."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server heeft niet de informatie gegeven die nodig is om je lijsten te vinden."
+          }
+        }
+      }
+    },
+    "The server did not return a valid CalDAV response. A login page or proxy may be blocking access." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat keine gültige CalDAV-Antwort zurückgegeben. Eine Anmeldeseite oder ein Proxy blockiert möglicherweise den Zugriff."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no ha devuelto una respuesta CalDAV válida. Es posible que una página de inicio de sesión o un proxy bloquee el acceso."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur n’a pas renvoyé de réponse CalDAV valide. Une page de connexion ou un proxy bloque peut-être l’accès."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server non ha restituito una risposta CalDAV valida. Una pagina di accesso o un proxy potrebbe bloccare l’accesso."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server gaf geen geldig CalDAV-antwoord terug. Mogelijk blokkeert een inlogpagina of proxy de toegang."
+          }
+        }
+      }
+    },
     "The server is busy. We'll try again shortly." : {
       "localizations" : {
         "de" : {
@@ -27972,6 +32323,295 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "De server heeft problemen. We blijven het proberen."
+          }
+        }
+      }
+    },
+    "The server or proxy blocked a required sync request. Contact its administrator." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server oder Proxy hat eine erforderliche Synchronisierungsanfrage blockiert. Kontaktiere die Administration."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor o el proxy ha bloqueado una solicitud de sincronización necesaria. Contacta con la administración."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur ou le proxy a bloqué une requête de synchronisation nécessaire. Contactez son administration."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server o il proxy ha bloccato una richiesta di sincronizzazione necessaria. Contatta chi lo amministra."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server of proxy heeft een vereiste synchronisatieaanvraag geblokkeerd. Neem contact op met de beheerder."
+          }
+        }
+      }
+    },
+    "The server redirected too many times. Check its proxy settings or contact its administrator." : {
+      "comment" : "The bounded redirect limit was exceeded; no destination URL is included.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat zu oft weitergeleitet. Prüfe die Proxy-Einstellungen oder wende dich an die Administration."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor ha redirigido demasiadas veces. Comprueba sus ajustes del proxy o contacta con la persona que lo administra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a effectué trop de redirections. Vérifiez ses réglages de proxy ou contactez son administrateur."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server ha effettuato troppi reindirizzamenti. Controlla le impostazioni del proxy o contatta l'amministratore."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server heeft te vaak doorgestuurd. Controleer de proxy-instellingen of neem contact op met de beheerder."
+          }
+        }
+      }
+    },
+    "The server response is too large to process safely. Please try again or contact your server administrator." : {
+      "comment" : "Shown when a CalDAV server response exceeds the safe processing limit. App only.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Serverantwort ist zu groß, um sie sicher zu verarbeiten. Bitte versuche es erneut oder wende dich an die Serververwaltung."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La respuesta del servidor es demasiado grande para procesarla de forma segura. Inténtalo de nuevo o ponte en contacto con la administración del servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La réponse du serveur est trop volumineuse pour être traitée en toute sécurité. Veuillez réessayer ou contacter l’administrateur de votre serveur."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La risposta del server è troppo grande per essere elaborata in sicurezza. Riprova o contatta l’amministratore del server."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Het serverantwoord is te groot om veilig te verwerken. Probeer het opnieuw of neem contact op met de serverbeheerder."
+          }
+        }
+      }
+    },
+    "The server returned an incomplete list response. Your saved tasks have been kept." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat eine unvollständige Listenantwort zurückgegeben. Deine gespeicherten Aufgaben wurden behalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor ha devuelto una respuesta de listas incompleta. Tus tareas guardadas se han conservado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a renvoyé une réponse incomplète pour les listes. Vos tâches enregistrées ont été conservées."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server ha restituito una risposta incompleta per le liste. Le attività salvate sono state conservate."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server gaf een onvolledig antwoord voor de lijsten. Je opgeslagen taken zijn behouden."
+          }
+        }
+      }
+    },
+    "The server returned an unexpected address. Check its proxy settings or contact its administrator." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat eine unerwartete Adresse zurückgegeben. Prüfe seine Proxy-Einstellungen oder kontaktiere die Administration."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor ha devuelto una dirección inesperada. Comprueba la configuración del proxy o contacta con la administración."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a renvoyé une adresse inattendue. Vérifiez les réglages de son proxy ou contactez son administration."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server ha restituito un indirizzo inatteso. Controlla le impostazioni del proxy o contatta chi lo amministra."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server gaf een onverwacht adres terug. Controleer de proxy-instellingen of neem contact op met de beheerder."
+          }
+        }
+      }
+    },
+    "The server returned an unexpected address. Check the URL and try again." : {
+      "comment" : "Shown during Nextcloud sign-in or re-authentication when the server supplies an untrusted address.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat eine unerwartete Adresse zurückgegeben. Prüfe die URL und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server returned an unexpected address. Check the URL and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor ha devuelto una dirección inesperada. Comprueba la URL e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a renvoyé une adresse inattendue. Vérifiez l’URL et réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server ha restituito un indirizzo imprevisto. Controlla l’URL e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server heeft een onverwacht adres teruggestuurd. Controleer de URL en probeer het opnieuw."
+          }
+        }
+      }
+    },
+    "The server returned conflicting list addresses. Your saved tasks have been kept." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat widersprüchliche Listenadressen zurückgegeben. Deine gespeicherten Aufgaben wurden behalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor ha devuelto direcciones de listas contradictorias. Tus tareas guardadas se han conservado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a renvoyé des adresses de listes contradictoires. Vos tâches enregistrées ont été conservées."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il server ha restituito indirizzi delle liste discordanti. Le attività salvate sono state conservate."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De server gaf tegenstrijdige lijstadressen terug. Je opgeslagen taken zijn behouden."
+          }
+        }
+      }
+    },
+    "The subtasks changed. Try deleting this task again." : {
+      "comment" : "Task deletion was safely stopped because the number of active subtasks changed while the confirmation dialog was open. Ask the user to start deletion again to review the new count.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Teilaufgaben haben sich geändert. Versuche erneut, diese Aufgabe zu löschen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The subtasks changed. Try deleting this task again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las subtareas han cambiado. Intenta eliminar esta tarea de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les sous-tâches ont changé. Essayez à nouveau de supprimer cette tâche."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le sottoattività sono cambiate. Prova a eliminare di nuovo questa attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De subtaken zijn gewijzigd. Probeer deze taak opnieuw te verwijderen."
           }
         }
       }
@@ -28078,6 +32718,48 @@
         }
       }
     },
+    "The title is too long. Use up to 500 characters and shorten unusually complex characters." : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Titel ist zu lang. Verwende höchstens 500 Zeichen und vereinfache ungewöhnlich komplexe Zeichen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The title is too long. Use up to 500 characters and shorten unusually complex characters."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El título es demasiado largo. Usa hasta 500 caracteres y simplifica los caracteres inusualmente complejos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le titre est trop long. Utilisez au maximum 500 caractères et simplifiez les caractères particulièrement complexes."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il titolo è troppo lungo. Usa al massimo 500 caratteri e semplifica quelli particolarmente complessi."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De titel is te lang. Gebruik maximaal 500 tekens en vereenvoudig ongewoon complexe tekens."
+          }
+        }
+      }
+    },
     "These lists were deleted on your server, so they were not added to NowThis. To bring one back, restore it in your server's web interface and sync again." : {
       "comment" : "Explanatory footer on the deleted-lists sheet.",
       "localizations" : {
@@ -28143,6 +32825,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dit account gebruikt Nextcloud Login Flow. Tik om opnieuw te verifiëren als je toegang is ingetrokken."
+          }
+        }
+      }
+    },
+    "This custom repeat rule is preserved. Use a calendar app that supports it to change it." : {
+      "comment" : "Explanation in the read-only repeat picker for an imported rule the picker cannot represent.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese benutzerdefinierte Wiederholungsregel bleibt erhalten. Ändere sie in einer Kalender-App, die sie unterstützt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This custom repeat rule is preserved. Use a calendar app that supports it to change it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta regla de repetición personalizada se conserva. Usa una app de calendario compatible para modificarla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette règle de répétition personnalisée est conservée. Pour la modifier, utilisez une app de calendrier compatible."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questa regola di ripetizione personalizzata viene conservata. Per modificarla, usa un’app calendario che la supporti."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze aangepaste herhalingsregel blijft behouden. Gebruik een agenda-app die de regel ondersteunt om deze te wijzigen."
           }
         }
       }
@@ -28300,6 +33024,82 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Deze taak heeft al vijf foto’s. Verwijder een foto om er nog een toe te voegen."
+          }
+        }
+      }
+    },
+    "This task contains server content that NowThis cannot safely change. Your changes are kept on this device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Aufgabe enthält Serverinhalte, die NowThis nicht sicher ändern kann. Deine Änderungen bleiben auf diesem Gerät erhalten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta tarea contiene información del servidor que NowThis no puede modificar de forma segura. Tus cambios se conservan en este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette tâche contient des données du serveur que NowThis ne peut pas modifier en toute sécurité. Vos modifications sont conservées sur cet appareil."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questa attività contiene dati del server che NowThis non può modificare in modo sicuro. Le tue modifiche vengono conservate su questo dispositivo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze taak bevat serverinhoud die NowThis niet veilig kan wijzigen. Je wijzigingen blijven op dit apparaat bewaard."
+          }
+        }
+      }
+    },
+    "This task input is too large. Shorten it and try again." : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Aufgabeneingabe ist zu umfangreich. Kürze sie und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This task input is too large. Shorten it and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El texto de esta tarea es demasiado largo. Acórtalo e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le texte de cette tâche est trop volumineux. Raccourcissez-le et réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il testo di questa attività è troppo lungo. Accorcialo e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De tekst van deze taak is te groot. Kort de tekst in en probeer het opnieuw."
           }
         }
       }
@@ -28890,36 +33690,36 @@
         }
       }
     },
-    "Vault Mode. Keep everything on this device. Private. No account needed." : {
+    "Vault Mode. Store tasks on this device. No account needed." : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tresor-Modus. Alles bleibt auf diesem Gerät. Privat. Kein Konto nötig."
+            "value" : "Tresor-Modus. Speichere Aufgaben auf diesem Gerät. Kein Konto nötig."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Modo caja fuerte. Guarda todo en este dispositivo. Privado. No necesitas ninguna cuenta."
+            "value" : "Modo caja fuerte. Guarda las tareas en este dispositivo. No necesitas una cuenta."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mode coffre-fort. Tout reste sur cet appareil. Privé. Aucun compte requis."
+            "value" : "Mode coffre-fort. Stockez les tâches sur cet appareil. Aucun compte requis."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Modalità cassaforte. Tieni tutto su questo dispositivo. Privato. Nessun account necessario."
+            "value" : "Modalità cassaforte. Salva le attività su questo dispositivo. Non serve un account."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kluismodus. Houd alles op dit apparaat. Privé. Geen account nodig."
+            "value" : "Kluismodus. Bewaar taken op dit apparaat. Geen account nodig."
           }
         }
       }
@@ -29848,108 +34648,6 @@
         }
       }
     },
-    "You have an Apple Watch — unlock editing with NowThis Supporter" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Du hast eine Apple Watch — schalte das Bearbeiten mit NowThis Supporter frei"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tienes un Apple Watch — desbloquea la edición con NowThis Supporter"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vous avez une Apple Watch — débloquez la modification avec NowThis Supporter"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hai un Apple Watch — sblocca la modifica con NowThis Supporter"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Je hebt een Apple Watch — ontgrendel bewerken met NowThis Supporter"
-          }
-        }
-      }
-    },
-    "You have an Apple Watch. Unlock NowThis Supporter to check off and add tasks from your wrist." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Du hast eine Apple Watch. Schalte NowThis Supporter frei, um Aufgaben direkt am Handgelenk abzuhaken und hinzuzufügen."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tienes un Apple Watch. Desbloquea NowThis Supporter para marcar y añadir tareas desde la muñeca."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vous avez une Apple Watch. Débloquez NowThis Supporter pour cocher et ajouter des tâches depuis votre poignet."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hai un Apple Watch. Sblocca NowThis Supporter per completare e aggiungere attività dal polso."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Je hebt een Apple Watch. Ontgrendel NowThis Supporter om taken af te vinken en toe te voegen vanaf je pols."
-          }
-        }
-      }
-    },
-    "Your data never leaves your device or your server. Zero tracking." : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Deine Daten verlassen weder dein Gerät noch deinen Server. Kein Tracking."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tus datos nunca salen de tu dispositivo ni de tu servidor. Cero rastreo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vos données ne quittent jamais votre appareil ni votre serveur. Aucun suivi."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "I tuoi dati non lasciano mai il tuo dispositivo né il tuo server. Zero tracciamento."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Je gegevens verlaten nooit je apparaat of je server. Geen tracking."
-          }
-        }
-      }
-    },
     "Your task data couldn't be opened" : {
       "localizations" : {
         "de" : {
@@ -30014,48 +34712,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Je taken. Je apparaat. Je privacy."
-          }
-        }
-      }
-    },
-    "settings.sync.errorDetails" : {
-      "comment" : "Label beside the HTTP response code for the last failed sync. Lets users report the specific error without sharing account or task data.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fehlerdetails"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Error details"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Detalles del error"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Détails de l’erreur"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dettagli dell’errore"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Foutdetails"
           }
         }
       }

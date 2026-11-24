@@ -11,3 +11,23 @@ enum AccountSetupHelper {
         ServerURLValidator.validate(serverURL).isValid
     }
 }
+
+/// Routes the completed account write to the owning form.
+@MainActor
+enum AccountLoginSave {
+    static func perform(
+        save: @MainActor () async throws -> Void,
+        onSuccess: () -> Void,
+        onFailure: (String) -> Void
+    ) async {
+        do {
+            try Task.checkCancellation()
+            try await save()
+            guard !Task.isCancelled else { return }
+            onSuccess()
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), !(error is AccountCredentialDeferral) else { return }
+            onFailure(error.localizedDescription)
+        }
+    }
+}

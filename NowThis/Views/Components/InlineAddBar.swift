@@ -19,12 +19,13 @@ struct InlineAddBar: View {
     let onPickRule: (DefaultDueDateRule) -> Void
     let onSubmit: () -> Void
     let onExpandTap: () -> Void
+    var onCancel: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
             // The due-date chip row only appears while composing, keeping the
             // idle bar minimal.
-            if isFocused.wrappedValue {
+            if isFocused.wrappedValue || onCancel != nil {
                 dueDateChipRow
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -107,6 +108,8 @@ struct InlineAddBar: View {
             .accessibilityHint("Choose the due date applied to the task you're adding")
 
             Spacer()
+
+            if let onCancel { Button("Cancel", action: onCancel) }
         }
     }
 }

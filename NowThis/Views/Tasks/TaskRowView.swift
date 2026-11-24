@@ -37,7 +37,7 @@ struct TaskRowData: Equatable {
     /// Reading a property of an invalidated `PersistentModel` traps in
     /// SwiftData, so we refuse to read one whose `modelContext` is gone.
     /// Callers treat `nil` as "row is gone — render nothing".
-    init?(task: TaskItem) {
+    init?(task: TaskItem, progress: TaskHierarchyProgress? = nil) {
         guard task.modelContext != nil else { return nil }
         self.title = task.title
         self.descriptionText = task.descriptionText
@@ -49,16 +49,19 @@ struct TaskRowData: Equatable {
         self.firstTagName = firstTag?.name
         self.firstTagColorHex = firstTag?.color
         self.directSubtaskCount = task.subtasks.count
-        let progress = Self.aggregatedProgress(of: task)
-        self.subtasksCompleted = progress.completed
-        self.subtasksTotal = progress.total
+        let descendantProgress = progress ?? Self.aggregatedProgress(of: task)
+        self.subtasksCompleted = descendantProgress.completed
+        self.subtasksTotal = descendantProgress.total
         self.hasRecurrence = task.recurrenceRule != nil
     }
 
     /// A guarded iterative walk tolerates malformed cycles and very deep server hierarchies.
-    private static func aggregatedProgress(of task: TaskItem) -> (completed: Int, total: Int) {
+    private static func aggregatedProgress(of task: TaskItem) -> TaskHierarchyProgress {
         let descendants = TaskHierarchyTraversal.entries(from: task).dropFirst()
-        return (descendants.filter { $0.task.status == .completed }.count, descendants.count)
+        return TaskHierarchyProgress(
+            completed: descendants.filter { $0.task.status == .completed }.count,
+            total: descendants.count
+        )
     }
 
 }
@@ -81,9 +84,13 @@ struct TaskRowView: View {
     let data: TaskRowData
     let task: TaskItem
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @Environment(\.syncCommands) private var syncCommands
     @StateObject private var completionCoordinator = TaskCompletionCoordinator()
     @State private var moveRequest: MoveToListRequest?
+    @State private var deletionCoordinator = TaskDeletionCoordinator()
+    @State private var showDeleteConfirmation = false
+    @State private var showSubtasksChangedError = false
     let onTap: () -> Void
 
     /// True when the completion animation is playing or the task is already completed.
@@ -126,11 +133,13 @@ struct TaskRowView: View {
             .tint(.green)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive) {
+            // A destructive swipe optimistically removes the row before its dialog.
+            Button {
                 deleteTask()
             } label: {
                 Label("Delete", systemImage: "trash")
             }
+            .tint(.red)
         }
         .contextMenu {
             TaskContextMenu(
@@ -141,10 +150,40 @@ struct TaskRowView: View {
                 onDelete: deleteTask
             )
         }
-        .sheet(item: $moveRequest) { request in
-            MoveToListSheet(request: request) { listID in
-                moveTask(to: listID)
+        .confirmationDialog(
+            Text(deleteConfirmationTitle),
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if deletionCoordinator.confirm(in: modelContext, errorState: errorState,
+                                               delete: performDeletion) == .subtasksChanged {
+                    showSubtasksChangedError = true
+                }
             }
+            Button("Cancel", role: .cancel) { deletionCoordinator.cancel() }
+        }
+        .onChange(of: showDeleteConfirmation) { _, isPresented in
+            if !isPresented { deletionCoordinator.cancel() }
+        }
+        .alert("Delete", isPresented: $showSubtasksChangedError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The subtasks changed. Try deleting this task again.",
+                 comment: "Task deletion was safely stopped because the number of active subtasks changed while the confirmation dialog was open. Ask the user to start deletion again to review the new count.")
+        }
+        .sheet(item: $moveRequest) { request in
+            MoveToListSheet(request: request) { destination, errors in
+                moveTask(request, to: destination, errorState: errors)
+            }
+        }
+
+        .alert("Repeat", isPresented: Binding(
+            get: { completionCoordinator.completionError != nil }, set: { if !$0 { completionCoordinator.completionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { completionCoordinator.completionError = nil }
+        } message: {
+            if let error = completionCoordinator.completionError { Text(error.localizedStringResource) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(taskAccessibilityLabel)
@@ -188,52 +227,63 @@ struct TaskRowView: View {
     }
 
     private func toggleCompletion() {
-        HapticManager.checkbox()
-        completionCoordinator.toggle(task) { [modelContext, syncCommands, task] in
-            Task { @MainActor in
-                do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext) }
-                catch { return }
-                // Completing the task ends its reminders, including the hourly nag. The bulk
-                // sweep only runs after a sync — never, on a local-only Vault account.
-                // Re-check validity: this runs a turn later, by which point an
-                // account delete could have cascaded the task away.
-                if task.modelContext != nil, task.status == .completed {
-                    ReminderScheduler.cancelReminder(for: task.id)
-                }
-                // Not just the badge: completing a recurring task advances its due date to
-                // the next occurrence, which needs a notification of its own.
-                ReminderScheduler.requestReconcile(modelContext: modelContext)
-                syncCommands.syncAfterChange(modelContext)
+        completionCoordinator.toggle(task, save: {
+            try ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        }, errorState: errorState, requestReconcile: {
+            try ReminderScheduler.requestReconcileOrThrow(modelContext: modelContext)
+        }) { [modelContext, syncCommands, task] in
+            HapticManager.checkbox()
+            if task.modelContext != nil, task.status == .completed {
+                ReminderScheduler.cancelReminder(for: task.id)
             }
+            syncCommands.syncAfterChange(modelContext)
         }
     }
 
-    private func moveTask(to listID: String) {
-        guard MoveDestinations.perform(task, toListID: listID, in: modelContext) else { return }
+    private func moveTask(_ request: MoveToListRequest, to destination: MoveDestinations.Destination,
+                          errorState: ErrorState) -> Bool {
+        guard MoveDestinations.perform(request, to: destination, in: modelContext, errorState: errorState,
+            revalidate: { syncCommands.syncAfterChange(modelContext) }) else { return false }
         HapticManager.softImpact()
+        syncCommands.publishLocalTaskCommit()
         syncCommands.syncAfterChange(modelContext)
-        WidgetCenter.shared.reloadAllTimelines()
+        return true
+    }
+
+    private var deleteConfirmationTitle: LocalizedStringResource {
+        LocalizedStringResource(
+            "tasks.row.deleteConfirmation",
+            defaultValue: "Delete this task and \(deletionCoordinator.subtaskCount ?? 0) subtasks?",
+            comment: "Destructive task deletion confirmation. The number is all active descendants, including nested subtasks, that will be deleted together with this task. Plural forms are in the catalog."
+        )
     }
 
     private func deleteTask() {
+        deletionCoordinator.request(task, in: modelContext, errorState: errorState,
+                                    delete: performDeletion)
+        showDeleteConfirmation = deletionCoordinator.subtaskCount != nil
+    }
+
+    private func performDeletion(_ task: TaskItem, confirmedScope: TaskWriteEligibility.DeletionScope) {
         // Same guard the context-menu actions carry: a swipe can land on a row
         // whose task an account delete has already cascaded away, and writing to
         // an invalidated model traps exactly like reading one.
-        guard task.modelContext != nil else { return }
-        HapticManager.softImpact()
-        // The whole subtree, not just this row — see TaskListHelpers.
-        var deletedIDs: [String] = []
-        MotionManager.withAccessibleAnimation {
-            deletedIDs = TaskListHelpers.markDeleted(task)
+        guard task.modelContext != nil, !task.isDeletedLocally else { return }
+        // Restore this operation's tombstones on failure so the row can be retried.
+        let result = MotionManager.withAccessibleAnimation {
+            TaskDeletionPersistence.perform(task, in: modelContext, errorState: errorState,
+                                            confirmed: confirmedScope)
         }
-        do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext) }
-        catch { return }
+        guard let deletedIDs = result else { return }
+        HapticManager.softImpact()
         // Every row that just went, not only the one that was swiped: a subtask's
         // reminders outlive it otherwise and fire for a task that is not there.
         for id in deletedIDs {
             ReminderScheduler.cancelReminder(for: id)
         }
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
+        guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+            ViewPersistence.report($0, to: errorState)
+        }) else { return }
         syncCommands.syncAfterChange(modelContext)
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -408,25 +458,17 @@ private struct MetadataBadges: View {
     }
 }
 
-private struct SubtaskBadge: View {
-    let count: Int
-    var body: some View {
-        HStack(spacing: 2) {
-            Image(systemName: "list.bullet")
-            Text(count, format: .number)
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-    }
-}
-
-private struct DueDateBadge: View {
+struct DueDateBadge: View {
     let date: Date
     var isDateOnly: Bool = false
     let isOverdue: Bool
 
+    func label(timeZone: TimeZone = .current) -> String {
+        DueDateFormatter.format(date, isDateOnly: isDateOnly, timeZone: timeZone)
+    }
+
     var body: some View {
-        Text(DueDateFormatter.format(date, isDateOnly: isDateOnly))
+        Text(label())
             .font(.caption2)
             .fontWeight(.medium)
             .padding(.horizontal, 6)
@@ -441,6 +483,8 @@ private struct DueDateBadge: View {
 // MARK: - Context Menu
 
 private struct TaskContextMenu: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     let data: TaskRowData
     let task: TaskItem
     let onToggle: () -> Void
@@ -458,9 +502,13 @@ private struct TaskContextMenu: View {
         Menu("Priority") {
             ForEach([TaskPriority.high, .medium, .low, TaskPriority.none], id: \.self) { pri in
                 Button {
-                    // The menu can outlive the row's model; writing to an
-                    // invalidated task traps exactly like reading one.
-                    guard task.modelContext != nil else { return }
+                    do {
+                        _ = try TaskWriteEligibility(writingIn: modelContext).task(.retained(task))
+                    } catch {
+                        ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+                        return
+                    }
+                    guard task.priority != pri else { return }
                     task.priority = pri
                     task.lastModifiedDate = Date()
                     task.isDirty = true

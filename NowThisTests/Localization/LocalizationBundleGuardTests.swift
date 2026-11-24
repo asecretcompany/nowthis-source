@@ -10,7 +10,7 @@ import Testing
 /// against the generated pbxproj). If that reset dropped non-English `.lproj` from the bundle,
 /// the entire project would produce five translated catalogs that never reach a phone.
 ///
-/// Three things silently depend on the answer: the AI-disclosure sheet reads
+/// Three things silently depend on the answer: the translation-disclosure sheet reads
 /// `Bundle.main.preferredLocalizations.first`, `ExtractAppIntentsMetadata` builds phrases per
 /// available localization, and the App Store product page's Languages field is derived from the
 /// binary.

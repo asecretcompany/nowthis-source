@@ -137,6 +137,48 @@
         }
       }
     },
+    "Default List" : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standardliste"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default List"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lista predeterminada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste par défaut"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elenco predefinito"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Standaardlijst"
+          }
+        }
+      }
+    },
     "defaultDueDate.nextWeek" : {
       "comment" : "New-task default due date: one week from today.",
       "extractionState" : "extracted_with_value",
@@ -305,6 +347,82 @@
         }
       }
     },
+    "Delete" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Löschen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elimina"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verwijder"
+          }
+        }
+      }
+    },
+    "Delivery could not be confirmed. Check your iPhone before trying again." : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Übertragung konnte nicht bestätigt werden. Prüfe dein iPhone, bevor du es erneut versuchst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delivery could not be confirmed. Check your iPhone before trying again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido confirmar la entrega. Comprueba tu iPhone antes de volver a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’envoi n’a pas pu être confirmé. Vérifiez votre iPhone avant de réessayer."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile confermare l’invio. Controlla il tuo iPhone prima di riprovare."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De bezorging kon niet worden bevestigd. Controleer je iPhone voordat je het opnieuw probeert."
+          }
+        }
+      }
+    },
     "Dictate a task like: buy milk tomorrow at 5 PM." : {
       "localizations" : {
         "de" : {
@@ -407,6 +525,48 @@
         }
       }
     },
+    "Drafts" : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entwürfe"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drafts"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borradores"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brouillons"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bozze"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concepten"
+          }
+        }
+      }
+    },
     "Due" : {
       "localizations" : {
         "de" : {
@@ -437,6 +597,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vervalt"
+          }
+        }
+      }
+    },
+    "Due Date" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de vencimiento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date d'échéance"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di scadenza"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum"
           }
         }
       }
@@ -525,6 +719,48 @@
         }
       }
     },
+    "Edit not confirmed" : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Änderung nicht bestätigt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit not confirmed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambio sin confirmar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modification non confirmée"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modifica non confermata"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wijziging niet bevestigd"
+          }
+        }
+      }
+    },
     "High" : {
       "localizations" : {
         "de" : {
@@ -555,6 +791,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hoog"
+          }
+        }
+      }
+    },
+    "List" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lista"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elenco"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijst"
           }
         }
       }
@@ -729,8 +999,84 @@
         }
       }
     },
+    "NowThis cannot complete tasks with this repeat rule. The task has not been changed." : {
+      "comment" : "Explains a rejected completion of an unsupported imported recurrence rule. The task stays unchanged.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kann Aufgaben mit dieser Wiederholungsregel nicht abschließen. Die Aufgabe wurde nicht geändert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis cannot complete tasks with this repeat rule. The task has not been changed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis no puede completar tareas con esta regla de repetición. La tarea no se ha modificado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis ne peut pas terminer les tâches utilisant cette règle de répétition. La tâche n’a pas été modifiée."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis non può completare le attività con questa regola di ripetizione. L’attività non è stata modificata."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kan taken met deze herhalingsregel niet voltooien. De taak is niet gewijzigd."
+          }
+        }
+      }
+    },
     "NowThis Supporter" : {
 
+    },
+    "OK" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
     },
     "Open NowThis on your iPhone to sync" : {
       "localizations" : {
@@ -762,6 +1108,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open NowThis op je iPhone om te synchroniseren"
+          }
+        }
+      }
+    },
+    "Open NowThis on your iPhone, then try again." : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffne NowThis auf deinem iPhone und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open NowThis on your iPhone, then try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre NowThis en tu iPhone y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrez NowThis sur votre iPhone, puis réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apri NowThis sul tuo iPhone, poi riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open NowThis op je iPhone en probeer het opnieuw."
+          }
+        }
+      }
+    },
+    "Original list unavailable" : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ursprüngliche Liste nicht verfügbar"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original list unavailable"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lista original no disponible"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liste d’origine indisponible"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elenco originale non disponibile"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oorspronkelijke lijst niet beschikbaar"
           }
         }
       }
@@ -842,6 +1272,82 @@
         }
       }
     },
+    "Remove Due Date" : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum entfernen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Due Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar fecha de vencimiento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer l’échéance"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rimuovi la scadenza"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum verwijderen"
+          }
+        }
+      }
+    },
+    "Repeat" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wiederholen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Répéter"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ripeti"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Herhaal"
+          }
+        }
+      }
+    },
     "Smart Lists" : {
       "localizations" : {
         "de" : {
@@ -872,6 +1378,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Slimme lijsten"
+          }
+        }
+      }
+    },
+    "Some tasks are not shown. Open NowThis on your iPhone to see all tasks." : {
+      "comment" : "Watch snapshot was bounded for transfer. Whole tasks may be omitted; task text is never shortened.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Aufgaben werden nicht angezeigt. Öffne NowThis auf deinem iPhone, um alle Aufgaben zu sehen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some tasks are not shown. Open NowThis on your iPhone to see all tasks."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunas tareas no se muestran. Abre NowThis en tu iPhone para ver todas las tareas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certaines tâches ne sont pas affichées. Ouvrez NowThis sur votre iPhone pour voir toutes les tâches."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alcune attività non sono mostrate. Apri NowThis sul tuo iPhone per vedere tutte le attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sommige taken worden niet getoond. Open NowThis op je iPhone om alle taken te zien."
           }
         }
       }
@@ -952,6 +1500,90 @@
         }
       }
     },
+    "This task could not be added. Open Drafts to shorten the title or choose a list, then add it again." : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Aufgabe konnte nicht hinzugefügt werden. Öffne „Entwürfe“, kürze den Titel oder wähle eine Liste und füge sie erneut hinzu."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This task could not be added. Open Drafts to shorten the title or choose a list, then add it again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido añadir esta tarea. Abre Borradores para acortar el título o elegir una lista y vuelve a añadirla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’ajouter cette tâche. Ouvrez Brouillons pour raccourcir le titre ou choisir une liste, puis ajoutez-la à nouveau."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile aggiungere questa attività. Apri Bozze per accorciare il titolo o scegliere un elenco, poi aggiungila di nuovo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze taak kon niet worden toegevoegd. Open Concepten om de titel in te korten of een lijst te kiezen en voeg de taak opnieuw toe."
+          }
+        }
+      }
+    },
+    "This text is too long. Shorten it and try again." : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Text ist zu lang. Kürze ihn und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This text is too long. Shorten it and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este texto es demasiado largo. Acórtalo y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce texte est trop long. Raccourcissez-le, puis réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo testo è troppo lungo. Accorcialo e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze tekst is te lang. Kort hem in en probeer het opnieuw."
+          }
+        }
+      }
+    },
     "Today" : {
       "localizations" : {
         "de" : {
@@ -982,6 +1614,174 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vandaag"
+          }
+        }
+      }
+    },
+    "Wait for pending edits or review saved drafts, then try again." : {
+      "comment" : "Task entry validation or explicit draft correction. Keep the complete input available for correction; never silently truncate it.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Warte auf ausstehende Änderungen oder prüfe gespeicherte Entwürfe. Versuche es dann erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wait for pending edits or review saved drafts, then try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espera a que se apliquen los cambios pendientes o revisa los borradores guardados e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attendez l’application des modifications en attente ou vérifiez les brouillons enregistrés, puis réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attendi le modifiche in sospeso o controlla le bozze salvate, poi riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wacht op openstaande wijzigingen of bekijk opgeslagen concepten en probeer het opnieuw."
+          }
+        }
+      }
+    },
+    "Wait for pending edits to reach your iPhone, then try again." : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Warte, bis ausstehende Änderungen dein iPhone erreichen, und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wait for pending edits to reach your iPhone, then try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espera a que los cambios pendientes lleguen a tu iPhone y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attendez que les modifications en attente arrivent sur votre iPhone, puis réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attendi che le modifiche in sospeso arrivino sul tuo iPhone, poi riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wacht tot de openstaande wijzigingen je iPhone bereiken en probeer het opnieuw."
+          }
+        }
+      }
+    },
+    "watch.edit.readOnly" : {
+      "comment" : "Apple Watch alert when the iPhone refused a change to a task in a read-only list. Ask the list owner for permission.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Bitte die Person, der die Liste gehört, um Bearbeitungsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Ask the list owner for permission to edit it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Pide permiso para editarla a quien la comparte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Demandez à son propriétaire l’autorisation de la modifier."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Chiedi a chi lo condivide il permesso di modificarlo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Vraag de eigenaar van de lijst om toestemming om deze te bewerken."
+          }
+        }
+      }
+    },
+    "watch.edit.readOnlyDraft" : {
+      "comment" : "Apple Watch alert when the iPhone refused an Add to a read-only list. Drafts is the Watch screen where the original task text stays available.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Öffne „Entwürfe“ und wähle eine andere Liste."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Open Drafts and choose another list."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Abre Borradores y elige otra lista."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Ouvrez Brouillons et choisissez une autre liste."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Apri Bozze e scegli un altro elenco."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Open Concepten en kies een andere lijst."
           }
         }
       }
@@ -1489,6 +2289,48 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Binnenkort"
+          }
+        }
+      }
+    },
+    "Your iPhone could not apply this edit. Open NowThis on your iPhone." : {
+      "comment" : "Watch edit delivery feedback. A delivery failure may be ambiguous: the phone may already have applied the edit.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein iPhone konnte diese Änderung nicht übernehmen. Öffne NowThis auf deinem iPhone."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your iPhone could not apply this edit. Open NowThis on your iPhone."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu iPhone no ha podido aplicar este cambio. Abre NowThis en tu iPhone."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre iPhone n’a pas pu appliquer cette modification. Ouvrez NowThis sur votre iPhone."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il tuo iPhone non ha potuto applicare questa modifica. Apri NowThis sul tuo iPhone."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je iPhone kon deze wijziging niet toepassen. Open NowThis op je iPhone."
           }
         }
       }

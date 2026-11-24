@@ -11,31 +11,49 @@ import CryptoKit
 /// revoked app password is re-sent over and over and locks the user out of their
 /// own server.
 ///
-/// The gate is in-memory (so it naturally resets on app relaunch — at most one
-/// attempt per cold launch) and **auto-clears when the stored password changes**,
-/// i.e. as soon as the user re-authenticates. Only the SHA-256 hash of the failing
-/// password is retained, never the password itself.
+/// The in-memory gate remembers the latest rejected password fingerprint for
+/// each account, installation address and exact username. Editing any part
+/// of the login can admit a new attempt. The password itself is never retained.
 struct AuthFailureGate {
+    struct Scope: Equatable {
+        fileprivate let login: Login
+        fileprivate let fingerprint: SHA256.Digest
 
-    private var failedPasswordHashes: [String: String] = [:]
-
-    /// Records that `password` failed authentication for `accountID`.
-    mutating func recordFailure(accountID: String, password: String) {
-        failedPasswordHashes[accountID] = Self.hash(password)
+        init(accountID: String, baseURL: String, username: String, password: String) {
+            login = Login(accountID: accountID, server: Server(baseURL), username: Data(username.utf8))
+            fingerprint = SHA256.hash(data: Data(password.utf8))
+        }
     }
 
-    /// Returns `true` when `currentPassword` for `accountID` is the same credential
-    /// that already failed — re-sending it would just be another failed login.
-    /// Returns `false` for accounts with no recorded failure or whose password has
-    /// since changed (the user re-authenticated).
-    func shouldSkip(accountID: String, currentPassword: String) -> Bool {
-        guard let failed = failedPasswordHashes[accountID] else { return false }
-        return failed == Self.hash(currentPassword)
+    fileprivate struct Login: Hashable {
+        let accountID: String
+        let server: Server
+        // Basic Auth sends UTF-8 bytes. Swift String equality can treat distinct bytes as equal.
+        let username: Data
     }
 
-    private static func hash(_ password: String) -> String {
-        SHA256.hash(data: Data(password.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+    fileprivate enum Server: Hashable {
+        case https(host: String, port: Int, encodedPath: String)
+        case unparsed(SHA256.Digest)
+
+        init(_ raw: String) {
+            guard let address = try? NextcloudServerAddress.parse(raw),
+                  let host = NextcloudServerAddress.normalizedHost(address.baseURL),
+                  let components = URLComponents(url: address.baseURL, resolvingAgainstBaseURL: false) else {
+                self = .unparsed(SHA256.hash(data: Data(raw.utf8)))
+                return
+            }
+            self = .https(host: host, port: components.port ?? 443, encodedPath: components.percentEncodedPath)
+        }
+    }
+
+    private var rejectedFingerprints: [Login: SHA256.Digest] = [:]
+
+    mutating func recordFailure(_ scope: Scope) {
+        rejectedFingerprints[scope.login] = scope.fingerprint
+    }
+
+    func shouldSkip(_ scope: Scope) -> Bool {
+        rejectedFingerprints[scope.login] == scope.fingerprint
     }
 }

@@ -53,7 +53,7 @@ struct DuplicateTaskCleanupTests {
         context.insert(uniqueTask)
         try context.save()
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context)
         try context.save()
 
         #expect(removed == 2, "Should remove 2 duplicates")
@@ -85,7 +85,7 @@ struct DuplicateTaskCleanupTests {
         context.insert(task3)
         try context.save()
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context)
         try context.save()
 
         #expect(removed == 0, "Should remove nothing when all UIDs are unique")
@@ -99,7 +99,7 @@ struct DuplicateTaskCleanupTests {
         let container = try makeContainer()
         let context = ModelContext(container)
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context)
 
         #expect(removed == 0)
 
@@ -123,7 +123,7 @@ struct DuplicateTaskCleanupTests {
         context.insert(task2)
         try context.save()
 
-        let removed = TaskListHelpers.cleanupDuplicateUIDs(in: context)
+        let removed = try TaskListHelpers.cleanupDuplicateUIDs(in: context)
         try context.save()
 
         // task2 is soft-deleted so should be excluded from dedup consideration.

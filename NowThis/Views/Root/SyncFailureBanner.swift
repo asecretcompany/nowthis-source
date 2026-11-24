@@ -3,7 +3,7 @@ import SwiftUI
 /// A dismissible banner that surfaces the most recent sync failure in plain
 /// language. It stays until the failure clears (a later sync succeeds) or the
 /// user dismisses it. Actionable failures (wrong credentials, bad server
-/// address) are tappable and route the user to Settings.
+/// address) are tappable and route the user to Accounts & Sync in Settings.
 struct SyncFailureBanner: View {
     let failure: SyncFailure
     /// Invoked when the banner is tapped, for `isUserActionable` failures only.

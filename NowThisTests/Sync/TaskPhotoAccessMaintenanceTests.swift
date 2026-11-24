@@ -16,13 +16,14 @@ struct TaskPhotoAccessMaintenanceTests {
         remote.originalRequested = true; remote.originalFileID = "901"; remote.folderFileID = "900"
         let pending = TaskPhoto(previewData: TaskPhotoJPEGFixture.data); pending.pendingOperation = "add"
         c.mainContext.insert(remote); remote.task = task; c.mainContext.insert(pending); pending.task = task
-        let remoteID = remote.id; let pendingID = pending.id; let listID = list.id
+        let remoteID = remote.id; let pendingID = pending.id
         try c.mainContext.save()
+        let scope = try #require(TaskPhotoOwnership.Scope(list: list))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }
         let cache = TaskPhotoCache(directory: url)
         try await cache.store(Data([1]), photoID: remoteID); try await cache.store(Data([2]), photoID: pendingID)
-        let change = try await TaskPhotoAccessMaintenance.revoke(listID: listID, container: c, cache: cache)
+        let change = try await TaskPhotoAccessMaintenance.revoke(scope: scope, container: c, cache: cache)
         let fresh = ModelContext(c)
         let stored = try #require(try fresh.fetch(FetchDescriptor<TaskList>()).first)
         #expect(stored.photoAccessRevoked == true)
@@ -30,9 +31,9 @@ struct TaskPhotoAccessMaintenanceTests {
         #expect(Set(try fresh.fetch(FetchDescriptor<TaskPhoto>()).map(\.id)) == [remoteID, pendingID])
         #expect(try await cache.load(photoID: remoteID) == nil)
         #expect(try await cache.load(photoID: pendingID) == Data([2]))
-        #expect(change?.changedIDs.contains(task.id) == true)
+        #expect(change.changedIDs.contains(task.id))
         #expect(stored.tasks.first?.title == "Keep my title")
-        _ = try TaskPhotoAccessMaintenance.restore(listID: listID, container: c)
+        _ = try TaskPhotoAccessMaintenance.restore(scope: scope, container: c)
         let reopened = ModelContext(c)
         #expect(try reopened.fetch(FetchDescriptor<TaskList>()).first?.photoAccessRevoked == false)
     }

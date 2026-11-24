@@ -55,6 +55,45 @@ final class Tag {
     /// different tags; merging them would silently retag the user's data. Search
     /// folds accents — identity does not.
     static func matching(_ name: String, in tags: [Tag]) -> Tag? {
-        tags.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+        tags.first { namesMatch($0.name, name) }
+    }
+
+    /// Keeps the first spelling of each typed tag for the Quick Add preview.
+    static func uniqueNames(_ names: [String]) -> [String] {
+        var unique: [String] = []
+        for name in names where !unique.contains(where: { namesMatch($0, name) }) {
+            unique.append(name)
+        }
+        return unique
+    }
+
+    /// Resolves each identity once. New tags remain detached until the task is staged.
+    static func resolve(_ names: [String], in context: ModelContext,
+                        fetch: (ModelContext) throws -> [Tag] = fetchAll(in:)) throws -> [Tag] {
+        guard !names.isEmpty else { return [] }
+        var candidates = try fetch(context)
+        var resolved: [Tag] = []
+        var ids = Set<String>()
+        for name in names {
+            let tag: Tag
+            if let existing = matching(name, in: candidates) {
+                tag = existing
+            } else {
+                tag = Tag(name: name)
+                candidates.append(tag)
+            }
+            if ids.insert(tag.id).inserted {
+                resolved.append(tag)
+            }
+        }
+        return resolved
+    }
+
+    static func fetchAll(in context: ModelContext) throws -> [Tag] {
+        try context.fetch(FetchDescriptor<Tag>())
+    }
+
+    private static func namesMatch(_ first: String, _ second: String) -> Bool {
+        first.localizedCaseInsensitiveCompare(second) == .orderedSame
     }
 }

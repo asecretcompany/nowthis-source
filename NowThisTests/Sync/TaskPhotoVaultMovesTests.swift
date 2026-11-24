@@ -39,7 +39,8 @@ struct TaskPhotoVaultMovesTests {
         context.insert(task)
         task.taskList = source
         task.remoteHref = "/remote.php/dav/calendars/alice/source/vault-photo-task.ics"
-        task.isLocalOnly = false
+        task.isLocalOnly = false; task.etag = "source-baseline"
+        try SyncResourceFixture.prove(task, in: context)
         task.attachmentStateKnown = true
         let photo = TaskPhoto(previewData: TaskPhotoJPEGFixture.data)
         context.insert(photo)
@@ -49,6 +50,7 @@ struct TaskPhotoVaultMovesTests {
         photo.folderFileID = "899"
         photo.originalContentType = "image/jpeg"
         photo.originalStatus = "available"
+        try acceptPhotoOriginal(photo, in: context)
         TaskMover.move(task, to: vault, in: context)
         try context.save()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

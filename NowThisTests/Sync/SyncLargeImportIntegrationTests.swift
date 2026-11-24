@@ -8,6 +8,35 @@ import Testing
 struct SyncLargeImportIntegrationTests {
     private let credentials = CalDAVClient.Credentials(username: "fixture", password: "fixture")
 
+    @Test("List discovery can succeed while the server blocks the task download")
+    func methodNotAllowedAfterConnectionTest() async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c1") + [
+            .init(body: DAVSyncScenario.manifest(count: 1)),
+            .init(body: DAVSyncScenario.tasks(count: 1))
+        ])
+        let first = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        try #require(first.status == .completed && first.importedCount == 1)
+
+        let listing = discovery(ctag: "c2")
+        let config = ScriptedDAVProtocol.install(host: host, responses: listing + listing + [
+            .init(status: 405, body: "")
+        ])
+        let connected = try await ServerURLValidator.testConnection(baseURL: "https://" + host,
+            username: credentials.username, password: credentials.password, configuration: config)
+        try #require(connected)
+        let result = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        #expect(ScriptedDAVProtocol.requests(host: host).last?.method == "REPORT")
+        #expect(result.status == .partial)
+        let failure = try #require(result.failures.first)
+        #expect(failure.httpStatusCode == 405)
+        #expect(failure.message == SyncFailure.discoveryMessage(.methodNotAllowed))
+        let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        #expect(saved.map(\.uid) == ["fixture-0"])
+    }
+
     // A foreground run proves the 10k case without the background runner's 25-second budget.
     // The background case still crosses two full batches and a final partial batch.
     @Test("Real engine imports exact counts, downloads no bodies for a no-op and one for one change",
@@ -15,8 +44,8 @@ struct SyncLargeImportIntegrationTests {
     func boundedImportAndIncrementalBodies(background: Bool) async throws {
         let count = background ? 201 : 10_000
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         var initial = discovery(ctag: "c1") + [.init(body: DAVSyncScenario.manifest(count: count))]
         for start in stride(from: 0, to: count, by: 100) {
             initial.append(.init(body: DAVSyncScenario.tasks(count: min(100, count - start), startIndex: start)))
@@ -121,6 +150,348 @@ struct SyncLargeImportIntegrationTests {
         withExtendedLifetime(container) {}
     }
 
+    @Test("Equal CTag cannot suppress a wider completed-history scope", arguments: [false, true])
+    func unchangedCTagWidensHistory(background: Bool) async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let manifest = DAVSyncScenario.manifest(count: 2)
+        let oldCompletion = "STATUS:COMPLETED\nCOMPLETED:20000101T120000Z\n"
+        let initialBodies = DAVSyncScenario.tasks(count: 2).replacingOccurrences(
+            of: "SUMMARY:Moon bakery delivery 0\n", with: "SUMMARY:Moon bakery delivery 0\n" + oldCompletion)
+        let oldBody = DAVSyncScenario.tasks(count: 1).replacingOccurrences(
+            of: "SUMMARY:Moon bakery delivery 0\n", with: "SUMMARY:Moon bakery delivery 0\n" + oldCompletion)
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c1")
+            + [.init(body: manifest), .init(body: initialBodies)])
+
+        let narrow = await run(engine, background: background, accountID: accountID,
+            host: host, container: container, months: 3)
+        try #require(narrow.status == .completed && narrow.importedCount == 1)
+        let initialRequests = ScriptedDAVProtocol.requests(host: host)
+        try expectDiscovery(initialRequests)
+        #expect(initialRequests.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT"])
+        #expect(initialRequests.dropFirst(3).map(\.path) == ["/one", "/one"])
+        let initialReader = ModelContext(container)
+        let listID = try #require(try initialReader.fetch(FetchDescriptor<TaskList>()).first?.id)
+        let initialTasks = try initialReader.fetch(FetchDescriptor<TaskItem>())
+        try #require(initialTasks.count == 1)
+        let active = try #require(initialTasks.first)
+        let activeID = active.id
+        try #require(active.uid == "fixture-1")
+        let narrowCheckpoint = try #require(try checkpoint(accountID: accountID, listID: listID,
+            host: host, container: container, months: 3))
+        try #require(narrowCheckpoint.hasCompletedBaseline && narrowCheckpoint.ctag == "c1")
+        let narrowID = checkpointID(accountID: accountID, listID: listID, host: host, months: 3)
+        let wideID = checkpointID(accountID: accountID, listID: listID, host: host)
+        #expect(try SyncImportCheckpoint.accountedETags(id: narrowID, container: container) == [
+            "/one/0.ics": "e0", "/one/1.ics": "e1"
+        ])
+        #expect(try checkpoint(accountID: accountID, listID: listID, host: host, container: container) == nil)
+
+        _ = ScriptedDAVProtocol.install(host: host, responses: discovery(ctag: "c1")
+            + [.init(body: manifest), .init(body: oldBody)])
+        let wide = await run(engine, background: background, accountID: accountID,
+            host: host, container: container, months: 0)
+        #expect(wide.status == .completed && wide.failures.isEmpty)
+        #expect(wide.importedCount == 1 && wide.updatedCount == 0 && wide.deletedCount == 0)
+        #expect(wide.changedListIDs == [listID])
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        try expectDiscovery(requests)
+        #expect(requests.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT"])
+        #expect(requests.dropFirst(3).map(\.path) == ["/one", "/one"])
+        let reportsInOrder = requests.dropFirst(3).map { String(decoding: $0.body, as: UTF8.self) }
+        #expect(reportsInOrder.first?.contains("<c:calendar-query") == true)
+        #expect(reportsInOrder.last?.contains("<c:calendar-multiget") == true)
+        #expect(try reports(requests, containing: "calendar-multiget").flatMap(requestedHrefs) == ["/one/0.ics"])
+
+        let saved = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        #expect(Set(saved.map(\.uid)) == ["fixture-0", "fixture-1"])
+        #expect(saved.first { $0.uid == "fixture-1" }?.id == activeID)
+        let history = saved.first { $0.uid == "fixture-0" }
+        #expect(history?.status == .completed && history?.etag == "e0")
+        #expect(history?.taskList?.id == listID && history?.isDirty == false)
+        let wideCheckpoint = try checkpoint(accountID: accountID, listID: listID, host: host, container: container)
+        #expect(wideCheckpoint?.hasCompletedBaseline == true && wideCheckpoint?.ctag == "c1")
+        #expect(try SyncImportCheckpoint.accountedETags(id: wideID, container: container)["/one/0.ics"] == "e0")
+        #expect(try checkpoint(accountID: accountID, listID: listID, host: host, container: container, months: 3) == nil)
+
+        _ = ScriptedDAVProtocol.install(host: host, responses: discovery(ctag: "c1"))
+        let unchanged = await run(engine, background: background, accountID: accountID,
+            host: host, container: container, months: 0)
+        #expect(unchanged.status == .completed && unchanged.changedListIDs.isEmpty)
+        #expect(ScriptedDAVProtocol.requests(host: host).map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND"])
+        #expect(try checkpoint(accountID: accountID, listID: listID, host: host, container: container) == wideCheckpoint)
+        withExtendedLifetime(container) {}
+    }
+
+    @Test("Canonical receipt cannot mask missing shape for a same-ETag legacy href",
+          arguments: ["relative", "absolute", "canonical"], [false, true])
+    func sameETagReceiptStillRevalidatesLegacyShape(spelling: String, supportsToken: Bool) async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let baseURL = "https://" + host
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let otherID = try DAVSyncScenario.account(in: container, host: host)
+        let context = container.mainContext
+        let accounts = try context.fetch(FetchDescriptor<ServerAccount>())
+        let account = try #require(accounts.first { $0.id == accountID })
+        let other = try #require(accounts.first { $0.id == otherID })
+        let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        let otherList = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        context.insert(list); list.account = account
+        context.insert(otherList); otherList.account = other
+        list.syncCTag = "c1"; list.lastFullPullDate = Date()
+        SyncEngine.markCategoriesCaughtUp(listID: list.id)
+
+        let href = "/one/series.ics"
+        let rawHref = switch spelling {
+        case "relative": "series.ics"
+        case "absolute": baseURL + href
+        default: href
+        }
+        let task = TaskItem(uid: "series", title: "Saved title")
+        context.insert(task); task.taskList = list
+        task.remoteHref = rawHref; task.etag = "same"; task.isLocalOnly = false
+        try VTODOOpaqueState.empty.store(taskID: task.id, in: context)
+        let foreign = TaskItem(uid: task.uid, title: "Independent account")
+        context.insert(foreign); foreign.taskList = otherList
+        foreign.remoteHref = href; foreign.etag = "same"; foreign.isLocalOnly = false
+        let shapeScope = try #require(TaskPhotoOwnership.Scope(list: list))
+        let foreignScope = try #require(TaskPhotoOwnership.Scope(list: otherList))
+        let foreignProof = SyncResourceState(scope: foreignScope, href: href, etag: "same",
+            shape: .unsupported, originalBody: "Previously held unsupported body", uid: nil)
+        try foreignProof.store(in: context)
+        try context.save()
+
+        let key = checkpointID(accountID: accountID, listID: list.id, host: host)
+        let foreignKey = checkpointID(accountID: otherID, listID: otherList.id, host: host)
+        let scope = SyncCollectionPuller.Scope(accountID: accountID, listID: list.id, historyScope: "0")
+        let previous = SyncCollectionPuller.Checkpoint(scope: scope, token: supportsToken ? "old" : nil,
+            ctag: "c1", lastIntegrity: Date().addingTimeInterval(-30), hasCompletedBaseline: true)
+        try SyncImportCheckpoint.commit(previous, id: key, collectionPath: list.serverURL, container: container)
+        let foreignCheckpoint = SyncCollectionPuller.Checkpoint(
+            scope: .init(accountID: otherID, listID: otherList.id, historyScope: "0"),
+            token: "foreign-token", ctag: "foreign", lastIntegrity: previous.lastIntegrity, hasCompletedBaseline: true)
+        try SyncImportCheckpoint.commit(foreignCheckpoint, id: foreignKey,
+            collectionPath: otherList.serverURL, container: container)
+        try SyncImportCheckpoint.markAccounted([.init(href: href, etag: "same", icsData: "")], id: key, container: container)
+        try SyncImportCheckpoint.markAccounted([.init(href: href, etag: "same", icsData: "")], id: foreignKey, container: container)
+
+        try #require(SyncResourceState.canonical(rawHref, scope: shapeScope) == href)
+        try #require(SyncResourceState.read(scope: shapeScope, href: href, in: ModelContext(container)) == nil)
+        try #require(SyncImportCheckpoint.accountedETags(id: key, container: container) == [href: "same"])
+        let member = "<d:getetag>same</d:getetag>"
+        let body = "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:series\nSUMMARY:Saved title\nEND:VTODO\nEND:VCALENDAR"
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c1", token: supportsToken ? "observed" : nil)
+            + [.init(body: DAVSyncScenario.multistatus(DAVSyncScenario.prop(href, member))),
+               .init(body: DAVSyncScenario.multistatus(DAVSyncScenario.prop(href, member + "<c:calendar-data>" + body + "</c:calendar-data>")))])
+
+        let outcome = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        #expect(outcome.status == .completed && outcome.failures.isEmpty)
+        #expect(outcome.importedCount == 0 && outcome.deletedCount == 0 && outcome.pendingOutboundCount == 0)
+        #expect(outcome.updatedCount == (spelling == "canonical" ? 0 : 1))
+        #expect(outcome.changedListIDs == (spelling == "canonical" ? [] : [list.id]))
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        try expectDiscovery(requests)
+        #expect(requests.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT"])
+        #expect(requests.dropFirst(3).map(\.path) == ["/one", "/one"])
+        let reportsInOrder = requests.dropFirst(3).map { String(decoding: $0.body, as: UTF8.self) }
+        #expect(reportsInOrder.first?.contains("<c:calendar-query") == true)
+        #expect(reportsInOrder.last?.contains("<c:calendar-multiget") == true)
+        #expect(try reports(requests, containing: "calendar-multiget").flatMap(requestedHrefs) == [href])
+
+        let fresh = ModelContext(container)
+        let saved = try fresh.fetch(FetchDescriptor<TaskItem>())
+        let stored = saved.first { $0.id == task.id }
+        #expect(stored?.remoteHref == href && stored?.etag == "same" && stored?.uid == "series")
+        #expect(stored?.title == "Saved title" && stored?.isDirty == false && stored?.pendingMoveFromHref == nil)
+        let proof = try SyncResourceState.read(scope: shapeScope, href: href, in: fresh)
+        #expect(proof?.shape == .singleTask && proof?.etag == "same" && proof?.uid == "series")
+        if let stored {
+            let writable = try? SyncResourceState.proof(list: stored.taskList, href: href, etag: stored.etag,
+                taskID: stored.id, uid: stored.uid, allowRetainedRevision: false, in: fresh)
+            #expect(writable == proof && writable != nil)
+        }
+        #expect(try SyncImportCheckpoint.accountedETags(id: key, container: container) == [href: "same"])
+        let next = try checkpoint(accountID: accountID, listID: list.id, host: host, container: container)
+        #expect(next?.hasCompletedBaseline == true && next?.ctag == "c1")
+        #expect(next?.token == (supportsToken ? "observed" : nil))
+        #expect((next?.lastIntegrity ?? .distantPast) > (previous.lastIntegrity ?? .distantFuture))
+        #expect(saved.count == 2 && saved.first { $0.id == foreign.id }?.title == "Independent account")
+        #expect(try SyncResourceState.read(scope: foreignScope, href: href, in: fresh) == foreignProof)
+        #expect(try SyncImportCheckpoint.accountedETags(id: foreignKey, container: container) == [href: "same"])
+        #expect(try checkpoint(accountID: otherID, listID: otherList.id, host: host, container: container) == foreignCheckpoint)
+        withExtendedLifetime(container) {}
+    }
+
+    @Test("Complete manifest keeps present legacy hrefs without refetching their known bodies",
+          arguments: [false, true])
+    func completeManifestPreservesKnownLegacyHref(absolute: Bool) async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let baseURL = "https://" + host
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let context = container.mainContext
+        let accounts = try context.fetch(FetchDescriptor<ServerAccount>())
+        let account = try #require(accounts.first { $0.id == accountID })
+        let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        context.insert(list)
+        list.account = account
+        SyncEngine.markCategoriesCaughtUp(listID: list.id)
+        let shapeScope = try #require(TaskPhotoOwnership.Scope(list: list))
+        let alias = absolute ? baseURL + "/one/series.ics" : "series.ics"
+        let members = [
+            (uid: "series", raw: alias, href: "/one/series.ics"),
+            (uid: "peer", raw: "/one/peer.ics", href: "/one/peer.ics"),
+            (uid: "missing", raw: "/one/missing.ics", href: "/one/missing.ics"),
+        ]
+        var ids: [String: String] = [:]
+        var resources: [CalDAVClient.RemoteTask] = []
+        var shapes: [SyncResourceState] = []
+        for member in members {
+            let task = TaskItem(uid: member.uid, title: "Saved " + member.uid)
+            context.insert(task)
+            task.taskList = list
+            task.remoteHref = member.raw
+            task.etag = "same"
+            task.isLocalOnly = false
+            ids[member.uid] = task.id
+            let body = "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:\(member.uid)\n"
+                + "SUMMARY:Saved \(member.uid)\nEND:VTODO\nEND:VCALENDAR"
+            let shape = SyncResourceState(scope: shapeScope, href: member.href, etag: "same",
+                shape: .singleTask, originalBody: nil, uid: member.uid)
+            try shape.store(in: context)
+            shapes.append(shape)
+            resources.append(.init(href: member.href, etag: "same", icsData: body))
+        }
+        try context.save()
+        let classification = try SyncResourceState.needsClassification(list: list, in: context)
+        try #require(classification.isEmpty)
+        let key = checkpointID(accountID: accountID, listID: list.id, host: host)
+        try DAVSyncScenario.seedRecentCheckpoint(for: list, in: container, at: Date().addingTimeInterval(-30))
+        try SyncImportCheckpoint.markAccounted(resources, id: key, container: container)
+        let previous = try #require(try checkpoint(accountID: accountID, listID: list.id,
+            host: host, container: container))
+        #expect(previous.hasCompletedBaseline && previous.ctag == "c1")
+
+        let knownMembers = members.prefix(2)
+        let manifest = DAVSyncScenario.multistatus(knownMembers.map {
+            DAVSyncScenario.prop($0.href, "<d:getetag>same</d:getetag>")
+        }.joined())
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c2") + [.init(body: manifest)])
+        let outcome = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        #expect(outcome.status == .completed && outcome.failures.isEmpty)
+        #expect(outcome.importedCount == 0 && outcome.updatedCount == 0)
+        #expect(outcome.deletedCount == 1 && outcome.changedListIDs == [list.id])
+        #expect(outcome.pendingOutboundCount == 0)
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        try expectDiscovery(requests)
+        #expect(requests.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND", "REPORT"])
+        #expect(reports(requests, containing: "calendar-query").count == 1)
+        #expect(reports(requests, containing: "calendar-multiget").isEmpty)
+
+        let read = ModelContext(container)
+        let saved = try read.fetch(FetchDescriptor<TaskItem>())
+        #expect(Set(saved.map(\.uid)) == ["series", "peer"])
+        for member in knownMembers {
+            let task = saved.first { $0.uid == member.uid }
+            #expect(task?.id == ids[member.uid] && task?.taskList?.id == list.id)
+            #expect(task?.remoteHref == member.raw && task?.etag == "same")
+            #expect(task?.title == "Saved " + member.uid && task?.isDirty == false)
+        }
+        for shape in shapes.prefix(2) {
+            #expect(try SyncResourceState.read(scope: shapeScope, href: shape.href, in: read) == shape)
+        }
+        #expect(try SyncImportCheckpoint.accountedETags(id: key, container: container) ==
+            ["/one/series.ics": "same", "/one/peer.ics": "same"])
+        let next = try checkpoint(accountID: accountID, listID: list.id, host: host, container: container)
+        #expect(next?.hasCompletedBaseline == true && next?.ctag == "c2")
+        #expect((next?.lastIntegrity ?? .distantPast) > (previous.lastIntegrity ?? .distantFuture))
+    }
+
+
+    @Test("Delta matching reads a nil ETag saved while its REPORT is suspended", arguments: [false, true])
+    func deltaReadsFreshETagInvalidation(invalidated: Bool) async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let href = "/one/0.ics"
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c1", token: "start") + [
+            .init(body: DAVSyncScenario.manifest(count: 1)), .init(body: DAVSyncScenario.tasks(count: 1))
+        ])
+        let initial = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        try #require(initial.status == .completed && initial.importedCount == 1)
+        let initialReader = ModelContext(container)
+        let task = try #require(try initialReader.fetch(FetchDescriptor<TaskItem>()).first)
+        let taskID = task.id
+        let listID = try #require(task.taskList?.id)
+        let key = checkpointID(accountID: accountID, listID: listID, host: host)
+        let gate = ScriptedDAVProtocol.Gate()
+        defer { gate.release() }
+        _ = ScriptedDAVProtocol.install(host: host, responses: discovery(ctag: "c1", token: "seen") + [
+            .init(body: delta(DAVSyncScenario.prop(href, "<d:getetag>e0</d:getetag>"), token: "next"), gate: gate),
+            .init(body: DAVSyncScenario.tasks(count: 1))
+        ])
+        let operations = PerformanceTrace.OperationRecorder()
+        let operation = Task {
+            await PerformanceTrace.$operationRecorder.withValue(operations) {
+                await run(engine, background: false, accountID: accountID, host: host, container: container)
+            }
+        }
+        try await waitForRequests(4, host: host)
+        if invalidated {
+            let concurrent = ModelContext(container)
+            let saved = try #require(try concurrent.fetch(FetchDescriptor<TaskItem>()).first)
+            saved.etag = nil
+            try concurrent.save()
+        }
+        #expect(try SyncImportCheckpoint.accountedETags(id: key, container: container)[href] == "e0")
+        gate.release()
+        let outcome = await operation.value
+        #expect(outcome.status == .completed && outcome.importedCount == 0 && outcome.deletedCount == 0)
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        try expectInventoryKind(requests, delta: true, token: "start")
+        #expect(try reports(requests, containing: "calendar-multiget").flatMap(requestedHrefs) == (invalidated ? [href] : []))
+        #expect(operations.count(.matchingTaskLookup).rows == 1)
+        #expect(operations.count(.matchingReceiptLookup).rows == 1)
+        let finalReader = ModelContext(container)
+        let finalTask = try #require(try finalReader.fetch(FetchDescriptor<TaskItem>()).first)
+        #expect(finalTask.id == taskID && finalTask.etag == "e0" && !finalTask.isDirty)
+        #expect(try checkpoint(accountID: accountID, listID: listID, host: host, container: container)?.token == "next")
+    }
+
+    @Test("A 101-member delta bounds the actual task and receipt queries")
+    func productionDeltaBatchesExactInventory() async throws {
+        let container = try DAVSyncScenario.container()
+        let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let manifest = DAVSyncScenario.manifest(count: 101)
+        let engine = makeEngine(host: host, responses: discovery(ctag: "c1", token: "start") + [
+            .init(body: manifest), .init(body: DAVSyncScenario.tasks(count: 100)),
+            .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 100))
+        ])
+        let initial = await run(engine, background: false, accountID: accountID, host: host, container: container)
+        try #require(initial.status == .completed && initial.importedCount == 101)
+        let members = (0..<101).map { DAVSyncScenario.prop("/one/\($0).ics", "<d:getetag>e\($0)</d:getetag>") }.joined()
+        _ = ScriptedDAVProtocol.install(host: host, responses: discovery(ctag: "c1", token: "seen") + [
+            .init(body: delta(members, token: "next"))
+        ])
+        let operations = PerformanceTrace.OperationRecorder()
+        let outcome = await PerformanceTrace.$operationRecorder.withValue(operations) {
+            await run(engine, background: false, accountID: accountID, host: host, container: container)
+        }
+        #expect(outcome.status == .completed && outcome.changedListIDs.isEmpty)
+        let requests = ScriptedDAVProtocol.requests(host: host)
+        try expectInventoryKind(requests, delta: true, token: "start")
+        #expect(requests.count == 4)
+        for operation in [PerformanceTrace.Operation.matchingTaskLookup, .matchingReceiptLookup] {
+            let count = operations.count(operation)
+            #expect(count.calls == 2 && count.rows == 101 && count.maxKeys == 100)
+        }
+        #expect(operations.count(.matchingTaskInventory).calls == 0)
+        #expect(operations.count(.receiptInventory).calls == 0)
+    }
+
     @Test("A reopened store skips 100 durable receipts, including excluded completed history",
           arguments: [false, true])
     func interruptedImportResumesAfterReopeningStore(background: Bool) async throws {
@@ -184,8 +555,8 @@ struct SyncLargeImportIntegrationTests {
           arguments: [false, true], [false, true])
     func missingUIDDoesNotAdvanceCheckpoint(background: Bool, completedBaseline: Bool) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let initial = completedBaseline
             ? discovery(ctag: "c1", token: "token-1")
                 + [.init(body: DAVSyncScenario.manifest(count: 1)), .init(body: DAVSyncScenario.tasks(count: 1))]
@@ -272,8 +643,8 @@ struct SyncLargeImportIntegrationTests {
     func pendingUIChangesSurviveBodyAwait(background: Bool) async throws {
         let container = try DAVSyncScenario.container()
         container.mainContext.autosaveEnabled = false
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = fixtureHost()
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let engine = makeEngine(host: host, responses: discovery(ctag: "c1")
             + [.init(body: DAVSyncScenario.manifest(count: 1)), .init(body: DAVSyncScenario.tasks(count: 1))])
         let initial = await run(engine, background: background, accountID: accountID, host: host, container: container)
@@ -331,7 +702,7 @@ struct SyncLargeImportIntegrationTests {
 
     private func interruptFirstBatch(storeURL: URL, host: String, background: Bool) async throws -> InterruptedStore {
         let container = try persistentContainer(at: storeURL)
-        let accountID = try DAVSyncScenario.account(in: container)
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let gate = ScriptedDAVProtocol.Gate()
         defer { gate.release() }
         let firstBatch = DAVSyncScenario.tasks(count: 100)
@@ -442,7 +813,7 @@ struct SyncLargeImportIntegrationTests {
     private func expectDiscovery(_ requests: [ScriptedDAVProtocol.RecordedRequest]) throws {
         let first = Array(requests.prefix(3))
         #expect(first.map(\.method) == ["PROPFIND", "PROPFIND", "PROPFIND"])
-        #expect(first.map(\.path) == ["/remote.php/dav/principals/users/fixture", "/principal", "/calendars"])
+        #expect(first.map(\.path) == ["/remote.php/dav", "/principal", "/"])
         #expect(first.allSatisfy { $0.bodyBytes > 0 })
         #expect(!requests.contains { $0.method == "PUT" || $0.method == "DELETE" })
     }

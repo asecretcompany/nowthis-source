@@ -13,6 +13,7 @@ final class TaskPhotoJourneysTests: XCTestCase {
 
         app.tabBars.buttons["Settings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        app.buttons["settings.tasks"].tap()
         let photoSettings = app.switches["taskPhotos.settings.shareFullResolution"]
         for _ in 0..<20 where !photoSettings.exists { app.swipeUp() }
         XCTAssertTrue(photoSettings.waitForExistence(timeout: 5))

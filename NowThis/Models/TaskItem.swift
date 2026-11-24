@@ -12,6 +12,12 @@ import SwiftData
 /// remote CalDAV server.
 @Model
 final class TaskItem {
+    static let maxTitleLength = 500
+    static let maxNotesLength = 20_000
+    static let maxTitleBytes = 64_000
+    static let maxNotesBytes = 1_000_000
+    static let maxQuickAddBytes = 64_000
+
 
     // MARK: - Identity
 

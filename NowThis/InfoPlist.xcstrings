@@ -194,6 +194,48 @@
           }
         }
       }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "Info.plist NSLocalNetworkUsageDescription",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis verbindet sich mit deinem Nextcloud-Server im lokalen Netzwerk, um deine Listen und Aufgaben zu synchronisieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "NowThis connects to your Nextcloud server on your local network to sync your lists and tasks."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis se conecta a tu servidor Nextcloud en la red local para sincronizar tus listas y tareas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis se connecte à votre serveur Nextcloud sur votre réseau local pour synchroniser vos listes et vos tâches."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis si connette al tuo server Nextcloud sulla rete locale per sincronizzare i tuoi elenchi e le tue attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis maakt verbinding met je Nextcloud-server op je lokale netwerk om je lijsten en taken te synchroniseren."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

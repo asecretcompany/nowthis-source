@@ -83,9 +83,11 @@ struct BackgroundReplanGuardTests {
         for body in [launchBody, activeBody] {
             #expect(body.contains("await ReminderScheduler.reconcileNow(modelContainer: modelContainer, policy: .background)"))
             #expect(!body.contains("isForegroundRefreshEnabled"))
+            // Wiring guard only; ForegroundStartupOrderingTests proves that a
+            // paused recovery cannot block networking and survives HTTP failure.
+            let entry = try #require(body.range(of: "await syncScheduler.startForegroundWork"))
             let recovery = try #require(body.range(of: "await ReminderScheduler.reconcileNow"))
-            let remote = try #require(body.range(of: "syncScheduler.syncOnForeground"))
-            #expect(recovery.lowerBound < remote.lowerBound)
+            #expect(entry.lowerBound < recovery.lowerBound)
         }
     }
 

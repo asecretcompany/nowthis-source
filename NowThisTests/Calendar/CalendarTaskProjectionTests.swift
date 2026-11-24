@@ -75,4 +75,82 @@ struct CalendarTaskProjectionTests {
         #expect(universal.bucket(on: selected).rows.map(\.id) == ["timed", "allDay"])
         withExtendedLifetime(container) {}
     }
+
+    @Test("Today shows overdue timed tasks once and carries forward a task still visible on its original day",
+          arguments: [false, true])
+    func todaysRowsAreDisjoint(showCompleted: Bool) throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let now = instant("2024-03-10T20:00:00Z")
+        let yesterday = instant("2024-03-09T19:00:00Z")
+        let earlier = task("earlier", due: instant("2024-03-10T18:00:00Z"), in: context)
+        let previous = task("previous", due: yesterday, in: context)
+        let later = task("later", due: instant("2024-03-10T22:00:00Z"), in: context)
+        try context.save()
+        let projection = CalendarTaskProjection(rows: [earlier, previous, later].glanceRows(),
+            calendar: losAngeles, now: now, showCompleted: showCompleted)
+
+        let today = projection.sections(on: now)
+        #expect(today.due.map(\.id) == ["later"])
+        #expect(today.overdue.map(\.id) == ["earlier", "previous"])
+        let visibleIDs = (today.due + today.overdue).map(\.id)
+        #expect(Set(visibleIDs).count == visibleIDs.count)
+        #expect(projection.bucket(on: now).rows.map(\.id) == ["earlier", "later"])
+        #expect(projection.bucket(on: yesterday).rows.map(\.id) == ["previous"])
+        #expect(projection.sections(on: yesterday).due.map(\.id) == ["previous"])
+        #expect(projection.sections(on: yesterday).overdue.isEmpty)
+        withExtendedLifetime(container) {}
+    }
+
+    @Test("Completed visibility controls dated markers and day sections while cancelled rows stay dated",
+          arguments: [false, true])
+    func completedVisibilityControlsDatedRows(showCompleted: Bool) throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let now = instant("2024-03-10T20:00:00Z")
+        let upcoming = task("upcoming", due: instant("2024-03-10T22:00:00Z"), priority: .medium, in: context)
+        let done = task("done", due: instant("2024-03-10T17:00:00Z"), status: .completed, priority: .high, in: context)
+        let cancelled = task("cancelled", due: instant("2024-03-10T16:00:00Z"), status: .cancelled, priority: .low, in: context)
+        try context.save()
+        let projection = CalendarTaskProjection(rows: [upcoming, done, cancelled].glanceRows(),
+            calendar: losAngeles, now: now, showCompleted: showCompleted)
+
+        let expected = showCompleted ? ["upcoming", "done", "cancelled"] : ["upcoming", "cancelled"]
+        let bucket = projection.bucket(on: now)
+        #expect(bucket.rows.map(\.id) == expected)
+        #expect(bucket.highestPriority == (showCompleted ? .high : .medium))
+        #expect(projection.sections(on: now).due.map(\.id) == expected)
+        #expect(projection.sections(on: now).overdue.isEmpty)
+        withExtendedLifetime(container) {}
+    }
+
+    @Test("Repeated weekday labels retain distinct identities at fixed columns")
+    func weekdayHeaderSlotIDs() {
+        var calendar = losAngeles
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.firstWeekday = 2
+        let mondayFirst = CalendarMonthView.weekdayHeaderSlots(for: calendar)
+        #expect(mondayFirst.map(\.value) == ["M", "T", "W", "T", "F", "S", "S"])
+        #expect(Set(mondayFirst.map(\.id)).count == 7)
+
+        calendar.firstWeekday = 1
+        let sundayFirst = CalendarMonthView.weekdayHeaderSlots(for: calendar)
+        #expect(sundayFirst.map(\.value) == ["S", "M", "T", "W", "T", "F", "S"])
+        #expect(sundayFirst.map(\.id) == mondayFirst.map(\.id))
+    }
+
+    @Test("Padding and dates retain distinct identities at fixed month grid positions")
+    func monthSlotIDs() throws {
+        var calendar = losAngeles
+        calendar.firstWeekday = 2
+        let july = CalendarMonthView.monthSlots(for: instant("2026-07-15T20:00:00Z"), calendar: calendar)
+        try #require(july.count == 33)
+        #expect(july[0].value == nil)
+        #expect(july[1].value == nil)
+        #expect(july[2].value == instant("2026-07-01T07:00:00Z"))
+        #expect(Set(july.map(\.id)).count == july.count)
+
+        let august = CalendarMonthView.monthSlots(for: instant("2026-08-15T20:00:00Z"), calendar: calendar)
+        #expect(august.prefix(july.count).map(\.id) == july.map(\.id))
+    }
 }

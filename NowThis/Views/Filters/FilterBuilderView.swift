@@ -1,6 +1,145 @@
 import SwiftUI
 import SwiftData
 
+enum FilterRepairCopy {
+    static var required: String {
+        String(localized: "filter.repair.required", defaultValue: "Review or replace the filter’s rules to see matching tasks.",
+               comment: "Shown when a saved filter has rules that cannot be applied.")
+    }
+
+    static var unavailable: String {
+        String(localized: "filter.repair.unavailable", defaultValue: "This filter is no longer available.",
+               comment: "The selected saved filter no longer exists or could not be opened.")
+    }
+
+    static var loadFailed: String {
+        String(localized: "filter.repair.loadFailed", defaultValue: "Couldn’t load saved filters.",
+               comment: "Shown with a Retry button when the app could not read its saved filters.")
+    }
+
+    static var invalid: String {
+        String(localized: "filter.editor.invalidCriteria", defaultValue: "Choose a match option and complete every rule before saving.",
+               comment: "Error when an editor tries to save a filter with incomplete or unsupported criteria.")
+    }
+
+    static var changed: String {
+        String(localized: "filter.editor.changed", defaultValue: "This filter changed while you were editing. Close and reopen it to review the current rules.",
+               comment: "Error when a saved filter was edited or deleted while its editor was open.")
+    }
+
+    static var chooseValue: String {
+        String(localized: "filter.editor.chooseValue", defaultValue: "Choose an option",
+               comment: "Unselected placeholder for an unsupported filter value, comparison, or match option.")
+    }
+
+    static var resetRule: String {
+        String(localized: "filter.editor.resetRule", defaultValue: "Reset Rule",
+               comment: "Resets the comparison and value of an invalid saved filter rule for its currently selected field.")
+    }
+}
+
+@MainActor
+enum SavedFilterStore {
+    nonisolated static let didCommit = Notification.Name("SavedFilterStoreDidCommit")
+
+    static func snapshots(in container: ModelContainer) throws -> [SavedFilterSnapshot] {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<SavedFilter>(sortBy: [SortDescriptor(\SavedFilter.sortOrder)])
+        return try context.fetch(descriptor).map(\.snapshot)
+    }
+
+    static func filter(_ id: String, in context: ModelContext) throws -> SavedFilter? {
+        var descriptor = FetchDescriptor<SavedFilter>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    static func delete(_ originals: [SavedFilterSnapshot], in container: ModelContainer, errorState: ErrorState?,
+                       save: (() throws -> Void)? = nil) {
+        let owner = errorState ?? .shared
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        do {
+            for original in originals {
+                guard let current = try filter(original.id, in: context) else { continue }
+                guard current.snapshot == original else {
+                    owner.show(FilterRepairCopy.changed)
+                    return
+                }
+                context.delete(current)
+            }
+        } catch {
+            ViewPersistence.report(error, to: owner)
+            return
+        }
+        guard context.hasChanges else { owner.dismiss(); return }
+        if ViewPersistence.saveOrReport(in: context, errorState: owner, save: save) {
+            owner.dismiss()
+            publishCommit(in: container)
+        } else {
+            owner.retryAction = { [weak owner] in
+                guard let owner else { return }
+                delete(originals, in: container, errorState: owner, save: save)
+            }
+        }
+    }
+
+    static func publishCommit(in container: ModelContainer) {
+        NotificationCenter.default.post(name: didCommit, object: CalendarMirrorState.storeKey(container))
+    }
+}
+
+struct SavedFilterEdits {
+    enum Failure: Error { case invalidCriteria, changed }
+
+    let name: String
+    let icon: String
+    let colorHex: String
+    let logic: FilterLogic?
+    let rules: [FilterRule]
+
+    static func editableRules(from snapshot: SavedFilterSnapshot) -> [FilterRule] {
+        var seen = Set<String>()
+        return (snapshot.rules ?? []).map { stored in
+            var rule = stored
+            if !seen.insert(rule.id).inserted { rule.id = UUID().uuidString }
+            rule.value = rule.canonicalValue ?? rule.value
+            return rule
+        }
+    }
+
+    @MainActor
+    func save(over original: SavedFilterSnapshot?, in container: ModelContainer, errorState: ErrorState,
+              save: (() throws -> Void)? = nil) throws -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let criteria = SavedFilterCriteria(rules: rules, logic: logic) else {
+            throw Failure.invalidCriteria
+        }
+        let bytes = try JSONEncoder().encode(criteria.rules)
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let filter: SavedFilter
+        if let original {
+            guard let current = try SavedFilterStore.filter(original.id, in: context),
+                  current.name == original.name, current.icon == original.icon,
+                  current.colorHex == original.colorHex, current.rulesData == original.rulesData,
+                  current.logicOperator == original.logicOperator else { throw Failure.changed }
+            filter = current
+        } else {
+            filter = SavedFilter(name: trimmed)
+            context.insert(filter)
+        }
+        filter.name = trimmed
+        filter.icon = icon
+        filter.colorHex = colorHex
+        filter.logicOperator = criteria.logic.rawValue
+        filter.rulesData = bytes
+        guard ViewPersistence.saveOrReport(in: context, errorState: errorState, save: save) else { return false }
+        SavedFilterStore.publishCommit(in: container)
+        return true
+    }
+}
+
 /// Sheet for creating or editing a saved filter preset.
 ///
 /// Provides a form with:
@@ -10,23 +149,30 @@ import SwiftData
 struct FilterBuilderView: View {
 
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
 
     @Query private var taskLists: [TaskList]
     @Query private var tags: [Tag]
 
     /// Non-nil when editing an existing filter.
-    var existingFilter: SavedFilter?
+    var existingFilter: SavedFilterSnapshot?
 
+    @State private var hasLoaded = false
     @State private var name = ""
     @State private var icon = "line.3.horizontal.decrease.circle"
     @State private var colorHex = "#8E8E93"
-    @State private var logic: FilterLogic = .and
+    @State private var logic: FilterLogic? = .and
     @State private var rules: [FilterRule] = []
 
     var body: some View {
-        NavigationStack {
+        let tagNames = tagNames
+        let listNames = listNames
+        return NavigationStack {
             Form {
+                if let existingFilter, existingFilter.criteria == nil {
+                    Text(FilterRepairCopy.required)
+                }
                 // MARK: - Identity
                 Section("Name & Appearance") {
                     TextField("Filter name", text: $name)
@@ -43,8 +189,9 @@ struct FilterBuilderView: View {
                 // MARK: - Logic
                 Section {
                     Picker("Match", selection: $logic) {
+                        if logic == nil { Text(FilterRepairCopy.chooseValue).tag(nil as FilterLogic?) }
                         ForEach(FilterLogic.allCases, id: \.self) { op in
-                            Text(op.displayName).tag(op)
+                            Text(op.displayName).tag(Optional(op))
                         }
                     }
                     .pickerStyle(.segmented)
@@ -52,31 +199,31 @@ struct FilterBuilderView: View {
                 } header: {
                     Text("Logic")
                 } footer: {
-                    Text(logic == .and
-                         ? "Tasks must match ALL rules."
-                         : "Tasks must match ANY rule.")
+                    if let logic {
+                        Text(logic == .and ? "Tasks must match ALL rules." : "Tasks must match ANY rule.")
+                    }
                 }
 
                 // MARK: - Rules
                 Section("Rules") {
                     ForEach($rules) { $rule in
-                        RuleRow(rule: $rule, tags: tags, lists: taskLists)
+                        RuleRow(rule: $rule, tagNames: tagNames, listNames: listNames)
                     }
                     .onDelete { rules.remove(atOffsets: $0) }
 
                     Button {
                         withAnimation {
-                            rules.append(FilterRule(
-                                field: .status,
-                                comparison: .equals,
-                                value: TaskStatus.needsAction.rawValue
-                            ))
+                            var rule = FilterRule(field: .status, comparison: .equals, value: "")
+                            rule.reset(to: .status)
+                            rules.append(rule)
                         }
                     } label: {
                         Label("Add Rule", systemImage: "plus.circle")
                     }
                 }
             }
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationTitle(existingFilter == nil ? "New Filter" : "Edit Filter")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -85,47 +232,47 @@ struct FilterBuilderView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
-                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || rules.isEmpty)
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || rules.isEmpty)
                 }
             }
             .onAppear { loadExisting() }
         }
+        .blocksTaskLinks()
     }
 
     // MARK: - Actions
 
+    private var tagNames: [String] { names(from: tags.filter { $0.modelContext != nil }.map(\.name)) }
+    private var listNames: [String] {
+        let live = TaskListHelpers.liveModels(taskLists, in: modelContext).filter { $0.modelContext != nil }
+        return names(from: live.map(\.name))
+    }
+
+    private func names(from values: [String]) -> [String] {
+        Array(Set(values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !rules.isEmpty else { return }
-
-        if let existing = existingFilter {
-            existing.name = trimmed
-            existing.icon = icon
-            existing.colorHex = colorHex
-            existing.logic = logic
-            existing.rules = rules
-        } else {
-            let filter = SavedFilter(
-                name: trimmed,
-                icon: icon,
-                colorHex: colorHex,
-                rules: rules,
-                logicOperator: logic
-            )
-            modelContext.insert(filter)
+        let draft = SavedFilterEdits(name: name, icon: icon, colorHex: colorHex, logic: logic, rules: rules)
+        do {
+            if try draft.save(over: existingFilter, in: modelContext.container, errorState: errorState) { dismiss() }
+        } catch let failure as SavedFilterEdits.Failure {
+            errorState.show(failure == .invalidCriteria ? FilterRepairCopy.invalid : FilterRepairCopy.changed)
+        } catch {
+            ViewPersistence.report(error, to: errorState)
         }
-
-        try? modelContext.save()
-        dismiss()
     }
 
     private func loadExisting() {
+        guard !hasLoaded else { return }
+        hasLoaded = true
         guard let existing = existingFilter else { return }
         name = existing.name
         icon = existing.icon
         colorHex = existing.colorHex
         logic = existing.logic
-        rules = existing.rules
+        rules = SavedFilterEdits.editableRules(from: existing)
     }
 }
 
@@ -133,13 +280,15 @@ struct FilterBuilderView: View {
 
 private struct RuleRow: View {
     @Binding var rule: FilterRule
-    let tags: [Tag]
-    let lists: [TaskList]
+    let tagNames: [String]
+    let listNames: [String]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Field picker
-            Picker("Field", selection: $rule.field) {
+            Picker("Field", selection: Binding(get: { rule.field }, set: {
+                rule.changeField(to: $0, firstTag: tagNames.first, firstList: listNames.first)
+            })) {
                 ForEach(FilterField.allCases) { field in
                     Label(field.displayName, systemImage: field.icon).tag(field)
                 }
@@ -147,6 +296,9 @@ private struct RuleRow: View {
 
             // Comparison picker
             Picker("Comparison", selection: $rule.comparison) {
+                if !rule.field.comparisons.contains(rule.comparison) {
+                    Text(FilterRepairCopy.chooseValue).tag(rule.comparison)
+                }
                 ForEach(rule.field.comparisons) { comp in
                     Text(comp.displayName).tag(comp)
                 }
@@ -154,6 +306,13 @@ private struct RuleRow: View {
 
             // Value input — contextual
             valueInput
+
+            if !rule.isValid {
+                Button { rule.reset(to: rule.field, firstTag: tagNames.first, firstList: listNames.first) } label: {
+                    Text(FilterRepairCopy.resetRule)
+                }
+                .buttonStyle(.borderless)
+            }
         }
         .padding(.vertical, 4)
     }
@@ -163,6 +322,7 @@ private struct RuleRow: View {
         switch rule.field {
         case .status:
             Picker("Value", selection: $rule.value) {
+                invalidChoice
                 ForEach(TaskStatus.allCases, id: \.rawValue) { status in
                     Text(status.displayName).tag(status.rawValue)
                 }
@@ -170,6 +330,7 @@ private struct RuleRow: View {
 
         case .priority:
             Picker("Value", selection: $rule.value) {
+                invalidChoice
                 ForEach([TaskPriority.high, .medium, .low, TaskPriority.none], id: \.filterToken) { pri in
                     // Display the label, store the token. The tag is written into
                     // SavedFilter.rulesData on disk and must never be a localized string.
@@ -177,40 +338,29 @@ private struct RuleRow: View {
                 }
             }
 
-        case .tag:
-            if tags.isEmpty {
-                Text("No tags available").foregroundStyle(.secondary)
-            } else {
-                Picker("Value", selection: $rule.value) {
-                    ForEach(tags) { tag in
-                        Text(tag.name).tag(tag.name)
-                    }
-                }
-            }
-
-        case .list:
+        case .tag, .list:
+            let choices = rule.field == .tag ? tagNames : listNames
             Picker("Value", selection: $rule.value) {
-                ForEach(lists) { list in
-                    Text(list.name).tag(list.name)
+                invalidChoice
+                if rule.canonicalValue != nil, !choices.contains(rule.value) {
+                    Text(verbatim: rule.value).tag(rule.value)
+                }
+                ForEach(choices, id: \.self) { name in
+                    Text(verbatim: name).tag(name)
                 }
             }
 
         case .dueDateBefore, .dueDateAfter:
-            DatePicker(
-                "Date",
-                selection: Binding(
-                    get: {
-                        ISO8601DateFormatter().date(from: rule.value) ?? Date()
-                    },
-                    set: {
-                        rule.value = ISO8601DateFormatter().string(from: $0)
-                    }
-                ),
-                displayedComponents: .date
-            )
+            if let date = rule.dateValue {
+                DatePicker("Date", selection: Binding(get: { rule.dateValue ?? date }, set: { rule.setDate($0) }),
+                           displayedComponents: .date)
+            } else {
+                Text(FilterRepairCopy.chooseValue)
+            }
 
         case .hasDueDate:
             Picker("Value", selection: $rule.value) {
+                invalidChoice
                 Text("Yes").tag("true")
                 Text("No").tag("false")
             }
@@ -219,6 +369,11 @@ private struct RuleRow: View {
         case .title:
             TextField("Value", text: $rule.value)
         }
+    }
+
+    @ViewBuilder
+    private var invalidChoice: some View {
+        if rule.canonicalValue == nil { Text(FilterRepairCopy.chooseValue).tag(rule.value) }
     }
 }
 

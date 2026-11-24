@@ -8,8 +8,8 @@ import Foundation
 /// would push its values past other columns' and reshuffle the list's own manual
 /// order, and would mark every card in the column for upload over a single drag.
 /// So a moved card takes a value between its two new neighbours and nothing else
-/// is written. The column is renumbered only when those neighbours leave no
-/// integer between them, which happens when several tasks share a seeded value.
+/// is written. The column is renumbered only when there are too few usable
+/// ranks between those neighbours or too little space at an end.
 ///
 /// An index here always counts the column's *other* cards — the column without
 /// the ones being moved. The drop position and the Move actions both measure it
@@ -61,29 +61,40 @@ enum KanbanReorder {
     }
 
     /// Sort values for `count` cards placed, in order, between two neighbours, or
-    /// `nil` when there are not enough free integers between them.
+    /// `nil` when there are not enough usable ranks between them.
     ///
-    /// The ends of a column always have room. They step by
-    /// `TaskListHelpers.manualSortSpacing` rather than by one, so the next card
-    /// dropped beside this one finds a gap waiting.
+    /// At an end, step by `manualSortSpacing` to leave space for future drops.
+    /// Both a gap across the full Int range and its interpolation products fit
+    /// in Int128, and results are checked before narrowing at the ends.
     ///
     /// - Parameters:
     ///   - above: The sort value of the card that will sit above, or `nil` at the top.
     ///   - below: The sort value of the card that will sit below, or `nil` at the bottom.
     static func sortOrders(count: Int, between above: Int?, and below: Int?) -> [Int]? {
         guard count > 0 else { return [] }
-        let spacing = TaskListHelpers.manualSortSpacing
+        let spacing = Int128(TaskListHelpers.manualSortSpacing)
+        let offset = Int128(count) * spacing
         switch (above, below) {
         case (nil, nil):
             return nil
         case (nil, let below?):
-            return (0..<count).map { below - (count - $0) * spacing }
+            guard Int(exactly: TaskListHelpers.manualRank(offset: -offset, from: below)) != nil else { return nil }
+            return (0..<count).map {
+                Int(TaskListHelpers.manualRank(offset: -Int128(count - $0) * spacing, from: below))
+            }
         case (let above?, nil):
-            return (1...count).map { above + $0 * spacing }
+            guard Int(exactly: TaskListHelpers.manualRank(offset: offset, from: above)) != nil else { return nil }
+            return (1...count).map {
+                Int(TaskListHelpers.manualRank(offset: Int128($0) * spacing, from: above))
+            }
         case (let above?, let below?):
-            let gap = below - above
-            guard gap > count else { return nil }
-            return (1...count).map { above + gap * $0 / (count + 1) }
+            let skippedZero = above < 0 && below > 0 ? 1 : 0
+            let gap = Int128(below) - Int128(above) - Int128(skippedZero)
+            guard gap > Int128(count) else { return nil }
+            let divisor = Int128(count) + 1
+            return (1...count).map {
+                Int(TaskListHelpers.manualRank(offset: gap * Int128($0) / divisor, from: above))
+            }
         }
     }
 
@@ -98,7 +109,14 @@ enum KanbanReorder {
     ///   - index: Where they go, counted among `others`. Clamped to the column.
     ///   - others: The destination column's other cards, in ``columnOrder(_:)``.
     static func place(_ moving: [TaskItem], at index: Int, among others: [TaskItem]) {
-        guard !moving.isEmpty else { return }
+        let now = Date()
+        for assignment in assignments(for: moving, at: index, among: others) {
+            TaskListHelpers.setManualRank(assignment.rank, on: assignment.task, now: now)
+        }
+    }
+
+    static func assignments(for moving: [TaskItem], at index: Int, among others: [TaskItem]) -> [(task: TaskItem, rank: Int)] {
+        guard !moving.isEmpty else { return [] }
         let moving = columnOrder(moving)
         let index = min(max(index, 0), others.count)
         let above = index > 0 ? others[index - 1].effectiveSortOrder : nil
@@ -108,19 +126,16 @@ enum KanbanReorder {
         let ascending = zip(current, current.dropFirst()).allSatisfy { $0 < $1 }
         let clearsAbove = above.map { $0 < current[0] } ?? true
         let clearsBelow = below.map { current[current.count - 1] < $0 } ?? true
-        if ascending && clearsAbove && clearsBelow { return }
+        if ascending && clearsAbove && clearsBelow { return [] }
 
         if let values = sortOrders(count: moving.count, between: above, and: below) {
-            for (task, value) in zip(moving, values) {
-                task.manualSortOrder = value
-                task.isDirty = true
-                task.lastModifiedDate = Date()
+            return zip(moving, values).compactMap { task, value in
+                task.manualSortOrder == value ? nil : (task, value)
             }
-        } else {
-            var column = others
-            column.insert(contentsOf: moving, at: index)
-            TaskListHelpers.assignManualOrder(column)
         }
+        var column = others
+        column.insert(contentsOf: moving, at: index)
+        return TaskListHelpers.manualOrderAssignments(column, ascending: true)
     }
 
     /// The index `move` sends the card at `position` to, counted among the

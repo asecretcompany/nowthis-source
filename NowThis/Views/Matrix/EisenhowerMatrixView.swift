@@ -308,7 +308,7 @@ private struct QuadrantCell: View {
 
 // MARK: - Matrix Task Row
 
-private struct MatrixTaskRow: View {
+struct MatrixTaskRow: View {
     let data: TaskGlanceData
     let tintColor: Color
     let onTap: () -> Void
@@ -327,8 +327,8 @@ private struct MatrixTaskRow: View {
 
                 Spacer(minLength: 2)
 
-                if let due = data.dueDate {
-                    Text(due, format: .dateTime.month(.abbreviated).day())
+                if let due = data.dueDate, let dueLabel = dueDateLabel() {
+                    Text(dueLabel)
                         .font(.system(size: 9))
                         .foregroundStyle(
                             DueDateHelper.isOverdue(dueDate: due, isDateOnly: data.isDueDateOnly)
@@ -343,6 +343,14 @@ private struct MatrixTaskRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: data.title))
+        .accessibilityValue(data.spokenAllDayDueDate() ?? "")
         .accessibilityHint("Double tap to open task details")
+    }
+
+    func dueDateLabel(timeZone: TimeZone = .current) -> String? {
+        data.dueDate.map {
+            DueDateFormatter.format($0, isDateOnly: data.isDueDateOnly, timeZone: timeZone,
+                                    timedStyle: .dateTime.month(.abbreviated).day())
+        }
     }
 }

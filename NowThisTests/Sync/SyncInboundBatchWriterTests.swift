@@ -6,6 +6,52 @@ import Testing
 @Suite("Atomic inbound batches", .serialized)
 @MainActor
 struct SyncInboundBatchWriterTests {
+    @Test("Batch prefetch preserves lazy malformed-state handling", arguments: [false, true])
+    func malformedOpaqueIsOnlyDecodedWhenConsumed(dirty: Bool) throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let list = TaskList(id: "lazy", serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        let task = TaskItem(uid: "malformed", title: "Keep")
+        task.taskList = list; task.isDirty = false; task.etag = "e1"
+        task.remoteHref = "/one/malformed.ics"; task.isLocalOnly = false
+        context.insert(list); context.insert(task)
+        let row = SyncMetadata(id: VTODOOpaqueState.prefix + task.id, collectionPath: "")
+        row.syncToken = "not-json"; context.insert(row); try context.save()
+        // A pending UI edit is excluded before opaque state is consumed. A saved
+        // dirty task still follows the existing destination-repair guard path.
+        if dirty { task.title = "Keep"; task.isDirty = true }
+        let remote = ParsedRemoteTask(href: task.remoteHref!, etag: "e2",
+            todo: try ICalendarParser.parseSingleVTODO(from: "BEGIN:VTODO\nUID:malformed\nSUMMARY:Replace\nEND:VTODO"))
+        let writer = SyncInboundBatchWriter(container: container, listID: list.id)
+        if dirty { _ = try writer.apply([remote]) }
+        else { #expect(throws: VTODOOpaqueState.StateError.self) { _ = try writer.apply([remote]) } }
+        #expect(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first?.title == "Keep")
+    }
+    @Test("One transaction prefetches opaque metadata once for a hundred changed tasks")
+    func opaqueReadsAreBatched() throws {
+        let container = try DAVSyncScenario.container()
+        let main = container.mainContext
+        let list = TaskList(id: "opaque-batch", serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        main.insert(list); try main.save()
+        func batch(_ etag: String) throws -> [ParsedRemoteTask] {
+            try (0..<100).map { index in
+                ParsedRemoteTask(href: "/one/row-\(index).ics", etag: etag,
+                    todo: try ICalendarParser.parseSingleVTODO(from:
+                        "BEGIN:VTODO\nUID:row-\(index)\nSUMMARY:\(etag)\nX-CUSTOM:kept\nEND:VTODO"))
+            }
+        }
+        let writer = SyncInboundBatchWriter(container: container, listID: list.id)
+        _ = try writer.apply(batch("e1"))
+        _ = try writer.apply(batch("e2"))
+        #expect(writer.lastOpaqueFetchCount == 1)
+        let fresh = ModelContext(container)
+        let tasks = try fresh.fetch(FetchDescriptor<TaskItem>())
+        #expect(tasks.count == 100)
+        #expect(tasks.allSatisfy { $0.etag == "e2" && $0.title == "e2" })
+        for task in tasks {
+            #expect(try VTODOOpaqueState.load(taskID: task.id, in: fresh)?.opaqueProperties == ["X-CUSTOM:kept"])
+        }
+    }
     @Test("Edits after an earlier cached read stay authoritative", arguments: [true, false])
     func newerLocalEdit(save: Bool) throws {
         let container = try DAVSyncScenario.container()

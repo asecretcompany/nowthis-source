@@ -25,7 +25,7 @@ struct WatchBridgeIsWatchPairedAndInstalledTests {
         spy.isWatchAppInstalled = true
         let bridge = WatchBridge(
             session: spy,
-            entitlement: ProEntitlement(),
+            entitlement: ProEntitlement(client: ProStoreTestClient(), cache: ProEntitlementCache(defaults: nil)),
             syncScheduler: SyncScheduler(),
             modelContainer: try makeContainer()
         )
@@ -39,7 +39,7 @@ struct WatchBridgeIsWatchPairedAndInstalledTests {
         spy.isWatchAppInstalled = true
         let bridge = WatchBridge(
             session: spy,
-            entitlement: ProEntitlement(),
+            entitlement: ProEntitlement(client: ProStoreTestClient(), cache: ProEntitlementCache(defaults: nil)),
             syncScheduler: SyncScheduler(),
             modelContainer: try makeContainer()
         )
@@ -53,7 +53,7 @@ struct WatchBridgeIsWatchPairedAndInstalledTests {
         spy.isWatchAppInstalled = false
         let bridge = WatchBridge(
             session: spy,
-            entitlement: ProEntitlement(),
+            entitlement: ProEntitlement(client: ProStoreTestClient(), cache: ProEntitlementCache(defaults: nil)),
             syncScheduler: SyncScheduler(),
             modelContainer: try makeContainer()
         )
@@ -64,7 +64,7 @@ struct WatchBridgeIsWatchPairedAndInstalledTests {
     @Test func falseWhenSessionIsNil() throws {
         let bridge = WatchBridge(
             session: nil,
-            entitlement: ProEntitlement(),
+            entitlement: ProEntitlement(client: ProStoreTestClient(), cache: ProEntitlementCache(defaults: nil)),
             syncScheduler: SyncScheduler(),
             modelContainer: try makeContainer()
         )

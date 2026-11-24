@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import NowThis
 
 @Suite("Bounded DAV response bodies", .serialized)
@@ -12,6 +13,102 @@ struct DAVResponseLimitTests {
 
     private func request(_ path: String) -> URLRequest {
         URLRequest(url: URL(string: "https://dav-response-limit.invalid/\(path)")!)
+    }
+
+    @Test("DAV redirect hop budget rejects the sixth hop and resets after completion")
+    func redirectHopLimit() {
+        let budget = DAVRedirectBudget()
+        for _ in 0..<5 { #expect(budget.allow(taskID: 1)) }
+        #expect(!budget.allow(taskID: 1))
+        #expect(budget.allow(taskID: 2))
+        budget.complete(taskID: 1)
+        #expect(budget.allow(taskID: 1))
+    }
+
+    @Test("Rejected streaming redirects drain and respect caller cancellation", arguments: [false, true])
+    func redirectPolicyCannotBeBypassed(cancelled: Bool) async throws {
+        let host = "redirect-" + UUID().uuidString.lowercased() + ".invalid"
+        let gate = ScriptedDAVProtocol.Gate()
+        defer { gate.release() }
+        let config = ScriptedDAVProtocol.install(host: host, responses: [.init(status: 200, body: "ok", gate: gate), .init(status: 200, body: "next")])
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let original = URLRequest(url: URL(string: "https://" + host + "/tasks/")!)
+        let limit = DAVResponseLimit(maxBytes: 8)
+        let result = Task { try await limit.data(for: original, configuration: config, session: session) { _ in nil } }
+        for _ in 0..<100 where ScriptedDAVProtocol.requests(host: host).isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let active = try #require(await session.allTasks.first)
+        let response = HTTPURLResponse(url: original.url!, statusCode: 307, httpVersion: "HTTP/1.1", headerFields: [:])!
+        let target = URLRequest(url: URL(string: "https://foreign.invalid/private")!)
+        limit.urlSession(session, task: active, willPerformHTTPRedirection: response, newRequest: target) { rebuilt in
+            #expect(rebuilt == nil)
+            // Cancel while the redirect callback is still running, before the
+            // delegate cancels/drains the rejected transport task.
+            if cancelled { result.cancel() }
+        }
+        gate.release()
+        do {
+            _ = try await result.value
+            Issue.record("Rejected redirect completed successfully")
+        } catch is CancellationError { #expect(cancelled) }
+        catch let error as DAVRedirectRejection {
+            #expect(!cancelled)
+            #expect(error.httpStatus == 307)
+        }
+        #expect(await session.allTasks.isEmpty)
+        let next = try await DAVResponseLimit(maxBytes: 8).data(for: original, configuration: config, session: session) { $0 }
+        #expect(next.0 == Data("next".utf8))
+    }
+
+    @Test("Caller cancellation drains a redirect whose validation is suspended")
+    func cancellationDrainsPendingRedirectValidation() async throws {
+        let host = "cancel-redirect-" + UUID().uuidString.lowercased() + ".invalid"
+        let responseGate = ScriptedDAVProtocol.Gate()
+        let validationEntered = ScriptedDAVProtocol.Gate()
+        let validationGate = ScriptedDAVProtocol.Gate()
+        let validatorWasCancelled = Mutex(false)
+        defer { responseGate.release(); validationGate.release() }
+        let config = ScriptedDAVProtocol.install(host: host, responses: [
+            .init(status: 200, body: "ok", gate: responseGate)
+        ])
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let url = try #require(URL(string: "https://" + host + "/tasks/original.ics"))
+        let target = try #require(URL(string: "https://" + host + "/tasks/redirected.ics"))
+        let limit = DAVResponseLimit()
+        let result = Task {
+            try await limit.data(for: URLRequest(url: url), configuration: config, session: session,
+                validateRedirect: {
+                    await withTaskCancellationHandler {
+                        validationEntered.release()
+                        await validationGate.wait()
+                    } onCancel: {
+                        validatorWasCancelled.withLock { $0 = true }
+                        validationGate.release()
+                    }
+                }) { $0 }
+        }
+        for _ in 0..<100 where ScriptedDAVProtocol.requests(host: host).isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let active = try #require(await session.allTasks.first)
+        let response = try #require(HTTPURLResponse(url: url, statusCode: 307, httpVersion: "HTTP/1.1", headerFields: [:]))
+        let decision = Task {
+            await withCheckedContinuation { continuation in
+                limit.urlSession(session, task: active, willPerformHTTPRedirection: response,
+                    newRequest: URLRequest(url: target)) { request in
+                    continuation.resume(returning: request)
+                }
+            }
+        }
+        await validationEntered.wait()
+        result.cancel()
+        #expect(await decision.value == nil)
+        #expect(validatorWasCancelled.withLock { $0 })
+        await #expect(throws: CancellationError.self) { try await result.value }
+        #expect(await session.allTasks.isEmpty)
     }
 
     @Test("Bounded requests reuse the supplied session and leave it available after completion")
@@ -100,6 +197,75 @@ struct DAVResponseLimitTests {
         } catch let error as DAVResponseLimitError {
             #expect(error.limit == 8)
         }
+    }
+
+    @Test("Every mutation rejects oversized success and error replies", arguments: ["PUT", "DELETE", "PROPPATCH", "MKCALENDAR", "PROPFIND"], [false, true])
+    func allMethodsUseConfiguredLimit(method: String, declared: Bool) async throws {
+        for status in [200, 500] {
+            let host = "mutation-\(UUID().uuidString.lowercased()).invalid"
+            let config = ScriptedDAVProtocol.install(host: host, responses: [
+                .init(status: status, body: String(repeating: "x", count: 65),
+                      headers: declared ? ["Content-Length": "65"] : [:])
+            ])
+            let client = CalDAVClient(configuration: config,
+                retryPolicy: RetryPolicy(maxAttempts: 3, baseDelay: 0), maxResponseBytes: 64)
+            let credentials = CalDAVClient.Credentials(username: "user", password: "pass")
+            do {
+                switch method {
+                case "PUT":
+                    _ = try await client.putTask(baseURL: "https://\(host)", taskPath: "/tasks/item.ics",
+                        icsData: "BEGIN:VTODO\nUID:item\nEND:VTODO", etag: "original", credentials: credentials)
+                case "DELETE":
+                    try await client.deleteTask(baseURL: "https://\(host)", taskPath: "/tasks/item.ics",
+                        etag: "original", credentials: credentials)
+                case "PROPPATCH":
+                    try await client.updateCalendarProperties(baseURL: "https://\(host)", calendarPath: "/tasks/",
+                        name: "Tasks", colorHex: "#ffffff", credentials: credentials)
+                case "MKCALENDAR":
+                    _ = try await client.createCalendar(baseURL: "https://\(host)", calendarHomePath: "/", listID: "fixture",
+                        name: "Tasks", color: nil, credentials: credentials)
+                default:
+                    _ = try await client.discoverPrincipal(baseURL: "https://\(host)", credentials: credentials)
+                }
+                Issue.record("Accepted oversized \(method) reply")
+            } catch let error as DAVResponseLimitError {
+                #expect(error.limit == 64)
+                #expect(error.responseBytes == 65)
+            } catch {
+                Issue.record("Expected size rejection before status/parse handling: \(error)")
+            }
+            let requests = ScriptedDAVProtocol.requests(host: host)
+            #expect(requests.count == 1, "Overflow must not replay an indeterminate mutation")
+            if method == "PUT" || method == "DELETE" {
+                #expect(requests.first?.ifMatch == "\"original\"")
+            }
+        }
+    }
+
+    @Test("Mutation replies reject chunked bodies with no declared length")
+    func chunkedMutationCancelsEarly() async throws {
+        let host = "chunked-mutation-\(UUID().uuidString.lowercased()).invalid"
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ChunkedMutationLimitProtocol.self]
+        let client = CalDAVClient(configuration: config,
+            retryPolicy: RetryPolicy(maxAttempts: 3, baseDelay: 0), maxResponseBytes: 8)
+        do {
+            _ = try await client.putTask(baseURL: "https://\(host)", taskPath: "/tasks/item.ics",
+                icsData: "BEGIN:VTODO\nUID:item\nEND:VTODO", etag: "original",
+                credentials: .init(username: "user", password: "pass"))
+            Issue.record("Accepted chunked mutation overflow")
+        } catch let error as DAVResponseLimitError {
+            // URLProtocol delivery can be coalesced by URLSession; the collector's
+            // per-chunk early cancellation is covered by the direct delegate test.
+            #expect((error.responseBytes ?? 0) > 8)
+        }
+        // Cancellation callbacks run on the session delegate queue.
+        for _ in 0..<100 where !ChunkedMutationLimitProtocol.metrics(host: host).stopped {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let metrics = ChunkedMutationLimitProtocol.metrics(host: host)
+        #expect(metrics.stopped)
+        #expect(metrics.chunks > 0 && metrics.chunks <= 32)
     }
 
     @Test("Conflict GET rejects an oversized body", arguments: [false, true])
@@ -252,5 +418,38 @@ private final class DAVResponseLimitURLProtocol: URLProtocol, @unchecked Sendabl
     private func makeResponse(headers: [String: String]) -> HTTPURLResponse? {
         guard let url = request.url else { return nil }
         return HTTPURLResponse(url: url, statusCode: 207, httpVersion: "HTTP/1.1", headerFields: headers)
+    }
+}
+
+private final class ChunkedMutationLimitProtocol: URLProtocol, @unchecked Sendable {
+    struct Metrics { var chunks = 0; var stopped = false }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [String: Metrics] = [:]
+    private var operation: Task<Void, Never>?
+
+    static func metrics(host: String) -> Metrics {
+        lock.withLock { recorded[host] ?? Metrics() }
+    }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let host = request.url!.host!
+        Self.lock.withLock { Self.recorded[host] = Metrics() }
+        operation = Task { @Sendable [self] in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                httpVersion: "HTTP/1.1", headerFields: [:])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            for _ in 0..<32 {
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
+                guard !Task.isCancelled else { return }
+                Self.lock.withLock { Self.recorded[host, default: Metrics()].chunks += 1 }
+                client?.urlProtocol(self, didLoad: Data(repeating: 0x61, count: 4))
+            }
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() {
+        Self.lock.withLock { Self.recorded[request.url!.host!, default: Metrics()].stopped = true }
+        operation?.cancel()
     }
 }

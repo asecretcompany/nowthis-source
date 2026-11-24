@@ -22,10 +22,14 @@ struct AccountEditView: View {
     @State private var testResult: TestResult?
     @State private var showDeleteConfirmation = false
     @State private var hasChanges = false
-    @StateObject private var loginCoordinator = LoginFlowCoordinator()
+    @State private var formAccountScope: AccountCredentialScope?
+    @State private var reauthAccountScope: AccountCredentialScope?
+    @State private var loginSaveTask: Task<Void, Never>?
+    @StateObject private var loginCoordinator = PerformanceLaunchFixture.makeLoginCoordinator()
 
-    fileprivate enum TestResult {
+    enum TestResult {
         case success
+        case reauthenticated
         case failure(String)
     }
 
@@ -46,7 +50,8 @@ struct AccountEditView: View {
                 if account.resolvedAuthMethod == .loginFlow {
                     ReauthenticateSection(
                         coordinator: loginCoordinator,
-                        serverURL: account.serverBaseURL
+                        credentialsUpdated: credentialsUpdated,
+                        startAction: startReauthentication
                     )
                 } else {
                     EditCredentialsSection(
@@ -79,7 +84,7 @@ struct AccountEditView: View {
         }
         .navigationTitle("Edit Account")
         .navigationBarTitleDisplayMode(.inline)
-        .disabled(isSaving)
+        .disabled(isSaving || loginSaveTask != nil)
         .onAppear { populateFields() }
         .onChange(of: displayName) { _, _ in checkChanges() }
         .onChange(of: serverURL) { _, _ in checkChanges() }
@@ -88,12 +93,20 @@ struct AccountEditView: View {
         .onChange(of: loginCoordinator.state) { _, newState in
             handleReauthState(newState)
         }
+        .onDisappear {
+            loginCoordinator.cancel()
+            reauthAccountScope = nil
+            loginSaveTask?.cancel()
+            loginSaveTask = nil
+        }
         }
     }
 
     // MARK: - Data
 
     private func populateFields() {
+        guard formAccountScope == nil else { return }
+        formAccountScope = AccountCredentialScope(account)
         displayName = account.displayName
         serverURL = account.serverBaseURL
         username = account.username
@@ -110,41 +123,60 @@ struct AccountEditView: View {
     // MARK: - Actions
 
     private func testConnection() async {
+        guard let formAccountScope else { return }
         isTesting = true
+        defer { isTesting = false }
         testResult = nil
+        testResult = await Self.performConnectionTest(account: formAccountScope,
+            serverURL: serverURL, username: username, password: password, in: modelContext)
+    }
 
+    @MainActor
+    static func performConnectionTest(
+        account: AccountCredentialScope, serverURL: String, username: String, password: String,
+        in context: ModelContext, keychainManager: KeychainManager = KeychainManager(),
+        configuration: URLSessionConfiguration? = nil
+    ) async -> TestResult? {
         let testPassword: String
         if password.isEmpty {
-            // Use existing Keychain password
-            let manager = AccountManager(modelContext: modelContext)
-            if let creds = try? await manager.getCredentials(for: account.id) {
-                testPassword = creds.password
-            } else {
-                testResult = .failure("No stored credentials found. Enter your password.")
-                isTesting = false
-                return
+            let manager = AccountManager(modelContext: context, keychainManager: keychainManager)
+            let credentials: (username: String, password: String)?
+            do {
+                credentials = try await manager.getCredentials(for: account.id, expected: account)
+            } catch is AccountCredentialDeferral {
+                return nil
+            } catch {
+                credentials = nil
             }
+            guard let credentials else {
+                return .failure("No stored credentials found. Enter your password.")
+            }
+            testPassword = credentials.password
         } else {
             testPassword = password
         }
 
-        let testURL = serverURL.isEmpty ? account.serverBaseURL : serverURL
+        var testURL = serverURL.isEmpty ? account.serverBaseURL : serverURL
+        if testURL == account.serverBaseURL,
+           let address = try? NextcloudDiscoverySeed.address(accountID: account.id, serverURL: account.serverBaseURL, in: context),
+           let seed = address.discoverySeed {
+            testURL = seed.absoluteString
+        }
         let testUser = username.isEmpty ? account.username : username
 
         do {
             let success = try await ServerURLValidator.testConnection(
                 baseURL: testURL,
                 username: testUser,
-                password: testPassword
+                password: testPassword,
+                configuration: configuration
             )
-            testResult = success
+            return success
                 ? .success
                 : .failure("Could not connect. Check your URL and credentials.")
         } catch {
-            testResult = .failure(error.localizedDescription)
+            return .failure(SyncFailure.connectionGuidance(for: error) ?? error.localizedDescription)
         }
-
-        isTesting = false
     }
 
     private func save() async {
@@ -170,33 +202,76 @@ struct AccountEditView: View {
     }
 
     private func deleteAccount() async {
+        guard !isSaving else { return }
+        isSaving = true
+        saveError = nil
+        defer { isSaving = false }
+        let accountID = account.id
         let manager = AccountManager(modelContext: modelContext)
-        try? await manager.removeAccount(accountID: account.id)
-        dismiss()
+        saveError = await Self.performAccountRemoval(
+            accountID: accountID, remove: manager.removeAccount,
+            dismiss: { dismiss() })
+    }
+
+    /// The async deletion boundary shared by the sheet and its failure regression.
+    @MainActor
+    static func performAccountRemoval(
+        accountID: String,
+        remove: (String) async throws -> Void,
+        dismiss: () -> Void
+    ) async -> String? {
+        do {
+            try await remove(accountID)
+            dismiss()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     // MARK: - Re-authentication (Login Flow)
 
+    private var credentialsUpdated: Bool {
+        if case .reauthenticated = testResult { return true }
+        return false
+    }
+
+    private func startReauthentication() {
+        let scope = AccountCredentialScope(account)
+        reauthAccountScope = scope
+        loginCoordinator.startLoginFlow(serverURL: scope.serverBaseURL)
+    }
+
     private func handleReauthState(_ state: LoginFlowCoordinator.State) {
         switch state {
-        case .success(_, let loginName, let appPassword):
-            Task {
-                do {
-                    let manager = AccountManager(modelContext: modelContext)
-                    try await manager.updateNextcloudAccount(
-                        accountID: account.id,
-                        username: loginName,
-                        password: appPassword
+        case .initiating:
+            saveError = nil
+            if credentialsUpdated { testResult = nil }
+        case .success(let server, let loginName, let appPassword):
+            guard loginSaveTask == nil, let initiatingScope = reauthAccountScope else { return }
+            reauthAccountScope = nil
+            loginSaveTask = Task {
+                defer { if !Task.isCancelled { loginSaveTask = nil } }
+                await AccountLoginSave.perform(save: {
+                    let manager = PerformanceLaunchFixture.loginAccountManager(in: modelContext)
+                    try await manager.reauthenticateNextcloudAccount(
+                        account: initiatingScope,
+                        returnedServer: server,
+                        loginName: loginName,
+                        appPassword: appPassword
                     )
+                }, onSuccess: {
                     saveError = nil
-                    testResult = .success
-                } catch {
-                    saveError = error.localizedDescription
-                }
+                    testResult = .reauthenticated
+                }, onFailure: { saveError = $0 })
             }
+            loginCoordinator.cancel()
         case .error(let message):
+            reauthAccountScope = nil
             saveError = message
-        default:
+        case .idle:
+            reauthAccountScope = nil
+        case .waitingForBrowser:
             break
         }
     }
@@ -228,13 +303,12 @@ private struct DisplayNameSection: View {
 
 private struct ReauthenticateSection: View {
     @ObservedObject var coordinator: LoginFlowCoordinator
-    let serverURL: String
+    let credentialsUpdated: Bool
+    let startAction: () -> Void
 
     var body: some View {
         Section {
-            Button {
-                coordinator.startLoginFlow(serverURL: serverURL)
-            } label: {
+            Button(action: startAction) {
                 HStack {
                     switch coordinator.state {
                     case .initiating:
@@ -258,7 +332,7 @@ private struct ReauthenticateSection: View {
             .accessibilityLabel("Re-authenticate with Nextcloud")
             .accessibilityHint("Opens your Nextcloud login page to generate a new app password")
 
-            if case .success = coordinator.state {
+            if credentialsUpdated {
                 Label("Credentials updated", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .font(.subheadline)
@@ -298,6 +372,11 @@ private struct ServerSection: View {
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .accessibilityLabel("Server URL")
+                }
+                if let address = try? NextcloudServerAddress.parse(serverURL), address.discoverySeed != nil {
+                    Text(String(format: String(localized: "account.server.normalization", defaultValue: "Server address: %@", comment: "Shows the installation server address extracted from a pasted CalDAV endpoint. The placeholder is the server URL."), address.baseURL.absoluteString))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         } header: {
@@ -389,6 +468,10 @@ private struct TestConnectionSection: View {
             if let result = testResult {
                 switch result {
                 case .success:
+                    Label("List discovery succeeded", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.subheadline)
+                case .reauthenticated:
                     Label("Connection successful", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.subheadline)

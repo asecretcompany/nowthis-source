@@ -40,6 +40,7 @@ extension RecurrenceRule {
     /// `TaskDetailView` — the same sentence in the same place in the UI, so the same key, and the
     /// plural forms live in the catalog rather than in an `interval == 1` test here.
     func displayText(in calendar: Calendar = .current) -> String {
+        guard isPickerRepresentable else { return Self.customDisplayText }
         var text: String
         if interval == 1 {
             text = frequency.displayName
@@ -65,13 +66,18 @@ extension RecurrenceRule {
         }
 
         if !byDay.isEmpty && frequency == .weekly {
-            let dayNames = byDay.map { $0.shortName(in: calendar) }.joined(separator: ", ")
+            let dayNames = plainWeekdays.map { $0.shortName(in: calendar) }.joined(separator: ", ")
             text = String(localized: "recurrence.displayText.onDays",
                           defaultValue: "\(text) on \(dayNames)",
                           comment: "Describes a weekly repeat restricted to certain weekdays, e.g. 'Weekly on Mon, Wed'. First placeholder is the already-localized frequency, second is the abbreviated weekday names joined with commas.")
         }
 
         return text
+    }
+
+    static var customDisplayText: String {
+        String(localized: "recurrence.preset.custom", defaultValue: "Custom",
+               comment: "Recurrence preset: the user defines their own interval and weekdays.")
     }
 
     /// Convenience for call sites that render in the user's current locale.

@@ -34,6 +34,7 @@ struct WatchSnapshot: Codable, Equatable {
     let defaultListID: String?
     var proAccessValidUntil: Date? = nil
     var testerProOverride: Bool? = nil
+    var receipts: [WatchOperationReceipt]? = nil
 
     func canEditTasks(at now: Date) -> Bool {
         testerProOverride == true || (isProUnlocked && (proAccessValidUntil.map { now < $0 } ?? true))
@@ -73,9 +74,23 @@ enum WatchEdit: Codable, Equatable {
     case add(rawText: String, listID: String?, dueDate: Date?, priorityRaw: Int?)
 
     private static let userInfoKey = "edit"
+    static let operationIDKey = "operationID"
+    static let receiptQueryKey = "receiptQuery"
+    static let receiptReplyKey = "receipts"
 
-    func userInfoDictionary() throws -> [String: Any] {
-        [Self.userInfoKey: try JSONEncoder().encode(self)]
+    var hasValidRawText: Bool {
+        guard case .add(let rawText, _, _, _) = self else { return true }
+        return rawText.utf8.count <= 16_000 && rawText.count <= 2_000
+    }
+
+    enum ValidationError: Error { case rawTextTooLong }
+
+
+    func userInfoDictionary(operationID: UUID? = nil) throws -> [String: Any] {
+        guard hasValidRawText else { throw ValidationError.rawTextTooLong }
+        var payload: [String: Any] = [Self.userInfoKey: try JSONEncoder().encode(self)]
+        if let operationID { payload[Self.operationIDKey] = operationID.uuidString }
+        return payload
     }
 
     init?(userInfoDictionary: [String: Any]) {
@@ -91,4 +106,34 @@ enum WatchEditReply {
     static let applied = "applied"
     static let locked = "locked"
     static let unknownTask = "unknownTask"
+    static let invalid = "invalid"
+    static let refusalReasonKey = "refusalReason"
+    static let unconfirmed = "unconfirmed"
+    static let unsupportedRecurrence = "unsupportedRecurrence"
+    // Optional application-context fields also report rejected queued edits to older transports.
+    static let completionFailureIDKey = "completionFailureID"
+    static let completionFailureUIDKey = "completionFailureUID"
+}
+
+/// Optional additive protocol fields: older peers ignore IDs/receipts and keep legacy reconciliation.
+struct WatchOperationReceipt: Codable, Equatable, Sendable {
+    let id: UUID
+    let result: String
+    let refusalReason: String?
+
+    init(id: UUID, result: String, refusalReason: String? = nil) {
+        self.id = id
+        self.result = result
+        self.refusalReason = refusalReason
+    }
+}
+
+enum WatchEditRefusalReason: String, Sendable {
+    case readOnlyList
+}
+
+struct WatchPendingOperation: Codable, Equatable, Identifiable {
+    let id: UUID
+    let edit: WatchEdit
+    let createdAt: Date
 }

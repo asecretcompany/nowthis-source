@@ -12,6 +12,22 @@ import Foundation
 /// LOCATION, GEO, URL, RELATED-TO, RRULE, X-APPLE-SORT-ORDER
 struct ICalendarParser {
 
+    /// Admission policy per VTODO. Test probes may explicitly inject larger budgets.
+    struct WorkLimits: Sendable {
+        var maxContentLines = 4_096
+        var maxOpaqueBytes = 1_048_576
+        var maxCategoryValues = 256
+        var maxCategoryNameBytes = 1_024
+        var maxCategoryBytes = 65_536
+        static let `default` = WorkLimits()
+    }
+
+    struct WorkLimitExceeded: Error, Equatable, Sendable {
+        enum Kind: Sendable { case contentLines, opaqueBytes, categoryValues, categoryNameBytes, categoryBytes }
+        let kind: Kind
+
+    }
+
     /// A parser-worker-owned cache of formatters for named timezone date-times.
     /// Formatting access is serialized; formatter instances never escape.
     final class FormatterCache: @unchecked Sendable {
@@ -73,6 +89,8 @@ struct ICalendarParser {
         var description: String?
         var photos: [TaskPhotoAttachment] = []
         var opaqueAttachments: [String] = []
+        var opaqueProperties: [String] = []
+        var alarmBlocks: [[String]] = []
         var status: String?
         var priority: Int = 0
         var percentComplete: Int = 0
@@ -107,91 +125,125 @@ struct ICalendarParser {
     /// - Parameter icsString: Raw iCalendar text content.
     /// - Returns: An array of parsed `VTODOData` records.
     /// - Throws: `ParserError.invalidFormat` if the content is not valid iCalendar.
-    static func parseVTODOs(from icsString: String) throws -> [VTODOData] {
-        try parseVTODOs(from: icsString, using: FormatterCache())
+    static func parseVTODOs(from icsString: String, limits: WorkLimits = .default) throws -> [VTODOData] {
+        try parseVTODOs(from: icsString, using: FormatterCache(), limits: limits)
     }
 
     /// Parses VTODOs using a cache owned by the calling parser worker.
     /// Reuse `formatterCache` across resources handled by that worker.
-    static func parseVTODOs(from icsString: String, using formatterCache: FormatterCache) throws -> [VTODOData] {
-        let unfolded = unfoldLines(icsString)
-        let lines = unfolded.components(separatedBy: .newlines)
-
+    static func parseVTODOs(from icsString: String, using formatterCache: FormatterCache, limits: WorkLimits = .default) throws -> [VTODOData] {
         var todos: [VTODOData] = []
-        var currentTodo: VTODOData?
+        var currentTodo = VTODOData()
         var inVTODO = false
         var inVALARM = false
         var alarmTrigger: String?
         var alarmParsed = false
+        var alarmBlock: [String] = []
 
-        for line in lines {
+        var contentLines = 0
+        var opaqueBytes = 0
+        var categoryBytes = 0
+        func chargeOpaque(_ count: Int) throws {
+            guard count <= limits.maxOpaqueBytes - opaqueBytes else {
+                throw WorkLimitExceeded(kind: .opaqueBytes)
+            }
+            opaqueBytes += count
+        }
+        try forEachUnfoldedLine(icsString, limits: limits, opaqueBytes: { opaqueBytes }, inAlarm: { inVALARM }, inTodo: { inVTODO }) { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
+            guard !trimmed.isEmpty else { return }
+            if inVTODO, trimmed != "END:VTODO" {
+                guard contentLines < limits.maxContentLines else { throw WorkLimitExceeded(kind: .contentLines) }
+                contentLines += 1
+            }
 
             if trimmed == "BEGIN:VTODO" {
+                guard !inVTODO else { throw VTODOOpaqueState.StateError.malformed }
                 inVTODO = true
                 inVALARM = false
                 alarmParsed = false
                 alarmTrigger = nil
                 currentTodo = VTODOData()
-                continue
+                contentLines = 0
+                opaqueBytes = 0
+                categoryBytes = 0
+                return
             }
 
             if trimmed == "END:VTODO" {
-                if let todo = currentTodo, !todo.uid.isEmpty {
-                    todos.append(todo)
+                guard !inVALARM else { throw VTODOOpaqueState.StateError.malformed }
+                if !currentTodo.uid.isEmpty {
+                    todos.append(currentTodo)
                 }
                 inVTODO = false
                 inVALARM = false
-                currentTodo = nil
-                continue
+                currentTodo = VTODOData()
+                return
             }
 
             // Handle nested VALARM component
             if inVTODO && trimmed == "BEGIN:VALARM" {
+                guard !inVALARM else { throw VTODOOpaqueState.StateError.malformed }
+                try chargeOpaque("BEGIN:VALARM".utf8.count)
+                alarmBlock = ["BEGIN:VALARM"]
                 inVALARM = true
                 alarmTrigger = nil
-                continue
+                return
             }
 
             if inVALARM && trimmed == "END:VALARM" {
+                try chargeOpaque("END:VALARM".utf8.count)
+                alarmBlock.append("END:VALARM")
+                guard VTODOOpaqueState.safeAlarm(alarmBlock) else { throw VTODOOpaqueState.StateError.malformed }
+                currentTodo.alarmBlocks.append(alarmBlock)
                 // Keep the first usable alarm. Malformed or unsupported triggers
                 // must not suppress a later reminder we can actually schedule.
                 if !alarmParsed, let trigger = alarmTrigger,
                    let seconds = parseDurationToSeconds(trigger) {
-                    currentTodo?.alarmTriggerSeconds = seconds
+                    currentTodo.alarmTriggerSeconds = seconds
                     alarmParsed = true
                 }
                 inVALARM = false
-                continue
+                return
             }
 
             if inVALARM {
+                try chargeOpaque(line.utf8.count)
+                alarmBlock.append(line)
                 // Parse VALARM properties (only TRIGGER needed)
                 let (name, value) = splitProperty(trimmed)
                 if name == "TRIGGER" {
                     alarmTrigger = value
                 }
-                continue
+                return
             }
 
-            if inVTODO, var todo = currentTodo {
+            if inVTODO {
                 if splitProperty(trimmed).name == "ATTACH" {
                     if let photo = try TaskPhotoAttachment.decode(trimmed) {
-                        guard !todo.photos.contains(where: { $0.id == photo.id }) else {
+                        guard !currentTodo.photos.contains(where: { $0.id == photo.id }) else {
                             throw TaskPhotoAttachmentError.duplicateIdentity
                         }
-                        guard todo.photos.count < 5 else { throw TaskPhotoAttachmentError.invalid }
-                        todo.photos.append(photo)
+                        guard currentTodo.photos.count < 5 else { throw TaskPhotoAttachmentError.invalid }
+                        currentTodo.photos.append(photo)
                     } else {
-                        todo.opaqueAttachments.append(trimmed)
+                        try chargeOpaque(trimmed.utf8.count)
+                        currentTodo.opaqueAttachments.append(trimmed)
                     }
                 }
-                parseTodoProperty(line: trimmed, into: &todo, formatterCache: formatterCache)
-                currentTodo = todo
+                let name = splitProperty(line).name
+                guard name != "BEGIN", name != "END" else { throw VTODOOpaqueState.StateError.malformed }
+                if name == "CATEGORIES" {
+                    if currentTodo.categories == nil { currentTodo.categories = [] }
+                    try appendCategories(splitProperty(line).value, to: &currentTodo.categories!, limits: limits, totalBytes: &categoryBytes)
+                } else {
+                    if isOpaqueProperty(line) { try chargeOpaque(line.utf8.count) }
+                    parseTodoProperty(line: line, into: &currentTodo, formatterCache: formatterCache)
+                }
             }
         }
 
+        guard !inVTODO && !inVALARM else { throw VTODOOpaqueState.StateError.malformed }
         return todos
     }
 
@@ -199,14 +251,143 @@ struct ICalendarParser {
     ///
     /// - Parameter icsString: Raw iCalendar text containing exactly one VTODO.
     /// - Returns: The parsed `VTODOData`, or `nil` if none found.
-    static func parseSingleVTODO(from icsString: String) throws -> VTODOData? {
-        try parseSingleVTODO(from: icsString, using: FormatterCache())
+    static func parseSingleVTODO(from icsString: String, limits: WorkLimits = .default) throws -> VTODOData? {
+        try parseSingleVTODO(from: icsString, using: FormatterCache(), limits: limits)
     }
 
     /// Parses one VTODO using a cache owned by the calling parser worker.
-    static func parseSingleVTODO(from icsString: String, using formatterCache: FormatterCache) throws -> VTODOData? {
-        let todos = try parseVTODOs(from: icsString, using: formatterCache)
+    static func parseSingleVTODO(from icsString: String, using formatterCache: FormatterCache, limits: WorkLimits = .default) throws -> VTODOData? {
+        let todos = try parseVTODOs(from: icsString, using: formatterCache, limits: limits)
         return todos.first
+    }
+
+    /// Enumerate slices of the original text; only the current unfolded line is copied.
+    /// Admission runs before a slice/continuation is materialized into that line.
+    private static func forEachUnfoldedLine(
+        _ input: String, limits: WorkLimits, opaqueBytes: () -> Int,
+        inAlarm: () -> Bool, inTodo: () -> Bool,
+        consume: (String) throws -> Void
+    ) throws {
+        var pending = ""
+        var hasPending = false
+        var index = input.startIndex
+        var physicalLines = 0
+        var canFold = false
+        while index < input.endIndex {
+            if physicalLines % 256 == 0 { try Task.checkCancellation() }
+            physicalLines += 1
+            let end = input[index...].firstIndex(where: { $0.isNewline }) ?? input.endIndex
+            let part = input[index..<end]
+            let continuation = hasPending && canFold && (part.first == " " || part.first == "\t")
+            if !continuation, hasPending {
+                try consume(pending)
+                pending = ""
+            }
+            let piece = continuation ? part.dropFirst() : part[...]
+            // Known scalar fields are bounded by the enclosing transport. Unknown
+            // fields and complete alarms have a stricter retention budget.
+            let prefix = String(pending.prefix(64)) + String(piece.prefix(64))
+            // Admission needs only the property name, not a colon after an arbitrarily
+            // long parameter list. A folded short name may still be incomplete.
+            let separator = prefix.firstIndex { $0 == ";" || $0 == ":" }
+            let name = String(separator.map { prefix[..<$0] } ?? prefix[...])
+                .trimmingCharacters(in: .whitespaces).uppercased()
+            let classified = name + ":"
+            let knownName = separator != nil || prefix.count >= 64
+            if inTodo(), (inAlarm() || (knownName && name != "RELATED-TO" && isOpaqueProperty(classified))) {
+                let remaining = limits.maxOpaqueBytes - opaqueBytes()
+                guard pending.utf8.count <= remaining,
+                      piece.utf8.count <= remaining - pending.utf8.count else {
+                    throw WorkLimitExceeded(kind: .opaqueBytes)
+                }
+            }
+            pending.append(contentsOf: piece)
+            hasPending = true
+            if end != input.endIndex {
+                canFold = input[end] == "\n" || input[end] == "\r" || input[end] == "\r\n"
+            }
+            index = end == input.endIndex ? end : input.index(after: end)
+        }
+        if hasPending { try consume(pending) }
+        try Task.checkCancellation()
+    }
+
+    private static func isOpaqueProperty(_ line: String) -> Bool {
+        let name = splitProperty(line).name
+        switch name {
+        case "UID", "SUMMARY", "DESCRIPTION", "STATUS", "PRIORITY", "PERCENT-COMPLETE",
+             "DUE", "DTSTART", "COMPLETED", "CREATED", "LAST-MODIFIED", "CATEGORIES",
+             "LOCATION", "GEO", "URL", "RRULE", "X-APPLE-SORT-ORDER", "DTSTAMP", "ATTACH",
+             "BEGIN", "END": return false
+        case "RELATED-TO": return !VTODOOpaqueState.isParentRelationship(line)
+        default: return true
+        }
+    }
+
+    /// Decode and append one value at a time, without an intermediate category
+    /// array. Delay whitespace until a following non-whitespace scalar proves it
+    /// is internal, allowing arbitrarily padded empty values without retaining it.
+    private static func appendCategories(
+        _ value: String, to categories: inout [String], limits: WorkLimits,
+        totalBytes: inout Int
+    ) throws {
+        var decoded = ""
+        var decodedBytes = 0
+        var whitespace = ""
+        var whitespaceBytes = 0
+        var escaping = false
+        var visited = 0
+        func append(_ scalar: Unicode.Scalar) throws {
+            if CharacterSet.whitespaces.contains(scalar) {
+                guard !decoded.isEmpty else { return }
+                // Count all pending whitespace but only retain a bounded prefix.
+                whitespaceBytes += scalar.utf8.count
+                if whitespaceBytes <= limits.maxCategoryNameBytes { whitespace.unicodeScalars.append(scalar) }
+                return
+            }
+            let bytes = scalar.utf8.count
+            guard whitespaceBytes <= limits.maxCategoryNameBytes - decodedBytes,
+                  bytes <= limits.maxCategoryNameBytes - decodedBytes - whitespaceBytes else {
+                throw WorkLimitExceeded(kind: .categoryNameBytes)
+            }
+            decoded += whitespace
+            decoded.unicodeScalars.append(scalar)
+            decodedBytes += whitespaceBytes + bytes
+            whitespace = ""
+            whitespaceBytes = 0
+        }
+        func finish() throws {
+            if !decoded.isEmpty {
+                guard categories.count < limits.maxCategoryValues else { throw WorkLimitExceeded(kind: .categoryValues) }
+                guard decodedBytes <= limits.maxCategoryBytes - totalBytes else { throw WorkLimitExceeded(kind: .categoryBytes) }
+                totalBytes += decodedBytes
+                categories.append(decoded)
+            }
+            decoded = ""
+            decodedBytes = 0
+            whitespace = ""
+            whitespaceBytes = 0
+        }
+        for scalar in value.unicodeScalars {
+            if visited % 256 == 0 { try Task.checkCancellation() }
+            visited += 1
+            if escaping {
+                switch scalar {
+                case "n", "N": try append("\n")
+                case ",", ";", "\\": try append(scalar)
+                default: try append("\\"); try append(scalar)
+                }
+                escaping = false
+            } else if scalar == "\\" {
+                escaping = true
+            } else if scalar == "," {
+                try finish()
+            } else {
+                try append(scalar)
+            }
+        }
+        if escaping { try append("\\") }
+        try finish()
     }
 
     // MARK: - VJOURNAL Parsing
@@ -325,16 +506,6 @@ struct ICalendarParser {
             todo.createdDate = parseDate(value)
         case "LAST-MODIFIED":
             todo.lastModifiedDate = parseDate(value)
-        case "CATEGORIES":
-            // Split only at the commas between values, then unescape each one: a
-            // comma inside a category arrives as `\,` (RFC 5545 §3.3.11), from
-            // Thunderbird and from our own serializer alike.
-            let cats = splitAtUnescapedCommas(value)
-                .map { unescapeText($0).trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            // Seed on first sight, so a bare `CATEGORIES:` survives as [] rather
-            // than nil. Presence is the signal; the content is the instruction.
-            todo.categories = (todo.categories ?? []) + cats
         case "LOCATION":
             todo.location = unescapeText(value)
         case "GEO":
@@ -347,15 +518,17 @@ struct ICalendarParser {
             todo.url = value
         case "RELATED-TO":
             // Check for RELTYPE=PARENT parameter
-            if line.uppercased().contains("RELTYPE=PARENT") || !line.contains("RELTYPE") {
+            if VTODOOpaqueState.isParentRelationship(line) {
                 todo.parentUID = value
-            }
+            } else { todo.opaqueProperties.append(line) }
         case "RRULE":
             todo.recurrenceRule = value
         case "X-APPLE-SORT-ORDER":
             todo.manualSortOrder = Int(value.trimmingCharacters(in: .whitespaces))
+        case "DTSTAMP", "ATTACH":
+            break
         default:
-            break // Ignore unknown properties
+            todo.opaqueProperties.append(line)
         }
     }
 
@@ -395,31 +568,6 @@ struct ICalendarParser {
             }
         }
         return nil
-    }
-
-    /// Splits a multi-valued TEXT property at the commas that separate its
-    /// values. Escapes are kept for `unescapeText`, so `\,` stays inside its
-    /// value and `\\,` is an escaped backslash followed by a separator.
-    private static func splitAtUnescapedCommas(_ value: String) -> [String] {
-        var parts: [String] = []
-        var current = ""
-        var escaping = false
-        for char in value {
-            if escaping {
-                current.append(char)
-                escaping = false
-            } else if char == "\\" {
-                current.append(char)
-                escaping = true
-            } else if char == "," {
-                parts.append(current)
-                current = ""
-            } else {
-                current.append(char)
-            }
-        }
-        parts.append(current)
-        return parts
     }
 
     // MARK: - Date Parsing

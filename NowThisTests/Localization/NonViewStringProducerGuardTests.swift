@@ -80,6 +80,7 @@ struct NonViewStringProducerGuardTests {
     /// catalog, so a key from one of these must land in both or the widget ships English.
     static let sharedWithWidget: Set<String> = [
         "NowThis/Intents/CompleteTaskIntent.swift",
+        "NowThis/Intents/TaskEntity.swift",
         "NowThis/Intents/WidgetConfigurationIntent.swift",
     ]
 
@@ -140,9 +141,6 @@ struct NonViewStringProducerGuardTests {
         "httpBody",
         "URL(string:",
         "Notification.Name(",
-        // The MKCALENDAR request body: an XML document, in a multiline literal, with English
-        // element names that are part of the CalDAV schema.
-        "mkCalBody",
     ]
 
     /// A literal that is neither copy-to-translate nor covered by a marker. Every entry states
@@ -206,37 +204,55 @@ struct NonViewStringProducerGuardTests {
                   reason: "RRULE fragment emitted during serialization."),
         Exemption(file: "NowThis/Utilities/RecurrenceRule.swift", text: "UNTIL=\\(…)",
                   reason: "RRULE fragment emitted during serialization."),
-        // ---- Time zone identifier, not a place name a reader sees.
-        Exemption(file: "NowThis/Utilities/DueDateFormatter.swift", text: "UTC",
-                  reason: "IANA time zone identifier. Date-only values are stored as midnight UTC and must be rendered in UTC to keep the stored day."),
-        Exemption(file: "NowThis/Calendar/AppleCalendarSyncManager.swift", text: "NowThis",
-                  reason: "The EventKit calendar's title. Product name — never translated, and it "
-                        + "is also the lookup key used to find the calendar again."),
-        Exemption(file: "NowThis/Calendar/AppleCalendarSyncManager.swift", text: "nowthis_calendar_id",
-                  reason: "UserDefaults key."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarStore.swift", text: "NowThis",
+                  reason: "Product name used only for a newly created EventKit calendar title; never an ownership lookup key."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarOwnership.swift", text: "com.asecretcompany.nowthis.calendar-ownership",
+                  reason: "Private device-only Keychain service identifier, never presented to the user."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarOwnership.swift", text: "destination",
+                  reason: "Private ownership destination row-key suffix, never displayed."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarOwnership.swift", text: "link:",
+                  reason: "Private per-task ownership row-key prefix, never displayed."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarOwnership.swift", text: "item:",
+                  reason: "Private exact EventKit item claim row-key prefix, never displayed."),
+        Exemption(file: "NowThis/Calendar/AppleCalendarOwnership.swift", text: "apple-calendar-mirror-v1:",
+                  reason: "Versioned SyncMetadata protocol namespace, never presented to the user."),
         Exemption(file: "NowThis/Services/GeofenceManager.swift", text: "geofence-\\(…)-\\(…)",
                   reason: "Notification request identifier."),
         Exemption(file: "NowThis/Services/ReminderScheduler.swift", text: "XCTestConfigurationFilePath",
                   reason: "Environment variable XCTest sets in a process it launched. Read, never displayed."),
-        Exemption(file: "NowThis/Calendar/NextcloudCalendarSyncManager.swift", text: "nowthis-calendar",
-                  reason: "Path slug in the CalDAV collection URL."),
-        Exemption(file: "NowThis/Calendar/NextcloudCalendarSyncManager.swift",
-                  text: "/remote.php/dav/calendars/\\(…)/\\(…)/",
-                  reason: "Nextcloud's CalDAV URL layout."),
-        Exemption(file: "NowThis/Calendar/NextcloudCalendarSyncManager.swift", text: "\\(…)-event",
-                  reason: "Derived iCalendar UID."),
-        Exemption(file: "NowThis/Calendar/NextcloudCalendarSyncManager.swift", text: "\\(…)\\(…).ics",
-                  reason: "Resource path on the server."),
+        Exemption(file: "NowThis/Calendar/NextcloudCalendarTransport.swift", text: "Invalid strong ETag",
+                  reason: "Internal decoder diagnostic for a corrupt receipt. The store converts it to an ownership hold."),
         Exemption(file: "NowThis/Auth/LoginFlowClient.swift", text: "NowThis/1.0 (iOS)",
                   reason: "HTTP User-Agent sent to Nextcloud."),
+        Exemption(file: "NowThis/Auth/LoginFlowClient.swift", text: "https",
+                  reason: "URL scheme checked before sending login requests or opening the browser. Wire token, never displayed."),
         Exemption(file: "NowThis/Auth/LoginFlowCoordinator.swift", text: "nowthis-auth",
                   reason: "Custom URL scheme the login callback arrives on."),
+        Exemption(file: "NowThis/Keychain/KeychainManager.swift", text: "com.asecretcompany.nowthis.pro-cache",
+                  reason: "Private Keychain service identifier for cache authentication, never displayed."),
+        Exemption(file: "NowThis/Keychain/KeychainManager.swift", text: "snapshot-signing.v1",
+                  reason: "Keychain item account identifier for the cache signing key, never displayed."),
         Exemption(file: "NowThis/Keychain/AccountManager.swift", text: "#007AFF",
                   reason: "Default list colour, a hex literal."),
         Exemption(file: "NowThis/Services/TaskPhotoOriginals.swift",
                   text: "Application Support/TaskPhotoOriginals",
                   reason: "Private filesystem directory for locally cached photo originals."),
-    ]
+    ] + ["GET", "PUT", "DELETE", "ETag"].map {
+        Exemption(file: "NowThis/Calendar/NextcloudCalendarTransport.swift", text: $0,
+                  reason: "HTTP method or conditional-version header for VEVENT requests.")
+    } + ["calendar-mirror-v1:\\(…)", "nowthis-mirror-\\(…)", "nowthis-calendar", "nowthis-mirror-",
+         "nowthis-\\(…)@nowthis.app", "\\(…).ics"].map {
+        Exemption(file: "NowThis/Calendar/NextcloudCalendarReceipts.swift", text: $0,
+                  reason: "Wire identity for a DAV calendar or event, or a reserved collection path used to hold legacy claims.")
+    } + ["calendar-nextcloud-v1:", "destination:", "event:", "claim:"].map {
+        Exemption(file: "NowThis/Calendar/NextcloudCalendarReceipts.swift", text: $0,
+                  reason: "Private SyncMetadata receipt namespace or row-key segment.")
+    } + ["X-NOWTHIS-MIRROR-OPERATION", "UID", "DTSTAMP", "DTSTART", "DTEND", "SUMMARY", "STATUS",
+         "RELATED-TO", "DESCRIPTION", "PRIORITY", "LOCATION", "URL", "\\r\\nBEGIN:VEVENT\\r\\n",
+         "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:", "BEGIN:VEVENT", "END:VEVENT", "END:VCALENDAR"].map {
+        Exemption(file: "NowThis/Calendar/NextcloudEventBody.swift", text: $0,
+                  reason: "Exact iCalendar component or property token used for VEVENT operation proof.")
+    }
 
     // MARK: - The guard
 

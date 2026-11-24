@@ -9,8 +9,9 @@ final class PerformanceJourneysTests: XCTestCase {
     func testColdLaunchMetric() {
         let seedLaunch = launchFixture(taskCount: 10_000, listCount: 100)
         XCTAssertTrue(seedLaunch.tabBars.buttons["Tasks"].waitForExistence(timeout: 10))
+        // Due-date ties do not guarantee which task occupies the lazy viewport.
         let seededTask = seedLaunch.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "Fixture task 00000")
+            NSPredicate(format: "label CONTAINS %@", "Fixture task ")
         ).firstMatch
         XCTAssertTrue(seededTask.waitForExistence(timeout: 10))
         seedLaunch.terminate()
@@ -22,7 +23,7 @@ final class PerformanceJourneysTests: XCTestCase {
             XCTAssertTrue(app.tabBars.buttons["Board"].exists)
             XCTAssertFalse(app.buttons["Get Started"].exists)
             let seededTask = app.buttons.matching(
-                NSPredicate(format: "label CONTAINS %@", "Fixture task 00000")
+                NSPredicate(format: "label CONTAINS %@", "Fixture task ")
             ).firstMatch
             XCTAssertTrue(seededTask.waitForExistence(timeout: 10))
             app.terminate()

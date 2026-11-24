@@ -13,6 +13,8 @@ struct WatchOverlayState: Codable, Equatable {
     var pendingCompletes: Set<String> = []
     var pendingUncompletes: Set<String> = []
     var pendingAdds: [WatchPendingAdd] = []
+    var pendingOperations: [WatchPendingOperation]? = nil
+    var rejectedAdds: [WatchPendingOperation]? = nil
     private static let addGrace: TimeInterval = 5
 
     mutating func noteComplete(uid: String) { pendingUncompletes.remove(uid); pendingCompletes.insert(uid) }
@@ -29,18 +31,31 @@ struct WatchOverlayState: Codable, Equatable {
     mutating func confirmAdd(id: UUID) { pendingAdds.removeAll { $0.id == id } }
 
     mutating func reconcile(with snapshot: WatchSnapshot) {
+        // New peers acknowledge by operation ID; keep queued optimism until a terminal
+        // receipt. Legacy snapshots retain their best-effort state/title reconciliation.
+        let tracked = pendingOperations ?? []
+        let protectedCompletes = Set(tracked.compactMap { op -> String? in
+            if case .complete(let uid) = op.edit { return uid }; return nil
+        })
+        let protectedUncompletes = Set(tracked.compactMap { op -> String? in
+            if case .uncomplete(let uid) = op.edit { return uid }; return nil
+        })
+        let protectedAdds = Set(tracked.map(\.id))
         let byUID = Dictionary(uniqueKeysWithValues: snapshot.tasks.map { ($0.uid, $0) })
         pendingCompletes = pendingCompletes.filter { uid in
+            if snapshot.receipts != nil && protectedCompletes.contains(uid) { return true }
             guard let task = byUID[uid] else { return false }
             return !task.isCompleted
         }
         pendingUncompletes = pendingUncompletes.filter { uid in
+            if snapshot.receipts != nil && protectedUncompletes.contains(uid) { return true }
             guard let task = byUID[uid] else { return false }
             return task.isCompleted
         }
         let titles = Set(snapshot.tasks.map(\.title))
         pendingAdds.removeAll { add in
-            snapshot.generatedAt > add.createdAt.addingTimeInterval(Self.addGrace) || titles.contains(add.rawText)
+            if snapshot.receipts != nil && protectedAdds.contains(add.id) { return false }
+            return snapshot.generatedAt > add.createdAt.addingTimeInterval(Self.addGrace) || titles.contains(add.rawText)
         }
     }
 

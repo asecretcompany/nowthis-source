@@ -8,6 +8,16 @@ struct AppIconPickerView: View {
     var body: some View {
         Form {
             Section {
+                Text("icon.future.hint", comment: "Explains that more optional supporter artwork is planned and invites suggestions through support.")
+                Link(destination: URL(string: "https://asc.is/support/")!) {
+                    Label("icon.suggest.action", systemImage: "bubble.left")
+                }
+                .accessibilityHint(Text("icon.suggest.hint"))
+                .accessibilityIdentifier("suggest-app-icon")
+            } header: {
+                Text("icon.holiday.collection.title")
+            }
+            Section {
                 ForEach(AppIconCatalog.icons, id: \.id) { icon in
                     let owned = icon.collectionID.map(entitlement.ownedCollectionIDs.contains) ?? true
                     Button {

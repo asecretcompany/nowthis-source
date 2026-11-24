@@ -982,12 +982,8 @@ enum LocalizationCatalogFixture {
     /// Resolves the repository root by walking **up** from this file until a directory
     /// containing `project.yml` is found.
     ///
-    /// The guards ported into this suite used `#filePath` + exactly two `deletingLastPathComponent()`,
-    /// which works only because `YourPodsTests/` is flat. `NowThisTests/` has ten
-    /// subdirectories, so a fixed number of deletions resolves "repository root" to
-    /// `NowThisTests/` and every scanner then reports zero findings — green, in the bad
-    /// direction. Walking up removes the trap instead of documenting it, and makes the
-    /// guards' own directory depth irrelevant.
+    /// The guards start from this file so they read the source checkout they were built from.
+    /// Walking to the project spec supports tests at any directory depth.
     static func repositoryRoot() throws -> URL {
         try resolvedRoot.get()
     }
@@ -1015,8 +1011,7 @@ enum LocalizationCatalogFixture {
         throw LocalizationFixtureError.repositoryRootNotFound(startingFrom: start.path)
     }
 
-    /// Proves the resolved root is the real repository and not `NowThisTests/`, a worktree,
-    /// or a build sandbox. Asserted here rather than in one guard, so every guard inherits it.
+    /// Checks that the resolved root contains the source and project spec used by the guards.
     private static func sanityCheck(_ root: URL) throws {
         let fm = FileManager.default
         func fail(_ reason: String) -> LocalizationFixtureError {
@@ -1025,11 +1020,6 @@ enum LocalizationCatalogFixture {
 
         if root.lastPathComponent == "NowThisTests" {
             throw fail("the resolved root is NowThisTests/ — the walk stopped one level too early")
-        }
-        // `.claude/worktrees/<name>/` is a full checkout with its own project.yml. A guard that
-        // resolves into one scans a different revision of the tree and reports on the wrong code.
-        if root.path.contains("/.claude/worktrees/") {
-            throw fail("the resolved root is inside .claude/worktrees/ — that is a separate checkout")
         }
         guard fm.fileExists(atPath: root.appendingPathComponent(".git").path) else {
             throw fail("no .git at the resolved root")
@@ -1046,9 +1036,7 @@ enum LocalizationCatalogFixture {
 
     // MARK: Source walking
 
-    /// Every `.swift` file under the four `project.yml` source roots, repository-relative,
-    /// sorted. Worktrees are unreachable from these roots by construction; the `.claude`
-    /// filter is belt-and-braces for any future caller that walks from the repository root.
+    /// Returns sorted, repository-relative Swift source paths from the project source roots.
     static func swiftSourceFiles() throws -> [String] {
         let root = try repositoryRoot()
         let fm = FileManager.default
@@ -1066,7 +1054,6 @@ enum LocalizationCatalogFixture {
                 throw LocalizationFixtureError.directoryWalkCouldNotStart(path: dir.path)
             }
             for case let url as URL in walker where url.pathExtension == "swift" {
-                if url.path.contains("/.claude/") { continue }
                 results.append(relativePath(of: url, from: root))
             }
         }

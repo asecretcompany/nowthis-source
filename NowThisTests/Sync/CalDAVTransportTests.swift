@@ -38,4 +38,43 @@ struct CalDAVTransportTests {
         #expect(tasks.map(\.href) == ["/tasks/a.ics"])
         #expect(tasks.first?.etag == "etag-a")
     }
+    @Test("Nextcloud discovery preserves the deployment prefix, including its fallback", arguments: ["", "/cloud", "/cloud/"])
+    func installationPath(prefix: String) async throws {
+        let host = "prefix-" + UUID().uuidString.lowercased() + ".invalid"
+        let config = ScriptedDAVProtocol.install(host: host, responses: [
+            .init(body: DAVSyncScenario.multistatus("")), .init(body: DAVSyncScenario.multistatus(""))])
+        let client = CalDAVClient(configuration: config, retryPolicy: .init(maxAttempts: 1, baseDelay: 0))
+        let base = "https://" + host + prefix
+        let credentials = CalDAVClient.Credentials(username: "fixture", password: "fixture")
+        let principal = try await client.discoverPrincipal(baseURL: base, credentials: credentials)
+        let home = try await client.discoverCalendarHome(baseURL: base, principalPath: principal, credentials: credentials)
+        let cleanPrefix = prefix.hasSuffix("/") ? String(prefix.dropLast()) : prefix
+        #expect(ScriptedDAVProtocol.requests(host: host).first?.path == cleanPrefix + "/remote.php/dav/principals/users/fixture")
+        #expect(home == cleanPrefix + "/remote.php/dav/calendars/fixture/")
+    }
+
+    @Test("Connection test does not report success when list discovery returns 404")
+    func connectionRequiresListDiscovery() async throws {
+        let host = "check-" + UUID().uuidString.lowercased() + ".invalid"
+        let responses = DAVSyncScenario.discovery(paths: ["/tasks/"])
+        let config = ScriptedDAVProtocol.install(host: host, responses: [responses[0], responses[1], .init(status: 404, body: "missing")])
+        var succeeded = false
+        do {
+            succeeded = try await ServerURLValidator.testConnection(baseURL: "https://" + host,
+                username: "fixture", password: "fixture", configuration: config)
+        } catch {}
+        #expect(!succeeded)
+        #expect(ScriptedDAVProtocol.requests(host: host).count == 3)
+    }
+
+    @Test("Connection test accepts a reachable empty calendar home")
+    func connectionWithNoLists() async throws {
+        let host = "empty-" + UUID().uuidString.lowercased() + ".invalid"
+        let config = ScriptedDAVProtocol.install(host: host, responses: DAVSyncScenario.discovery(paths: []))
+        let succeeded = try await ServerURLValidator.testConnection(baseURL: "https://" + host,
+            username: "fixture", password: "fixture", configuration: config)
+        #expect(succeeded)
+        #expect(ScriptedDAVProtocol.requests(host: host).count == 3)
+    }
+
 }

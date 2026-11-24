@@ -140,6 +140,52 @@ private actor SpotlightRecordingJournal: SpotlightIndexJournal {
 
 @Suite("Spotlight ordered worker")
 struct SpotlightWorkerTests {
+    @Test func replayedLegacyFingerprintCannotSuppressNoteRemoval() async throws {
+        let suite = "Task19.Replay." + UUID().uuidString
+        let preferences = SpotlightPreferences(suiteName: suite)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let old = SpotlightTaskSnapshot(id: "old", title: "Task", contentDescription: "Private")
+        let oldHash = try SpotlightProjection.fingerprint(old)
+        let expiry = Date().addingTimeInterval(30 * 86_400)
+        let baseline = SpotlightTestStore()
+        let journal = SpotlightRecordingJournal()
+        let prior = SpotlightJournalStore(baseline: baseline, journal: journal)
+        try await prior.apply(upserts: [old.id: .init(fingerprint: oldHash, expiresAt: expiry)], removing: [])
+        let reopened = SpotlightJournalStore(baseline: baseline, journal: journal)
+        let sink = SuspendedSpotlightSink()
+        try await sink.index([old], expiresAt: expiry)
+        let worker = SpotlightIndexWorker(sink: sink, store: reopened, preferences: preferences)
+        await worker.submit(.index(old))
+        await worker.flush()
+        let final = try #require(await sink.values()[old.id])
+        #expect(final.contentDescription == nil)
+        #expect(try await reopened.load()[old.id]?.fingerprint != oldHash)
+        #expect(try await reopened.load()[old.id]?.fingerprint == SpotlightProjection.fingerprint(final))
+    }
+
+    @Test func optOutRepairsInFlightBatchAndStripsRemainingQueuedValues() async throws {
+        let suite = "Task19.InFlight." + UUID().uuidString
+        let preferences = SpotlightPreferences(suiteName: suite)
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        preferences.setIncludesNotes(true)
+        let sink = SuspendedSpotlightSink(suspendID: "a")
+        let store = SpotlightTestStore()
+        let worker = SpotlightIndexWorker(sink: sink, store: store, batchSize: 1, preferences: preferences)
+        let snapshots = ["a", "b"].map { SpotlightTaskSnapshot(id: $0, title: $0, contentDescription: "Private") }
+        await worker.submit(.refresh(snapshots))
+        await sink.waitUntilSuspended()
+        preferences.setIncludesNotes(false)
+        await sink.resumeIndex()
+        await worker.flush()
+        let values = await sink.values()
+        #expect(values.count == 2)
+        #expect(values.values.allSatisfy { $0.contentDescription == nil })
+        let records = await store.load()
+        for snapshot in values.values {
+            #expect(records[snapshot.id]?.fingerprint == (try SpotlightProjection.fingerprint(snapshot)))
+        }
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test func fiftyThousandItemBootstrapPersistsLinearRecordVolume() async throws {

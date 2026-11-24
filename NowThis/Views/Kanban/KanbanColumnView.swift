@@ -46,7 +46,7 @@ struct KanbanColumnView: View {
                             // The id is copied for the same reason: the closures
                             // below run later, and must not read the model then.
                             let taskID = task.id
-                            let moveRequestForCard = MoveToListRequest(task: task)
+                            let persistentID = task.persistentModelID
                             let canMoveToList = MoveDestinations.canMove(task)
                             NavigationLink(value: task) {
                                 KanbanCardView(data: data)
@@ -69,7 +69,7 @@ struct KanbanColumnView: View {
                             .contextMenu {
                                 moveButtons(availableMoves(forCardAt: position), taskID: taskID)
                                 Divider()
-                                moveToListButton(moveRequestForCard, enabled: canMoveToList)
+                                moveToListButton(taskID: taskID, persistentID: persistentID, enabled: canMoveToList)
                             }
                             // Every move, always, rather than the menu's
                             // position-aware set. Actions refreshed when a card's
@@ -81,7 +81,7 @@ struct KanbanColumnView: View {
                             .accessibilityActions {
                                 moveButtons(KanbanReorder.Move.allCases, taskID: taskID)
                                 if canMoveToList {
-                                    moveToListButton(moveRequestForCard, enabled: true)
+                                    moveToListButton(taskID: taskID, persistentID: persistentID, enabled: true)
                                 }
                             }
                         }
@@ -116,9 +116,12 @@ struct KanbanColumnView: View {
         }
         .animation(.easeOut(duration: 0.15), value: isDropTarget)
         .sheet(item: $moveRequest) { request in
-            MoveToListSheet(request: request) { listID in
-                guard MoveDestinations.perform(taskID: request.taskID, toListID: listID, in: modelContext) else { return }
+            MoveToListSheet(request: request) { destination, errors in
+                guard MoveDestinations.perform(request, to: destination, in: modelContext, errorState: errors,
+                    revalidate: { syncScheduler.syncAfterChange(modelContext: modelContext) }) else { return false }
+                syncScheduler.publishLocalTaskCommit()
                 syncScheduler.syncAfterChange(modelContext: modelContext)
+                return true
             }
         }
         .accessibilityElement(children: .contain)
@@ -151,9 +154,15 @@ struct KanbanColumnView: View {
 
     /// Moves the card's task to another list. Not a `KanbanReorder.Move`: it
     /// leaves the board's list scope rather than reordering a column.
-    private func moveToListButton(_ request: MoveToListRequest?, enabled: Bool) -> some View {
+    private func moveToListButton(taskID: String, persistentID: PersistentIdentifier, enabled: Bool) -> some View {
         Button {
-            moveRequest = request
+            do {
+                let task = try TaskWriteEligibility(writingIn: modelContext).task(.id(taskID))
+                guard task.persistentModelID == persistentID else { throw TaskWriteEligibility.Refusal.targetChanged }
+                moveRequest = MoveToListRequest(task: task)
+            } catch {
+                ViewPersistence.reportTaskWriteRefusal(error)
+            }
         } label: {
             Label {
                 Text("Move to List…", comment: "Context-menu item on a task that opens a picker to move the task, with its subtasks, to a different list.")
@@ -161,7 +170,7 @@ struct KanbanColumnView: View {
                 Image(systemName: "folder")
             }
         }
-        .disabled(!enabled || request == nil)
+        .disabled(!enabled)
     }
 
     private func moveLabel(_ move: KanbanReorder.Move) -> Label<Text, Image> {

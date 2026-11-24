@@ -55,7 +55,7 @@ struct SyncDirtyProtectionTests {
         try? await engine.performBackgroundSync(
             accountID: "test-account",
             serverBaseURL: "https://invalid.example.com",
-            credentials: CalDAVClient.Credentials(username: "x", password: "x"),
+            credentials: CalDAVClient.Credentials(username: "testuser", password: "x"),
             modelContainer: container
         )
 
@@ -90,7 +90,7 @@ struct SyncDirtyProtectionTests {
         let importerURL = engineURL.deletingLastPathComponent().appendingPathComponent("SyncImportStore.swift")
         let importer = try String(contentsOf: importerURL, encoding: .utf8)
         #expect(source.contains("try applyRemoteTask(remoteTask"), "Foreground must use the same canonical importer as background compatibility calls")
-        #expect(source.contains("return importer.apply(try importer.parse(remoteTask)"), "The wrapper must delegate to the shared store")
+        #expect(source.contains("return try importer.apply(try importer.parse(remoteTask)"), "The wrapper must delegate to the shared store")
         #expect(importer.contains("!task.isDirty"), "The canonical import policy must preserve pending local work")
     }
 }

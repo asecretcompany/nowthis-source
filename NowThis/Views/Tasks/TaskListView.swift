@@ -15,7 +15,21 @@ import Observation
 struct TaskListView: View {
 
     let selection: SidebarSelection
+    let savedFilter: SavedFilterSnapshot?
+    private let lastKnownFilterName: String?
+    private let retrySavedFilters: (() -> Void)?
+    @Binding private var deepLinkTaskID: String?
+    let allowsDeepLinkPresentation: Bool
+    private let showsSidebarButton: Bool
+    @State private var taskSheetIsActive = false
+    @State private var quickAddSheetIsActive = false
+    @State private var hiddenSheetIsActive = false
+    @State private var editingFilter: SavedFilterSnapshot?
+    @State private var filterSheetIsActive = false
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.saveErrorState) private var errorState
     @Environment(\.syncCommands) private var syncCommands
     /// Fetches only what this screen can ever show: live roots, and — for a
     /// specific list — only that list's roots. The `#Predicate` excludes
@@ -35,6 +49,20 @@ struct TaskListView: View {
     }
     @State private var allTasks: [TaskItem] = []
     @State private var queryRevision: UInt64 = 0
+    @State private var sourceProjection = ObservedProjectionCache<SourceProjectionKey, [TaskItem]>()
+
+    private struct SourceProjectionKey: Equatable {
+        let roots: [ObjectIdentifier]
+        let revision: UInt64
+        let selection: String
+        let sort: TaskSortOption
+        let ascending: Bool
+        let showCompleted: Bool
+        let priority: TaskPriority?
+        let calendar: Calendar
+        let day: Date
+        let locale: String
+    }
     @State private var showingQuickAdd = false
     @State private var selectedTask: SelectedTask?
     @State private var searchText = ""
@@ -52,6 +80,7 @@ struct TaskListView: View {
     /// Calendar or Matrix the user has hidden. See ``resolveJump(to:visible:)``.
     @State private var presentedHiddenTab: AppTab?
 
+    @State private var creationDraft = TaskCreationDraft()
     @State private var inlineTaskTitle = ""
     @FocusState private var inlineFieldFocused: Bool
     /// Per-entry due-date override chosen from the add bar's chip. `nil` uses the
@@ -59,8 +88,66 @@ struct TaskListView: View {
     @State private var inlineDueOverride: DefaultDueDateRule?
 
     /// Selection scopes the replaceable query reader, preserving this screen's state.
-    init(selection: SidebarSelection) {
+    init(selection: SidebarSelection, savedFilter: SavedFilterSnapshot? = nil,
+         lastKnownFilterName: String? = nil, retrySavedFilters: (() -> Void)? = nil,
+         deepLinkTaskID: Binding<String?> = .constant(nil),
+         allowsDeepLinkPresentation: Bool = true, showsSidebarButton: Bool = false) {
         self.selection = selection
+        self.savedFilter = savedFilter
+        self.lastKnownFilterName = lastKnownFilterName
+        self.retrySavedFilters = retrySavedFilters
+        self._deepLinkTaskID = deepLinkTaskID
+        self.allowsDeepLinkPresentation = allowsDeepLinkPresentation
+        self.showsSidebarButton = showsSidebarButton
+    }
+
+    private func selectTask(_ task: TaskItem) {
+        taskSheetIsActive = true
+        selectedTask = SelectedTask(task)
+    }
+
+    private func showQuickAdd() {
+        quickAddSheetIsActive = true
+        showingQuickAdd = true
+    }
+
+    private func presentPendingTaskLink() {
+        let busy = !allowsDeepLinkPresentation || quickAddSheetIsActive || showingQuickAdd
+            || hiddenSheetIsActive || presentedHiddenTab != nil || taskSheetIsActive
+            || filterSheetIsActive || editingFilter != nil
+            || !inlineTaskTitle.isEmpty || creationDraft.hasPendingTask
+        do {
+            try Self.routeDeepLink(request: $deepLinkTaskID,
+                selectedTask: Binding(get: { selectedTask }, set: {
+                    selectedTask = $0
+                    if $0 != nil { taskSheetIsActive = true }
+                }), context: modelContext, isBusy: busy)
+        } catch { (errorState ?? .shared).show(error) }
+    }
+
+    static func routeDeepLink(request: Binding<String?>, selectedTask: Binding<SelectedTask?>,
+        context: ModelContext, isBusy: Bool) throws {
+        guard let id = request.wrappedValue else { return }
+        if let current = selectedTask.wrappedValue,
+           current.id == id, current.task.modelContext != nil {
+            // The editor already owns this task; retain its unsaved text and nested sheets.
+            request.wrappedValue = nil
+            return
+        }
+        guard !isBusy, selectedTask.wrappedValue == nil else { return }
+        var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id && !$0.isDeletedLocally })
+        descriptor.fetchLimit = 1
+        if let task = try context.fetch(descriptor).first {
+            selectedTask.wrappedValue = SelectedTask(task)
+        }
+        // Missing/deleted targets are safe no-ops. A fetch error leaves the request pending.
+        request.wrappedValue = nil
+    }
+
+    static func showsInlineComposer(verticalSizeClass: UserInterfaceSizeClass?,
+        dynamicTypeSize: DynamicTypeSize, isFocused: Bool, title: String, hasPendingTask: Bool = false) -> Bool {
+        verticalSizeClass != .compact || !dynamicTypeSize.isAccessibilitySize
+            || isFocused || !title.isEmpty || hasPendingTask
     }
 
     private var queryListID: String? {
@@ -70,30 +157,38 @@ struct TaskListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            FilterBar(
-                activeSort: $activeSort,
-                sortDirection: $sortDirection,
-                showCompleted: $showCompleted,
-                priorityFilter: $priorityFilter
-            )
+            HStack(spacing: 0) {
+                if showsSidebarButton {
+                    CompactSidebarButton().padding(.leading, 8)
+                }
+                FilterBar(
+                    activeSort: $activeSort,
+                    sortDirection: $sortDirection,
+                    showCompleted: $showCompleted,
+                    priorityFilter: $priorityFilter
+                )
+            }
 
             Divider().opacity(0.5)
 
             Group {
-                if currentSmartList == .upcoming || currentSmartList == .overdue {
+                if case .savedFilter = selection, savedFilter?.criteria == nil {
+                    savedFilterUnavailable
+                } else if currentSmartList == .upcoming || currentSmartList == .overdue {
                     let sections = sectionedOccurrences
                     if sections.isEmpty {
                         tappableEmptyState
                     } else {
                         SectionedTaskListContent(
                             sections: sections,
-                            onSelect: { selectedTask = SelectedTask($0) },
+                            onSelect: selectTask,
                             showGroupingToggle: currentSmartList == .upcoming,
                             grouping: $upcomingGrouping
                         )
                     }
                 } else {
                     let tasks = displayedTasks
+                    let ascending = sortDirection.isAscending
                     if tasks.isEmpty {
                         tappableEmptyState
                     } else {
@@ -102,10 +197,14 @@ struct TaskListView: View {
                             dataRevision: queryRevision,
                             manualReorder: activeSort == .manually,
                             activeSort: activeSort,
-                            ascending: sortDirection.isAscending,
-                            onSelect: { selectedTask = SelectedTask($0) },
-                            onMove: moveTasks,
-                            onMoveSubtasks: moveSubtasks,
+                            ascending: ascending,
+                            onSelect: selectTask,
+                            onMove: { source, destination in
+                                _ = moveTasks(tasks, from: source, to: destination, ascending: ascending)
+                            },
+                            onMoveSubtasks: { siblings, parentID, source, destination in
+                                moveTasks(siblings, from: source, to: destination, ascending: ascending, parentID: parentID)
+                            },
                             onTapEmptyArea: focusInlineField
                         )
                     }
@@ -122,15 +221,22 @@ struct TaskListView: View {
                 queryRevision &+= 1
             })
         .safeAreaInset(edge: .bottom) {
-            InlineAddBar(
-                title: $inlineTaskTitle,
-                isFocused: $inlineFieldFocused,
-                dueRuleLabel: inlineDueChipLabel,
-                dueRuleIsSet: inlineEffectiveRule != .none,
-                onPickRule: { inlineDueOverride = $0 },
-                onSubmit: createInlineTask,
-                onExpandTap: { showingQuickAdd = true }
-            )
+            // In short large-text windows the toolbar's Add button remains available.
+            // Keep any active inline entry mounted so adaptation cannot drop its draft.
+            if Self.showsInlineComposer(verticalSizeClass: verticalSizeClass,
+                dynamicTypeSize: dynamicTypeSize, isFocused: inlineFieldFocused, title: inlineTaskTitle,
+                hasPendingTask: creationDraft.hasPendingTask) {
+                InlineAddBar(
+                    title: $inlineTaskTitle,
+                    isFocused: $inlineFieldFocused,
+                    dueRuleLabel: inlineDueChipLabel,
+                    dueRuleIsSet: inlineEffectiveRule != .none,
+                    onPickRule: { inlineDueOverride = $0 },
+                    onSubmit: createInlineTask,
+                    onExpandTap: showQuickAdd,
+                    onCancel: inlineCancellationAction
+                )
+            }
         }
         .navigationTitle(title)
         // Required for `.toolbarTitleMenu` below to actually produce a tappable
@@ -179,8 +285,13 @@ struct TaskListView: View {
         // "Done" beside the Board's segmented control with the Board's own title dropped. Each
         // branch of ``hiddenDestination(for:)`` now carries exactly one container and its own way
         // out; see `NavigationContainerGuardTests`.
-        .sheet(item: $presentedHiddenTab) { tab in
+        .sheet(item: $presentedHiddenTab, onDismiss: {
+            hiddenSheetIsActive = false
+            presentPendingTaskLink()
+        }) { tab in
             hiddenDestination(for: tab)
+                .modifier(HiddenDestinationErrorScope())
+                .blocksTaskLinks()
         }
         // `.always` — not the default `.automatic`. Under `.automatic` the search
         // field is a *collapsible* navigation-bar drawer, and this screen ends up
@@ -201,14 +312,45 @@ struct TaskListView: View {
             text: $searchText,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: "Search tasks…")
-        .toolbar { TaskListToolbar(onAdd: { showingQuickAdd = true }) }
-        .sheet(isPresented: $showingQuickAdd) {
-            QuickAddView(defaultList: defaultTaskList, defaultSmartList: currentSmartList)
+        .toolbar {
+            TaskListToolbar(onAdd: showQuickAdd)
+            if let savedFilter, savedFilter.criteria != nil {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button { editFilter(savedFilter) } label: { Label("Edit Filter", systemImage: "pencil") }
+                }
+            }
         }
-        .sheet(item: $selectedTask) { selection in
+        .sheet(item: $editingFilter, onDismiss: {
+            filterSheetIsActive = false
+            presentPendingTaskLink()
+        }) { filter in
+            FilterBuilderView(existingFilter: filter)
+        }
+        .sheet(isPresented: $showingQuickAdd, onDismiss: {
+            quickAddSheetIsActive = false
+            presentPendingTaskLink()
+        }) {
+            QuickAddView(defaultList: defaultTaskList, defaultSmartList: currentSmartList,
+                         explicitListID: selectedTaskListID)
+        }
+        .sheet(item: $selectedTask, onDismiss: {
+            taskSheetIsActive = false
+            presentPendingTaskLink()
+        }) { selection in
             NavigationStack {
                 TaskDetailView(task: selection.task)
             }
+        }
+        .blocksTaskLinks(isActive: !inlineTaskTitle.isEmpty || creationDraft.hasPendingTask)
+        .onChange(of: deepLinkTaskID, initial: true) { _, _ in presentPendingTaskLink() }
+        .onChange(of: allowsDeepLinkPresentation) { _, allowed in
+            if allowed { presentPendingTaskLink() }
+        }
+        .onChange(of: inlineTaskTitle) { _, _ in presentPendingTaskLink() }
+        .onChange(of: creationDraft.hasPendingTask) { _, _ in presentPendingTaskLink() }
+        .onChange(of: queryRevision) { _, _ in presentPendingTaskLink() }
+        .onChange(of: presentedHiddenTab) { _, tab in
+            if tab != nil { hiddenSheetIsActive = true }
         }
     }
 
@@ -287,18 +429,17 @@ struct TaskListView: View {
     private func hiddenDestination(for tab: AppTab) -> some View {
         switch tab {
         case .board:
-            KanbanBoardView().refreshOnInboundSync()
+            KanbanBoardView()
         case .calendar:
-            CalendarContainerView().refreshOnInboundSync()
+            CalendarContainerView()
         case .matrix:
-            EisenhowerMatrixView().refreshOnInboundSync()
+            EisenhowerMatrixView()
         case .smart(let list):
             // Matches `ContentView.destination(for:)`'s `.smart` case:
             // `TaskListView` supplies no navigation container of its own, so this branch is the
             // one that has to — and, being the container, the one that carries the way out.
             NavigationStack {
                 TaskListView(selection: .smart(list))
-                    .refreshOnInboundSync()
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") { presentedHiddenTab = nil }
@@ -335,12 +476,8 @@ struct TaskListView: View {
                 localized: "tasks.title.list",
                 defaultValue: "Tasks",
                 comment: "Navigation title fallback shown when a selected list's name cannot be resolved from the store.")
-        case .savedFilter(let filterID):
-            let targetID = filterID
-            let p = #Predicate<SavedFilter> { $0.id == targetID }
-            var desc = FetchDescriptor<SavedFilter>(predicate: p)
-            desc.fetchLimit = 1
-            return (try? modelContext.fetch(desc))?.first?.name ?? String(
+        case .savedFilter:
+            return savedFilter?.name ?? lastKnownFilterName ?? String(
                 localized: "tasks.title.filter",
                 defaultValue: "Filter",
                 comment: "Navigation title fallback shown when a selected saved filter's name cannot be resolved from the store.")
@@ -397,65 +534,45 @@ struct TaskListView: View {
     /// `.taskList` selection — list-scoped, via `taskQueryPredicate`) →
     /// smart/saved-filter/tag filter → search → priority → completed → sort
     private var displayedTasks: [TaskItem] {
-        // isDeletedLocally, parentTask == nil, and (for `.taskList`) the list
-        // scope are already filtered by `taskQueryPredicate` in the @Query.
-        // See `liveRoots` for the liveness-guard rationale.
-        var result = liveRoots
+        // Keep the fresh identifier guard even on a cache hit: a worker-context
+        // cascade can delete a retained model before its query publication arrives.
+        let roots = liveRoots
+        let sorted: [TaskItem]
+        let calendar = Calendar.current
+        let key = SourceProjectionKey(roots: roots.map(ObjectIdentifier.init), revision: queryRevision,
+            selection: selection.encoded, sort: activeSort, ascending: sortDirection.isAscending,
+            showCompleted: showCompleted, priority: priorityFilter, calendar: calendar,
+            day: calendar.startOfDay(for: Date()), locale: Locale.current.identifier)
+        // Recompute saved-filter results from the selected committed criteria snapshot.
+        if case .savedFilter = selection {
+            sorted = sortedSourceTasks(from: roots)
+        } else if activeSort == .relevance {
+            sorted = sortedSourceTasks(from: roots)
+        } else {
+            sorted = sourceProjection.value(for: key) { sortedSourceTasks(from: roots) }
+        }
+        // Search changes only filter the already ordered source. Deduplicate after
+        // searching so a different copy of the same UID can satisfy the query.
+        return TaskListHelpers.searchAndDeduplicate(sorted, query: searchText)
+    }
 
-        // Smart list, task list, or saved filter
+    private func sortedSourceTasks(from roots: [TaskItem]) -> [TaskItem] {
+        let interval = PerformanceTrace.begin("TaskListSort", count: roots.count)
+        defer { PerformanceTrace.end("TaskListSort", interval) }
+        var result = roots
         switch selection {
-        case .smart(let smart):
-            result = filterForSmartList(smart, from: result)
-        case .taskList:
-            break // The query already scoped this to the selected list's roots.
-        case .savedFilter(let filterID):
-            result = applyCustomFilter(filterID, to: result)
-        case .tag(let tagID):
-            result = result.filter { $0.tags.contains(where: { $0.id == tagID }) }
-        case .journals:
-            return [] // Journals handled by JournalListView
+        case .smart(let smart): result = filterForSmartList(smart, from: result)
+        case .taskList: break
+        case .savedFilter: result = applyCustomFilter(to: result)
+        case .tag(let tagID): result = result.filter { $0.tags.contains(where: { $0.id == tagID }) }
+        case .journals: return []
         }
-
-        // Full-text search.
-        //
-        // `localizedStandardContains` rather than `.lowercased().contains` — it folds case *and*
-        // diacritics the way the reader's language does. Typing "grusse" finds "Grüße", "cafe"
-        // finds "café", and Turkish's dotted and dotless I stop being two different letters.
-        // `lowercased()` does none of that: it is not locale-aware, and it leaves every accent in
-        // place, so a French user could not find their own task by typing it without the accent.
-        if !searchText.isEmpty {
-            let query = searchText
-            result = result.filter { task in
-                task.title.localizedStandardContains(query)
-                    || (task.descriptionText?.localizedStandardContains(query) ?? false)
-                    || (task.locationName?.localizedStandardContains(query) ?? false)
-                    || task.tags.contains(where: { $0.name.localizedStandardContains(query) })
-            }
-        }
-
-        // Priority filter
-        if let pri = priorityFilter {
-            result = result.filter { $0.priority == pri }
-        }
-
-        // Completed filter (for non-smart lists, default hide completed)
+        if let priorityFilter { result = result.filter { $0.priority == priorityFilter } }
         if currentSmartList != .completed && !showCompleted {
             result = result.filter { $0.status != .completed }
         }
-
-        // Sort — completed tasks always sink below active ones, so a freshly
-        // added task never lands under the "done" items, while the chosen
-        // sort field is still honored within each group.
-        result = TaskListHelpers.sortedWithCompletedLast(
-            result,
-            by: activeSort,
-            ascending: sortDirection.isAscending
-        )
-
-        // Deduplicate by UID (safety net for overlapping calendar sync)
-        result = TaskListHelpers.deduplicateByUID(result)
-
-        return result
+        return TaskListHelpers.sortedWithCompletedLast(result, by: activeSort,
+            ascending: sortDirection.isAscending)
     }
 
     // MARK: - Smart List Filters
@@ -500,37 +617,44 @@ struct TaskListView: View {
     }
 
     /// Applies a saved custom filter's rules to the task list.
-    private func applyCustomFilter(_ filterID: String, to tasks: [TaskItem]) -> [TaskItem] {
-        let targetID = filterID
-        let filterPredicate = #Predicate<SavedFilter> { $0.id == targetID }
-        var filterDesc = FetchDescriptor<SavedFilter>(predicate: filterPredicate)
-        filterDesc.fetchLimit = 1
-        guard let savedFilter = (try? modelContext.fetch(filterDesc))?.first else { return tasks }
+    private func applyCustomFilter(to tasks: [TaskItem]) -> [TaskItem] {
+        guard let criteria = savedFilter?.criteria else { return [] }
 
-        let rules = savedFilter.rules
-        guard !rules.isEmpty else { return tasks }
+        return criteria.matchingTasks(tasks)
+    }
 
-        // Only fetch lists if a rule actually needs them
-        let needsLists = rules.contains { $0.field == .list }
-        let lists: [TaskList] = needsLists
-            ? ((try? modelContext.fetch(FetchDescriptor<TaskList>())) ?? [])
-            : []
+    private func editFilter(_ filter: SavedFilterSnapshot) {
+        filterSheetIsActive = true
+        editingFilter = filter
+    }
 
-        return tasks.filter { task in
-            switch savedFilter.logic {
-            case .and:
-                return rules.allSatisfy { $0.matches(task, allLists: lists) }
-            case .or:
-                return rules.contains { $0.matches(task, allLists: lists) }
+    private var savedFilterUnavailable: some View {
+        ContentUnavailableView {
+            Label(title, systemImage: "line.3.horizontal.decrease.circle")
+        } description: {
+            if retrySavedFilters != nil {
+                Text(FilterRepairCopy.loadFailed)
+            } else {
+                Text(savedFilter == nil ? FilterRepairCopy.unavailable : FilterRepairCopy.required)
+            }
+        } actions: {
+            if let retrySavedFilters {
+                Button("Retry", action: retrySavedFilters)
+            } else if let savedFilter {
+                Button("Edit Filter") { editFilter(savedFilter) }
             }
         }
     }
 
     /// The list currently in view, if the selection names one. `nil` for smart
     /// lists, tags, saved filters and journals — where the user's default applies.
-    private var selectedTaskList: TaskList? {
+    private var selectedTaskListID: String? {
         guard case .taskList(let listID) = selection else { return nil }
-        let targetID = listID
+        return listID
+    }
+
+    private var selectedTaskList: TaskList? {
+        guard let targetID = selectedTaskListID else { return nil }
         let listPredicate = #Predicate<TaskList> { $0.id == targetID }
         var desc = FetchDescriptor<TaskList>(predicate: listPredicate)
         desc.fetchLimit = 1
@@ -544,46 +668,101 @@ struct TaskListView: View {
         NewTaskDefaults.resolveList(explicit: selectedTaskList, in: modelContext)
     }
 
+    private var inlineCancellationAction: (() -> Void)? {
+        guard creationDraft.hasPendingTask else { return nil }
+        return { cancelInlineTask() }
+    }
+
+    private func cancelInlineTask() {
+        do { try creationDraft.cancelInlineAddition(in: modelContext) }
+        catch { (errorState ?? .shared).show(error); return }
+        inlineTaskTitle = ""
+        inlineDueOverride = nil
+        inlineFieldFocused = false
+        presentPendingTaskLink()
+    }
+
     private func createInlineTask() {
         let trimmed = inlineTaskTitle.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
-        let task = TaskItem(title: trimmed, priority: .none)
-        task.taskList = NewTaskDefaults.resolveListAdopting(explicit: selectedTaskList, in: modelContext)
+        let manualAscending = activeSort != .manually || sortDirection.isAscending
+        Self.commitInlineCreation(title: trimmed, selectedTaskList: selectedTaskList,
+            explicitListID: selectedTaskListID, liveRoots: liveRoots,
+            manualAscending: manualAscending, dueDateRule: { inlineEffectiveRule }, creationDraft: creationDraft,
+            modelContext: modelContext, errorState: errorState
+        ) { task in
+            if task.reminderOffset != nil {
+                ReminderScheduler.requestPermissionIfNeeded()
+            }
+            // Unconditional — see QuickAddView. The inline row's default rule can hand the task a
+            // due date with no reminder, which is precisely the case that scheduled nothing.
+            ViewPersistence.recoverRemindersAfterCommit(errorState: errorState) {
+                try ReminderScheduler.requestReconcileOrThrow(modelContext: modelContext)
+            }
+            syncCommands.syncAfterChange(modelContext)
+            HapticManager.success()
 
-        // Place new tasks above existing ones (and, via completed-at-bottom,
-        // above done items) and give them a manual order to push to the server.
-        //
-        // Computed from `liveRoots` rather than `displayedTasks` — a superset
-        // (it skips the smart/saved-filter/tag/search/priority/completed
-        // narrowing `displayedTasks` applies), but a superset is fine here:
-        // `topSortOrder` only needs the *minimum* sort order among the
-        // candidates, and including more roots can only push that minimum
-        // lower, so the new task still lands above every visible row. Reusing
-        // `displayedTasks`' own filters would mean recomputing the whole
-        // pipeline a third time just to answer this one question.
-        task.manualSortOrder = TaskListHelpers.topSortOrder(forInsertingInto: liveRoots)
+            inlineTaskTitle = ""
+            inlineDueOverride = nil
+            // Keep focus so the user can add multiple tasks quickly.
+            inlineFieldFocused = true
+        }
+    }
+
+    @MainActor
+    static func commitInlineCreation(title trimmed: String, selectedTaskList: TaskList?,
+                                     explicitListID: String? = nil, liveRoots: [TaskItem],
+                                     manualAscending: Bool, dueDateRule: () -> DefaultDueDateRule,
+                                     creationDraft: TaskCreationDraft, modelContext: ModelContext,
+                                     errorState: ErrorState?, save: (() throws -> Void)? = nil,
+                                     didCommit: (TaskItem) -> Void) {
+        let list: TaskList?
+        let preferenceChange: NewTaskDefaults.PreferenceChange?
+        do {
+            let destination: TaskWriteEligibility.CreationDestination
+            if let id = explicitListID ?? selectedTaskList?.id {
+                destination = .list(id: id, expectedPersistentID: selectedTaskList?.persistentModelID)
+                preferenceChange = nil
+            } else {
+                let choice = try NewTaskDefaults.creationList(explicit: nil, in: ModelContext(modelContext.container))
+                destination = choice.list.map { .list(id: $0.id, expectedPersistentID: $0.persistentModelID) } ?? .unbound
+                preferenceChange = choice.preferenceChange
+            }
+            list = try TaskWriteEligibility(writingIn: modelContext).destination(destination)
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState, creating: true)
+            return
+        }
+
+        let task: TaskItem
+        do { task = try creationDraft.task(title: trimmed) }
+        catch { (errorState ?? .shared).show(error); return }
+        task.taskList = list
 
         // Apply the resolved due-date + reminder defaults so the task stays
         // visible in the view that created it and honors per-list/global settings.
-        applyNewTaskDefaults(to: task)
+        let resolved = NewTaskDefaults.resolve(
+            smartList: nil,
+            rule: dueDateRule(),
+            reminderEnabled: NewTaskDefaults.effectiveReminderEnabled(for: task.taskList)
+        )
+        task.dueDate = resolved.dueDate
+        task.isDueDateOnly = resolved.isDueDateOnly
+        task.reminderOffset = resolved.reminderOffset
 
-        task.isDirty = true
-        modelContext.insert(task)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
-        if task.reminderOffset != nil {
-            ReminderScheduler.requestPermissionIfNeeded()
+        // Give the draft a low rank. Manual ascending shows it first within
+        // its scope, while manual descending shows it after other active rows.
+        guard TaskListHelpers.saveInlineTask(task, withLowerRankThan: liveRoots,
+            manualAscending: manualAscending, in: modelContext, errorState: errorState, save: save) else {
+            // The field keeps the title and due override for a new attempt.
+            // The failed insertion and its journal were discarded by the save.
+            creationDraft.didSave()
+            return
         }
-        // Unconditional — see QuickAddView. The inline row's default rule can hand the task a
-        // due date with no reminder, which is precisely the case that scheduled nothing.
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
-        syncCommands.syncAfterChange(modelContext)
-        HapticManager.success()
-
-        inlineTaskTitle = ""
-        inlineDueOverride = nil
-        // Keep focus so the user can add multiple tasks quickly.
-        inlineFieldFocused = true
+        preferenceChange?.commit()
+        creationDraft.didSave()
+        didCommit(task)
     }
 
     /// Empty state that also acts as a large tap target: a single tap on the
@@ -621,54 +800,21 @@ struct TaskListView: View {
         return NewTaskDefaults.effectiveDueDateRule(for: defaultTaskList)
     }
 
-    /// Stamps the resolved due-date and reminder defaults onto a new task. The
-    /// contextual override is already folded into `inlineEffectiveRule`, so the
-    /// pure resolver is called with `smartList: nil`.
-    private func applyNewTaskDefaults(to task: TaskItem) {
-        let resolved = NewTaskDefaults.resolve(
-            smartList: nil,
-            rule: inlineEffectiveRule,
-            reminderEnabled: NewTaskDefaults.effectiveReminderEnabled(for: task.taskList)
-        )
-        task.dueDate = resolved.dueDate
-        task.isDueDateOnly = resolved.isDueDateOnly
-        task.reminderOffset = resolved.reminderOffset
-    }
-
-    /// Handles a long-press drag reorder (only active when sorting Manually).
-    /// Renumbers `manualSortOrder` to match the new order and pushes upstream
-    /// so the change mirrors into Nextcloud (X-APPLE-SORT-ORDER).
-    private func moveTasks(from source: IndexSet, to destination: Int) {
-        var reordered = displayedTasks
-        guard source.allSatisfy({ $0 < reordered.count }),
-              (0...reordered.count).contains(destination) else { return }
-        reordered.move(fromOffsets: source, toOffset: destination)
-        TaskListHelpers.assignManualOrder(reordered)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+    /// Save the drag against the roots or siblings that supplied its offsets.
+    private func moveTasks(_ displayed: [TaskItem], from source: IndexSet, to destination: Int,
+                           ascending: Bool, parentID: String? = nil) -> Bool {
+        let predicate: Predicate<TaskItem>
+        if let parentID {
+            predicate = #Predicate { !$0.isDeletedLocally && $0.parentTask?.id == parentID }
+        } else {
+            predicate = Self.taskQueryPredicate(for: selection)
+        }
+        guard TaskListHelpers.saveManualMove(displayed, from: source, to: destination,
+            ascending: ascending, in: modelContext, matching: FetchDescriptor(predicate: predicate),
+            errorState: errorState) else { return false }
         syncCommands.syncAfterChange(modelContext)
         HapticManager.softImpact()
-    }
-
-    /// Handles a long-press drag reorder of a parent's subtasks (only active when
-    /// sorting Manually). Renumbers the moved sibling group's `manualSortOrder`
-    /// off the same display order the rows render in, so the new order mirrors
-    /// into Nextcloud (X-APPLE-SORT-ORDER) exactly like the root list.
-    private func moveSubtasks(of parent: TaskItem, from source: IndexSet, to destination: Int) {
-        var reordered = TaskListHelpers.orderedSubtasksIfLive(
-            of: parent,
-            by: activeSort,
-            ascending: sortDirection.isAscending
-        )
-        // An invalidated parent yields no children, but the offsets came from the
-        // rows that were on screen a moment ago — moving them would trade a
-        // SwiftData trap for an index-out-of-range one.
-        guard source.allSatisfy({ $0 < reordered.count }), destination <= reordered.count
-        else { return }
-        reordered.move(fromOffsets: source, toOffset: destination)
-        TaskListHelpers.assignManualOrder(reordered)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
-        syncCommands.syncAfterChange(modelContext)
-        HapticManager.softImpact()
+        return true
     }
 
     // MARK: - Sectioned Occurrences (Upcoming / Overdue)
@@ -678,57 +824,56 @@ struct TaskListView: View {
         guard let smartList = currentSmartList,
               (smartList == .upcoming || smartList == .overdue) else { return [] }
 
-        // Start from all live, non-completed tasks — the query's `#Predicate`
-        // already scoped `allTasks` to non-deleted roots. Liveness first, for
-        // the same reason as `displayedTasks`: the reads below would trap on a
-        // task an account delete has already cascaded away.
-        var baseTasks = liveRoots.filter { $0.status != .completed }
+        let cal = Calendar.current
+        let occurrences = Self.sectionedTaskOccurrences(from: liveRoots, smartList: smartList,
+                                                        searchText: searchText, priority: priorityFilter, now: Date())
+        if smartList == .upcoming {
+            return Self.groupOccurrences(occurrences, by: upcomingGrouping == "weekly" ? .weekOfYear : .month, calendar: cal)
+        } else {
+            // Overdue: group by month going back
+            return Self.groupOccurrences(occurrences, by: .month, calendar: cal)
+        }
+    }
 
-        // Apply search filter. See the note on the other search above: folding is
-        // `localizedStandardContains`, not `lowercased()`.
+    /// The caller supplies live roots from the selected view's query.
+    static func sectionedTaskOccurrences(from roots: [TaskItem], smartList: SmartList, searchText: String,
+                                        priority: TaskPriority?, now: Date) -> [TaskOccurrence] {
+        var baseTasks = roots.filter { $0.status != .completed }
+
+        // Search before UID deduplication so the matching copy can survive.
         if !searchText.isEmpty {
-            baseTasks = baseTasks.filter { task in
-                task.title.localizedStandardContains(searchText)
-                    || (task.descriptionText?.localizedStandardContains(searchText) ?? false)
-            }
+            baseTasks = baseTasks.filter { TaskListHelpers.matchesSearch($0, query: searchText) }
         }
 
         // Apply priority filter
-        if let pri = priorityFilter {
-            baseTasks = baseTasks.filter { $0.priority == pri }
+        if let priority {
+            baseTasks = baseTasks.filter { $0.priority == priority }
         }
 
         // Deduplicate by UID
         baseTasks = TaskListHelpers.deduplicateByUID(baseTasks)
 
-        let cal = Calendar.current
-        let occurrences = TaskListHelpers.occurrences(
-            from: baseTasks, smartList: smartList, now: Date()
-        )
-
-        if smartList == .upcoming {
-            return groupOccurrences(occurrences, by: upcomingGrouping == "weekly" ? .weekOfYear : .month, calendar: cal)
-        } else {
-            // Overdue: group by month going back
-            return groupOccurrences(occurrences, by: .month, calendar: cal)
-        }
+        return TaskListHelpers.occurrences(from: baseTasks, smartList: smartList, now: now)
     }
 
     /// Groups occurrences into titled sections by calendar component.
-    private func groupOccurrences(
+    static func groupOccurrences(
         _ occurrences: [TaskOccurrence],
         by component: Calendar.Component,
         calendar: Calendar
     ) -> [TaskSection] {
         let grouped = Dictionary(grouping: occurrences) { occurrence -> Date in
-            if component == .weekOfYear {
-                // Start of the week containing this date
-                return calendar.dateInterval(of: .weekOfYear, for: occurrence.occurrenceDate)?.start ?? occurrence.occurrenceDate
-            } else {
-                // Start of the month
-                return calendar.dateInterval(of: .month, for: occurrence.occurrenceDate)?.start ?? occurrence.occurrenceDate
-            }
+            let day = DueDateHelper.localStartOfDay(for: occurrence.occurrenceDate,
+                                                    isDateOnly: occurrence.isDueDateOnly,
+                                                    regionCalendar: calendar)
+            return calendar.dateInterval(of: component, for: day)?.start ?? day
         }
+
+        var dateStyle = Date.FormatStyle.dateTime.year()
+        dateStyle.calendar = calendar
+        dateStyle.timeZone = calendar.timeZone
+        let weekStyle = Date.IntervalFormatStyle(calendar: calendar, timeZone: calendar.timeZone)
+            .year().month(.abbreviated).day()
 
         // Fixed `dateFormat` patterns ("MMM d", "MMM d, yyyy", "MMMM yyyy") hardcode English's
         // month-before-day order and an en-dash join. In de, es, fr, it and nl the day comes
@@ -743,11 +888,11 @@ struct TaskListView: View {
                 // `..<` needs a strictly ascending range; `end` is six days on, so the only way
                 // it can equal `key` is the `date(byAdding:)` failure above.
                 let label = end > key
-                    ? (key..<end).formatted(.interval.year().month(.abbreviated).day())
-                    : key.formatted(.dateTime.year().month(.abbreviated).day())
+                    ? (key..<end).formatted(weekStyle)
+                    : key.formatted(dateStyle.month(.abbreviated).day())
                 return TaskSection(title: label, occurrences: grouped[key] ?? [])
             } else {
-                return TaskSection(title: key.formatted(.dateTime.year().month(.wide)),
+                return TaskSection(title: key.formatted(dateStyle.month(.wide)),
                                    occurrences: grouped[key] ?? [])
             }
         }
@@ -768,11 +913,12 @@ private struct TasksListContent: View {
     let ascending: Bool
     let onSelect: (TaskItem) -> Void
     let onMove: (IndexSet, Int) -> Void
-    let onMoveSubtasks: (TaskItem, IndexSet, Int) -> Void
+    let onMoveSubtasks: ([TaskItem], String, IndexSet, Int) -> Bool
     /// Tapping the blank area beneath the last row focuses the inline add field.
     let onTapEmptyArea: () -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     var body: some View {
         List {
@@ -813,17 +959,13 @@ private struct TasksListContent: View {
     }
 
     /// Reparents a dragged task under a new parent (or nil for root).
-    private func reparentTask(_ child: TaskItem?, _ newParent: TaskItem?) {
-        guard let child = child else { return }
-        // Prevent circular references
-        guard child.id != newParent?.id else { return }
-
-        child.parentTask = newParent
-        child.parentUID = newParent?.uid
-        child.lastModifiedDate = Date()
-        child.isDirty = true
+    private func reparentTask(_ droppedTaskID: String?, _ newParent: TaskItem?) -> Bool {
+        guard let droppedTaskID,
+              TaskHierarchyTraversal.reparent(taskID: droppedTaskID, under: newParent, in: modelContext, errorState: errorState)
+        else { return false }
+        guard ViewPersistence.saveOrReport(in: modelContext, errorState: errorState) else { return false }
         HapticManager.softImpact()
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        return true
     }
 }
 
@@ -836,8 +978,20 @@ private struct TasksListContent: View {
 struct TaskOccurrence: Identifiable {
     let task: TaskItem
     let occurrenceDate: Date
+    let isDueDateOnly: Bool
+    let id: String
 
-    var id: String { "\(task.id)-\(occurrenceDate.timeIntervalSince1970)" }
+    init(task: TaskItem, occurrenceDate: Date) {
+        self.task = task
+        self.occurrenceDate = occurrenceDate
+        self.isDueDateOnly = task.isDueDateOnly
+        self.id = "\(task.id)-\(occurrenceDate.timeIntervalSince1970)"
+    }
+
+    func spokenDueDate(timeZone: TimeZone = .current) -> String {
+        DueDateFormatter.accessibilityLabel(occurrenceDate, isDateOnly: isDueDateOnly, timeZone: timeZone,
+                                            timedStyle: Date.FormatStyle(date: .abbreviated, time: .omitted))
+    }
 }
 
 /// A section of task occurrences with a display title (e.g., "Jun 2 – Jun 8, 2026").
@@ -879,7 +1033,7 @@ private struct SectionedTaskListContent: View {
                             TaskRowView(data: data, task: occurrence.task) {
                                 onSelect(occurrence.task)
                             }
-                            .accessibilityLabel("\(data.title), due \(occurrence.occurrenceDate.formatted(date: .abbreviated, time: .omitted))")
+                            .accessibilityLabel("\(data.title), due \(occurrence.spokenDueDate())")
                             .listRowSeparator(.hidden)
                         }
                     }
@@ -906,11 +1060,19 @@ private struct TaskRootHierarchyContent: View {
     let activeSort: TaskSortOption
     let ascending: Bool
     let onSelect: (TaskItem) -> Void
-    let onReparent: (TaskItem?, TaskItem?) -> Void
-    let onMoveSubtasks: (TaskItem, IndexSet, Int) -> Void
+    let onReparent: (String?, TaskItem?) -> Bool
+    let onMoveSubtasks: ([TaskItem], String, IndexSet, Int) -> Bool
 
     private typealias Hierarchy = TaskListHierarchyProjection<TaskItem, String>
+    private struct ProgressKey: Equatable {
+        let rootIdentity: ObjectIdentifier
+        let dataRevision: UInt64
+    }
+
     @State private var hierarchyState = TaskListRootHierarchyState<TaskItem, String>()
+    @State private var progressCache = ObservedProjectionCache<
+        ProgressKey, TaskHierarchyProgressIndex<TaskItem>
+    >()
     /// Owned by the root group, surviving an ancestor collapse and reorder.
     @State private var collapsedTaskIDs: Set<String> = []
     @State private var visibleTaskIDs: Set<String> = []
@@ -936,10 +1098,9 @@ private struct TaskRootHierarchyContent: View {
     }
 
     private var rootRow: some View {
-        TaskHierarchyRow(task: task, depth: 0,
+        TaskHierarchyRow(task: task, progressIndex: hierarchyProgress, depth: 0,
             hasChildren: hierarchyState.projection?.rows.first?.hasChildren ?? false,
-            isExpanded: expansion(for: rootID), activeSort: activeSort,
-            ascending: ascending, onSelect: onSelect,
+            isExpanded: expansion(for: rootID), onSelect: onSelect,
             onReparent: { child, parent in onReparent(child, parent) },
             enableReparentDrag: !manualReorder)
             .onAppear { rowAppeared(rootID) }
@@ -947,11 +1108,13 @@ private struct TaskRootHierarchyContent: View {
     }
 
     private var descendantRows: some View {
-        let rows: [Hierarchy.Row] = Array(hierarchyState.projection?.rows.dropFirst() ?? [])
+        let projection = hierarchyState.projection
+        let rows: [Hierarchy.Row] = Array(projection?.rows.dropFirst() ?? [])
+        let progressIndex = hierarchyProgress
         return ForEach(rows) { entry in
-            TaskHierarchyRow(task: entry.node, depth: entry.depth,
+            TaskHierarchyRow(task: entry.node, progressIndex: progressIndex, depth: entry.depth,
                 hasChildren: entry.hasChildren, isExpanded: expansion(for: entry.id),
-                activeSort: activeSort, ascending: ascending, onSelect: onSelect,
+                onSelect: onSelect,
                 onReparent: { child, parent in onReparent(child, parent) },
                 enableReparentDrag: !manualReorder)
                 .listRowSeparator(.hidden)
@@ -959,8 +1122,30 @@ private struct TaskRootHierarchyContent: View {
                 .onDisappear { visibleTaskIDs.remove(entry.id) }
         }
         .onMove(perform: manualReorder ? { source, destination in
-            moveDescendants(from: source, to: destination)
+            // This ForEach omits the root, while the projection includes it.
+            guard let move = projection?.move(from: IndexSet(source.map { $0 + 1 }), to: destination + 1),
+                  let siblings = move.siblings,
+                  let parentID = move.parentID,
+                  onMoveSubtasks(siblings, parentID, move.source, move.destination) else { return }
+            // A committed move can leave this cached projection out of date.
+            invalidateHierarchy()
         } : nil)
+    }
+
+    /// Lazily shares progress only while this root's rows are realized. The
+    /// cache key changes for replacement roots and every parent-owned revision;
+    /// observed model reads also invalidate it for unsaved local mutations.
+    private var hierarchyProgress: TaskHierarchyProgressIndex<TaskItem>? {
+        guard !visibleTaskIDs.isEmpty, task.modelContext != nil else { return nil }
+        let key = ProgressKey(rootIdentity: ObjectIdentifier(task), dataRevision: dataRevision)
+        return progressCache.value(for: key) {
+            TaskHierarchyProgressIndex(
+                roots: [task],
+                isVisible: { $0.modelContext != nil && !$0.isDeletedLocally },
+                children: { $0.subtasks },
+                isCompleted: { $0.status == .completed }
+            )
+        }
     }
 
     private func expansion(for id: String) -> Binding<Bool> {
@@ -984,8 +1169,8 @@ private struct TaskRootHierarchyContent: View {
         invalidateHierarchy()
     }
 
-    private func invalidateHierarchy() {
-        hierarchyState.invalidate()
+    private func invalidateHierarchy(fromObservation generation: UInt64? = nil) {
+        guard hierarchyState.invalidate(fromObservation: generation) else { return }
         // Offscreen roots retain their cached structure and defer all model reads.
         if !visibleTaskIDs.isEmpty { activateHierarchy() }
     }
@@ -998,6 +1183,7 @@ private struct TaskRootHierarchyContent: View {
         let collapsed = collapsedTaskIDs
         let sort = activeSort
         let direction = ascending
+        let generation = hierarchyState.observationGeneration
         hierarchyState.activate {
             // Relationships and sort fields observed during this root's walk
             // invalidate only its cache. Defer the callback until the mutation
@@ -1011,17 +1197,9 @@ private struct TaskRootHierarchyContent: View {
                             by: sort, ascending: direction)
                     })
             } onChange: {
-                Task { @MainActor in invalidateHierarchy() }
+                Task { @MainActor in invalidateHierarchy(fromObservation: generation) }
             }
         }
-    }
-
-    private func moveDescendants(from source: IndexSet, to destination: Int) {
-        // This ForEach omits the root; the cached projection includes it.
-        guard let move = hierarchyState.projection?.move(
-            from: IndexSet(source.map { $0 + 1 }), to: destination + 1),
-            let parent = move.parent else { return }
-        onMoveSubtasks(parent, move.source, move.destination)
     }
 }
 
@@ -1030,13 +1208,12 @@ private struct TaskRootHierarchyContent: View {
 /// stops at four levels while the projection preserves the full hierarchy depth.
 private struct TaskHierarchyRow: View {
     let task: TaskItem
+    let progressIndex: TaskHierarchyProgressIndex<TaskItem>?
     let depth: Int
     let hasChildren: Bool
     @Binding var isExpanded: Bool
-    var activeSort: TaskSortOption = .dueDate
-    var ascending: Bool = true
     let onSelect: (TaskItem) -> Void
-    var onReparent: ((TaskItem, TaskItem?) -> Void)?
+    var onReparent: ((String, TaskItem?) -> Bool)?
     /// Disabled in manual mode so reparenting does not conflict with reorder.
     var enableReparentDrag: Bool = true
 
@@ -1045,7 +1222,8 @@ private struct TaskHierarchyRow: View {
         // defer row snapshots instead of resolving a conditional row count.
         HStack(spacing: 0) {
             // Establish liveness before chevron, content or drag reads.
-            if let data = TaskRowData(task: task) {
+            if task.modelContext != nil,
+               let data = TaskRowData(task: task, progress: progressIndex?.progress(for: task)) {
                 taskRow(data: data)
             }
         }
@@ -1060,9 +1238,8 @@ private struct TaskHierarchyRow: View {
                     guard task.modelContext != nil,
                           let droppedID = droppedIDs.first,
                           droppedID != task.id,
-                          let droppedTask = findTask(id: droppedID) else { return false }
-                    onReparent?(droppedTask, task)
-                    return true
+                          let onReparent else { return false }
+                    return onReparent(droppedID, task)
                 }
         } else {
             paddedRow(data: data)
@@ -1095,18 +1272,6 @@ private struct TaskHierarchyRow: View {
             }
         }
         .padding(.leading, CGFloat(TaskListHierarchyLayout.visualDepth(depth)) * 24)
-    }
-
-    /// Retains the existing drop lookup within this task's direct children.
-    private func findTask(id: String) -> TaskItem? {
-        guard task.modelContext != nil else { return nil }
-        if task.id == id { return task }
-        for subtask in TaskListHelpers.orderedSubtasksIfLive(
-            of: task, by: activeSort, ascending: ascending
-        ) {
-            if subtask.modelContext != nil && subtask.id == id { return subtask }
-        }
-        return nil
     }
 }
 
@@ -1226,12 +1391,24 @@ private struct TaskListToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button(action: onAdd) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title3)
+                Label(String(localized: "tasks.a11y.addTask",
+                             defaultValue: "Add task",
+                             comment: "VoiceOver label for the toolbar button that opens the new-task sheet. Spoken, not shown — sentence case, unlike the visible 'Add Task' button and Shortcuts action of the same name."),
+                      systemImage: "plus")
             }
-            .accessibilityLabel(String(localized: "tasks.a11y.addTask",
-                                       defaultValue: "Add task",
-                                       comment: "VoiceOver label for the toolbar button that opens the new-task sheet. Spoken, not shown — sentence case, unlike the visible 'Add Task' button and Shortcuts action of the same name."))
+            .labelStyle(.iconOnly)
         }
+    }
+}
+
+/// Board, Calendar and Matrix can be presented above ContentView's shared alert.
+/// Their save reporters must target this active sheet instead of its presenter.
+private struct HiddenDestinationErrorScope: ViewModifier {
+    @State private var errorState = ErrorState()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
     }
 }

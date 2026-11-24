@@ -150,6 +150,7 @@ actor TaskPhotoCleanupRunner {
         guard !pending.contains(where: { model in
             guard let row = model as? SyncMetadata else { return false }
             return row.persistentModelID == work.persistentID || row.id == work.id
+                || row.id.hasPrefix(TaskPhotoOwnership.prefix)
         }) else { return nil }
 
         let key = work.id
@@ -170,6 +171,7 @@ actor TaskPhotoCleanupRunner {
 
     @MainActor
     private static func hasReference(_ work: Work, in context: ModelContext) throws -> Bool {
+        if try TaskPhotoOwnership.retains(fileID: work.fileID, accountID: work.accountID, in: context) { return true }
         let fileID = work.fileID
         let descriptor = FetchDescriptor<TaskPhoto>(predicate: #Predicate {
             $0.originalFileID == fileID || $0.previousOriginalFileID == fileID
@@ -260,7 +262,9 @@ enum TaskPhotoReferenceScanner {
         // Shared structural validation rejects truncated components, HTML, and
         // malformed supported photos before any absence can authorize deletion.
         let parsed = try SyncBodyValidation.parse(resource, using: formatterCache)
-        guard parsed.todo != nil else { throw CalDAVError.invalidResponse }
+        // Unsupported editing shape does not imply missing references. This
+        // retention-only reader independently accounts for every component below.
+        guard parsed.shape != .nonTask else { throw CalDAVError.invalidResponse }
         let unfolded = ICalendarParser.unfoldLines(resource.icsData)
         let componentCount = unfolded.components(separatedBy: .newlines).filter {
             $0.trimmingCharacters(in: .whitespaces) == "BEGIN:VTODO"

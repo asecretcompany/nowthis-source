@@ -35,6 +35,42 @@
         }
       }
     },
+    "A server task is too complex to process safely. Sync stopped before importing that task." : {
+      "comment" : "Shown when an imported iCalendar task exceeds the parser work limit. Compiled into the app and widget.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Serveraufgabe ist zu komplex, um sie sicher zu verarbeiten. Die Synchronisierung wurde beendet, bevor diese Aufgabe importiert wurde."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una tarea del servidor es demasiado compleja para procesarla de forma segura. La sincronización se detuvo antes de importar esa tarea."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une tâche du serveur est trop complexe pour être traitée en toute sécurité. La synchronisation s’est arrêtée avant l’importation de cette tâche."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un’attività del server è troppo complessa per essere elaborata in sicurezza. La sincronizzazione è stata interrotta prima di importare l’attività."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Een servertak is te complex om veilig te verwerken. De synchronisatie is gestopt voordat die taak werd geïmporteerd."
+          }
+        }
+      }
+    },
     "Choose which lists to show in the widget." : {
       "localizations" : {
         "de" : {
@@ -171,20 +207,104 @@
         }
       }
     },
+    "dueDate.a11y.allDay" : {
+      "comment" : "VoiceOver reading of a due date for a task due on a whole day rather than at a time. The placeholder is the already-formatted date. Use a spoken separator here, not a punctuation glyph.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, ganztägig"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@, All day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, todo el día"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, toute la journée"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, tutto il giorno"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, hele dag"
+          }
+        }
+      }
+    },
+    "dueDate.badge.allDay" : {
+      "comment" : "Due-date badge for a task due on a whole day rather than at a time. The placeholder is the already-formatted date; the middle dot is a visual separator and may be changed to whatever reads correctly.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Ganztägig"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ · All day"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Todo el día"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Toute la journée"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Tutto il giorno"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Hele dag"
+          }
+        }
+      }
+    },
     "filter.comparison.contains" : {
       "comment" : "Saved filter comparison: '<field> contains <value>' — substring match. Lowercase, no punctuation.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "contains"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "enthält"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "contains"
           }
         },
         "es" : {
@@ -217,16 +337,16 @@
       "comment" : "Saved filter comparison, read as the middle of a sentence: '<field> is <value>'. Lowercase, no punctuation.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "is"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ist"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "is"
           }
         },
         "es" : {
@@ -259,16 +379,16 @@
       "comment" : "Saved filter comparison: '<field> does not contain <value>'. Lowercase, no punctuation.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "does not contain"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "enthält nicht"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "does not contain"
           }
         },
         "es" : {
@@ -301,16 +421,16 @@
       "comment" : "Saved filter comparison: '<field> is not <value>'. Lowercase, no punctuation.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "is not"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ist nicht"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "is not"
           }
         },
         "es" : {
@@ -343,16 +463,16 @@
       "comment" : "Saved filter field: the task is due later than a given date.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Due After"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fällig nach"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Due After"
           }
         },
         "es" : {
@@ -385,16 +505,16 @@
       "comment" : "Saved filter field: the task is due earlier than a given date.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Due Before"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fällig vor"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Due Before"
           }
         },
         "es" : {
@@ -427,16 +547,16 @@
       "comment" : "Saved filter field: whether the task has a due date at all.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Has Due Date"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hat Fälligkeitsdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Has Due Date"
           }
         },
         "es" : {
@@ -469,16 +589,16 @@
       "comment" : "Saved filter field: which list the task is in. 'List' is the app's word for a CalDAV collection.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "List"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Liste"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "List"
           }
         },
         "es" : {
@@ -511,16 +631,16 @@
       "comment" : "Saved filter field: the task's High/Medium/Low priority.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Priority"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Priorität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Priority"
           }
         },
         "es" : {
@@ -553,15 +673,15 @@
       "comment" : "Saved filter field: the task's status (Needs Action / In Progress / Completed / Cancelled).",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Status"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
             "value" : "Status"
           }
         },
@@ -595,15 +715,15 @@
       "comment" : "Saved filter field: one of the task's tags. Singular.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tag"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
+            "value" : "Tag"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
             "value" : "Tag"
           }
         },
@@ -637,16 +757,16 @@
       "comment" : "Saved filter field: the task's name.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Title"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Titel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Title"
           }
         },
         "es" : {
@@ -679,16 +799,16 @@
       "comment" : "Saved filter: a task must match every rule. Reads as the start of 'All of these rules'.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "All of"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Alle"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All of"
           }
         },
         "es" : {
@@ -721,16 +841,16 @@
       "comment" : "Saved filter: a task must match at least one rule. Reads as the start of 'Any of these rules'.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Any of"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Beliebige"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Any of"
           }
         },
         "es" : {
@@ -793,20 +913,513 @@
         }
       }
     },
+    "intent.entity.accountName" : {
+      "comment" : "Shortcuts property for the account's display name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kontoname"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre de la cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du compte"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome dell’account"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accountnaam"
+          }
+        }
+      }
+    },
+    "intent.entity.dueDate" : {
+      "comment" : "Shortcuts property for the due date of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de vencimiento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date d’échéance"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di scadenza"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum"
+          }
+        }
+      }
+    },
+    "intent.entity.dueDateOnly" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a date-only due date.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fälligkeitsdatum ohne Uhrzeit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due Date Without Time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de vencimiento sin hora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date d’échéance sans heure"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di scadenza senza orario"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vervaldatum zonder tijd"
+          }
+        }
+      }
+    },
+    "intent.entity.listName" : {
+      "comment" : "Shortcuts property for the user-entered list name.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listenname"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre de la lista"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom de la liste"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome dell’elenco"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lijstnaam"
+          }
+        }
+      }
+    },
+    "intent.entity.priority" : {
+      "comment" : "Shortcuts property for the current priority of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priority"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prioridad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorité"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorità"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prioriteit"
+          }
+        }
+      }
+    },
+    "intent.entity.repeating" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a recurrence rule.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wiederkehrend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repeating"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recurrente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récurrente"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricorrente"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terugkerend"
+          }
+        }
+      }
+    },
+    "intent.entity.startDate" : {
+      "comment" : "Shortcuts property for the start date of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Date"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de inicio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date de début"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di inizio"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum"
+          }
+        }
+      }
+    },
+    "intent.entity.startDateOnly" : {
+      "comment" : "Boolean Shortcuts property indicating that the task has a date-only start date.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum ohne Uhrzeit"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Date Without Time"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de inicio sin hora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date de début sans heure"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data di inizio senza orario"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startdatum zonder tijd"
+          }
+        }
+      }
+    },
+    "intent.entity.status" : {
+      "comment" : "Shortcuts property for the current status of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "État"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stato"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        }
+      }
+    },
+    "intent.entity.tags" : {
+      "comment" : "Shortcuts property listing the names of tags assigned to a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tag"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags"
+          }
+        }
+      }
+    },
+    "intent.entity.taskTitle" : {
+      "comment" : "Shortcuts property for the user-entered title of a task.",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titre"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titolo"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel"
+          }
+        }
+      }
+    },
+    "intent.task.changed" : {
+      "comment" : "Shown in Siri or Shortcuts when an operation's task or subtree changed before the write.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Aufgabe wurde geändert. Prüfe sie und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This task changed. Review it and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta tarea ha cambiado. Revísala e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette tâche a changé. Vérifiez-la et réessayez."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questa attività è cambiata. Controllala e riprova."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze taak is gewijzigd. Controleer de taak en probeer het opnieuw."
+          }
+        }
+      }
+    },
     "intent.task.noList" : {
       "comment" : "Shown under a task's name in the Shortcuts and Siri task picker when the task belongs to no list.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No list"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keine Liste"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No list"
           }
         },
         "es" : {
@@ -1110,6 +1723,48 @@
     "NowThis" : {
 
     },
+    "NowThis cannot complete tasks with this repeat rule. The task has not been changed." : {
+      "comment" : "Explains a rejected completion of an unsupported imported recurrence rule. The task stays unchanged.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kann Aufgaben mit dieser Wiederholungsregel nicht abschließen. Die Aufgabe wurde nicht geändert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis cannot complete tasks with this repeat rule. The task has not been changed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis no puede completar tareas con esta regla de repetición. La tarea no se ha modificado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis ne peut pas terminer les tâches utilisant cette règle de répétition. La tâche n’a pas été modifiée."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis non può completare le attività con questa regola di ripetizione. L’attività non è stata modificata."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NowThis kan taken met deze herhalingsregel niet voltooien. De taak is niet gewijzigd."
+          }
+        }
+      }
+    },
     "NowThis Tasks" : {
       "localizations" : {
         "de" : {
@@ -1148,16 +1803,16 @@
       "comment" : "Priority value meaning the task has no priority set. Answers 'Priority: ?', so the word agrees with the target language's word for priority — feminine in Spanish, French and Italian. Do not share this key with the reminder, location or empty-quadrant 'None'.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "None"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keine"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "None"
           }
         },
         "es" : {
@@ -1258,16 +1913,16 @@
       "comment" : "Sort option: order tasks by when they were completed.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Completed Date"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Erledigungsdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Completed Date"
           }
         },
         "es" : {
@@ -1300,16 +1955,16 @@
       "comment" : "Sort option: order tasks by when they were created. Past participle used as a label, not a sentence.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Created"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Erstellt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Created"
           }
         },
         "es" : {
@@ -1342,16 +1997,16 @@
       "comment" : "Sort direction: smallest or earliest first.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ascending"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aufsteigend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ascending"
           }
         },
         "es" : {
@@ -1384,16 +2039,16 @@
       "comment" : "Sort direction: largest or latest first.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Descending"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Absteigend"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Descending"
           }
         },
         "es" : {
@@ -1426,16 +2081,16 @@
       "comment" : "Sort option: order tasks by when they are due.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Due Date"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fälligkeitsdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Due Date"
           }
         },
         "es" : {
@@ -1468,16 +2123,16 @@
       "comment" : "Sort option: the order the user dragged tasks into. Adverb answering 'sorted how?'.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Manually"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Manuell"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Manually"
           }
         },
         "es" : {
@@ -1510,16 +2165,16 @@
       "comment" : "Sort option: order tasks by when they were last changed. Past participle used as a label.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Modified"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Geändert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Modified"
           }
         },
         "es" : {
@@ -1552,16 +2207,16 @@
       "comment" : "Sort option: order tasks by High/Medium/Low priority.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Priority"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Priorität"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Priority"
           }
         },
         "es" : {
@@ -1594,16 +2249,16 @@
       "comment" : "Sort option: a combined score of priority and how soon a task is due.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Relevance"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Relevanz"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Relevance"
           }
         },
         "es" : {
@@ -1636,16 +2291,16 @@
       "comment" : "Sort option: order tasks by when work on them may begin.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Start Date"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Startdatum"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start Date"
           }
         },
         "es" : {
@@ -1678,15 +2333,15 @@
       "comment" : "Sort option: order tasks by their first tag.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tags"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
+            "value" : "Tags"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
             "value" : "Tags"
           }
         },
@@ -1720,16 +2375,16 @@
       "comment" : "Sort option: order tasks alphabetically by name.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Title"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Titel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Title"
           }
         },
         "es" : {
@@ -1762,16 +2417,16 @@
       "comment" : "Status of a SINGLE task: abandoned without being done. Agrees with the word for task, which is feminine in Spanish, French and Italian.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Cancelled"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abgebrochen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancelled"
           }
         },
         "es" : {
@@ -1804,16 +2459,16 @@
       "comment" : "Status of a SINGLE task: finished. Singular — this labels one task, not the list of completed ones, which has its own key. Agrees with the word for task, which is feminine in Spanish, French and Italian.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Completed"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Erledigt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Completed"
           }
         },
         "es" : {
@@ -1846,16 +2501,16 @@
       "comment" : "Status of a SINGLE task: started but not finished. Agrees with the word for task, which is feminine in Spanish, French and Italian.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "In Progress"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "In Bearbeitung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "In Progress"
           }
         },
         "es" : {
@@ -1888,16 +2543,16 @@
       "comment" : "Status of a SINGLE task: not started yet. Agrees with the word for task, which is feminine in Spanish, French and Italian. Also used as a Kanban column header, where the singular still reads correctly.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs Action"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Offen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Needs Action"
           }
         },
         "es" : {
@@ -1990,6 +2645,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Taak niet gevonden."
+          }
+        }
+      }
+    },
+    "task.write.readOnly.create" : {
+      "comment" : "Shown when a task cannot be added to a read-only list. The creation draft stays available.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Wähle eine andere Liste oder bitte die Person, der die Liste gehört, um Bearbeitungsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Choose another list or ask the list owner for permission to edit it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Elige otra lista o pide permiso para editarla a quien la comparte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Choisissez une autre liste ou demandez à son propriétaire l’autorisation de la modifier."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Scegli un altro elenco o chiedi a chi lo condivide il permesso di modificarlo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Kies een andere lijst of vraag de eigenaar om toestemming om deze te bewerken."
+          }
+        }
+      }
+    },
+    "task.write.readOnly.edit" : {
+      "comment" : "Shown when editing a task is refused because its list is read-only. The list owner can grant edit permission.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Liste ist schreibgeschützt. Bitte die Person, der die Liste gehört, um Bearbeitungsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This list is read-only. Ask the list owner for permission to edit it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta lista es de solo lectura. Pide permiso para editarla a quien la comparte."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette liste est en lecture seule. Demandez à son propriétaire l’autorisation de la modifier."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo elenco è di sola lettura. Chiedi a chi lo condivide il permesso di modificarlo."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze lijst is alleen-lezen. Vraag de eigenaar van de lijst om toestemming om deze te bewerken."
           }
         }
       }
@@ -2100,16 +2839,16 @@
       "comment" : "Widget header when the widget is not filtered to particular lists.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "All Lists"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Alle Listen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All Lists"
           }
         },
         "es" : {
@@ -2142,16 +2881,16 @@
       "comment" : "Widget header used when the selected list can no longer be found. A generic noun, not the name of any list.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tasks"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aufgaben"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tasks"
           }
         },
         "es" : {
@@ -2180,20 +2919,151 @@
         }
       }
     },
+    "widget.portrait.tasksShown" : {
+      "comment" : "Number of task rows currently visible in the extra-large portrait widget. This count may be smaller than the number of tasks due.",
+      "localizations" : {
+        "de" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Aufgabe angezeigt"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Aufgaben angezeigt"
+                }
+              }
+            }
+          }
+        },
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld task shown"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tasks shown"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tareas visibles"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tarea visible"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tareas visibles"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tâches affichées"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tâche affichée"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tâches affichées"
+                }
+              }
+            }
+          }
+        },
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld attività mostrate"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld attività mostrata"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld attività mostrate"
+                }
+              }
+            }
+          }
+        },
+        "nl" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld taak weergegeven"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld taken weergegeven"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "widget.priority.short.high" : {
       "comment" : "Abbreviated priority badge on the iOS home-screen widget for a high-priority task; extremely tight width budget (3-4 characters); full word is High; uppercase by design.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "HIGH"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "HOCH"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "HIGH"
           }
         },
         "es" : {
@@ -2226,16 +3096,16 @@
       "comment" : "Abbreviated priority badge on the iOS home-screen widget for a low-priority task; extremely tight width budget (3-4 characters); full word is Low; uppercase by design.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "LOW"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "NIED"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "LOW"
           }
         },
         "es" : {
@@ -2268,16 +3138,16 @@
       "comment" : "Abbreviated priority badge on the iOS home-screen widget for a medium-priority task; extremely tight width budget (3-4 characters); full word is Medium; uppercase by design.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "MED"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "MITT"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "MED"
           }
         },
         "es" : {
@@ -2310,16 +3180,16 @@
       "comment" : "VoiceOver label for a task row in the widget when the task is done. The placeholder is the user-entered task title.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@, completed"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@, erledigt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@, completed"
           }
         },
         "es" : {
@@ -2352,16 +3222,16 @@
       "comment" : "VoiceOver label for a task row in the widget when the task is not done yet. The placeholder is the user-entered task title.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@, pending"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@, offen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@, pending"
           }
         },
         "es" : {
@@ -2394,16 +3264,16 @@
       "comment" : "Completion state of a task, read at the end of a VoiceOver label in the widget. Adjective agreeing with the word for a task in the target language.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "completed"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "erledigt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "completed"
           }
         },
         "es" : {
@@ -2436,16 +3306,16 @@
       "comment" : "Not-yet-done state of a task, read at the end of a VoiceOver label in the widget. Adjective agreeing with the word for a task in the target language.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "pending"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "offen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "pending"
           }
         },
         "es" : {
@@ -2478,16 +3348,16 @@
       "comment" : "VoiceOver label for a task row in the widget that has a priority. Placeholders in order: the user-entered title, the already-localized priority name, and the already-localized completion state.",
       "extractionState" : "extracted_with_value",
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@, %2$@ priority, %3$@"
-          }
-        },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@, Priorität %2$@, %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@ priority, %3$@"
           }
         },
         "es" : {

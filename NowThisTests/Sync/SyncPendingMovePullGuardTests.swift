@@ -52,12 +52,15 @@ struct SyncPendingMovePullGuardTests {
         let home = TaskList(serverURL: "/cal/home/", name: "Home", colorHex: "#FF9500")
         context.insert(work)
         context.insert(home)
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://fixture.invalid", username: "fixture")
+        context.insert(account); work.account = account; home.account = account
         let task = TaskItem(uid: "uid-moved", title: "Renew passport")
         context.insert(task)
         task.taskList = work
         task.remoteHref = "/cal/work/uid-moved.ics"
         task.etag = "etag-1"
         task.isLocalOnly = false
+        try SyncResourceFixture.prove(task, in: context)
         try context.save()
 
         TaskMover.move(task, to: home, in: context)

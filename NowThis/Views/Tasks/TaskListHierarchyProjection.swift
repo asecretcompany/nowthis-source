@@ -16,6 +16,8 @@ struct TaskListHierarchyProjection<Node, ID: Hashable> {
     struct Move {
         let parent: Node?
         let parentID: ID?
+        /// The displayed siblings, when the original offsets index them directly.
+        let siblings: [Node]?
         let source: IndexSet
         let destination: Int
     }
@@ -61,9 +63,13 @@ struct TaskListHierarchyProjection<Node, ID: Hashable> {
             rows.indices.contains($0) && rows[$0].parentID == first.parentID
         }) else { return nil }
         let siblings = rows.enumerated().filter { $0.element.parentID == first.parentID }
+        let hasAllSiblings = siblings.enumerated().allSatisfy { index, row in
+            index == row.element.siblingIndex
+        }
         let siblingDestination = siblings.first { $0.offset >= destination }?.element.siblingIndex
             ?? ((siblings.last?.element.siblingIndex ?? -1) + 1)
         return Move(parent: first.parent, parentID: first.parentID,
+            siblings: hasAllSiblings ? siblings.map(\.element.node) : nil,
             source: IndexSet(source.map { rows[$0].siblingIndex }),
             destination: siblingDestination)
     }
@@ -73,6 +79,7 @@ struct TaskListHierarchyProjection<Node, ID: Hashable> {
 struct TaskListRootHierarchyState<Node, ID: Hashable> {
     private(set) var projection: TaskListHierarchyProjection<Node, ID>?
     private(set) var needsRefresh = true
+    private(set) var observationGeneration: UInt64 = 0
 
     mutating func activate(_ build: () -> TaskListHierarchyProjection<Node, ID>) {
         guard needsRefresh else { return }
@@ -88,8 +95,13 @@ struct TaskListRootHierarchyState<Node, ID: Hashable> {
         invalidate()
     }
 
-    mutating func invalidate() {
+    @discardableResult
+    mutating func invalidate(fromObservation generation: UInt64? = nil) -> Bool {
+        // A delayed observer may have captured a previous sort or root.
+        if let generation, generation != observationGeneration { return false }
+        observationGeneration &+= 1
         needsRefresh = true
+        return true
     }
 }
 

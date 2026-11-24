@@ -19,20 +19,26 @@ struct NaturalLanguageParser {
         var tagNames: [String] = []
         var dueDate: Date?
         /// `true` when the input specified an explicit clock time (e.g. "at 5pm"),
-        /// `false` for bare/keyword dates that should be treated as all-day.
+        /// `false` for bare/keyword dates stored as midnight UTC on the intended civil day.
         var dueHasTime: Bool = false
     }
 
     // MARK: - Public API
 
     static func parse(_ input: String) -> ParseResult {
+        parse(input, now: Date(), calendar: .current)
+    }
+
+    /// The reference clock and calendar apply to explicit keywords and standalone times.
+    /// Foundation's date-detector fallback still uses its own environment.
+    static func parse(_ input: String, now: Date, calendar: Calendar = .current) -> ParseResult {
         var text = input
         var result = ParseResult()
 
         result.priority = extractPriority(from: &text)
         result.listName = extractList(from: &text)
         result.tagNames = extractTags(from: &text)
-        let dateResult = extractDate(from: &text)
+        let dateResult = extractDate(from: &text, now: now, calendar: calendar)
         result.dueDate = dateResult.date
         result.dueHasTime = dateResult.hasTime
 
@@ -115,19 +121,16 @@ struct NaturalLanguageParser {
     // MARK: - Date Extraction
 
     /// Keywords mapped to date generation closures.
-    nonisolated(unsafe) private static let dateKeywords: [(pattern: String, resolve: () -> Date?)] = [
-        ("today", { Calendar.current.startOfDay(for: Date()).addingTimeInterval(86399) }),
-        ("tomorrow", {
-            guard let d = Calendar.current.date(byAdding: .day, value: 1, to: Date()) else { return nil }
-            return Calendar.current.startOfDay(for: d).addingTimeInterval(86399)
-        }),
-        ("next monday", { nextWeekday(.monday) }),
-        ("next tuesday", { nextWeekday(.tuesday) }),
-        ("next wednesday", { nextWeekday(.wednesday) }),
-        ("next thursday", { nextWeekday(.thursday) }),
-        ("next friday", { nextWeekday(.friday) }),
-        ("next saturday", { nextWeekday(.saturday) }),
-        ("next sunday", { nextWeekday(.sunday) }),
+    private static let dateKeywords: [(pattern: String, resolve: @Sendable (Date, Calendar) -> Date?)] = [
+        ("today", { now, _ in now }),
+        ("tomorrow", { now, calendar in calendar.date(byAdding: .day, value: 1, to: now) }),
+        ("next monday", { nextWeekday(.monday, now: $0, calendar: $1) }),
+        ("next tuesday", { nextWeekday(.tuesday, now: $0, calendar: $1) }),
+        ("next wednesday", { nextWeekday(.wednesday, now: $0, calendar: $1) }),
+        ("next thursday", { nextWeekday(.thursday, now: $0, calendar: $1) }),
+        ("next friday", { nextWeekday(.friday, now: $0, calendar: $1) }),
+        ("next saturday", { nextWeekday(.saturday, now: $0, calendar: $1) }),
+        ("next sunday", { nextWeekday(.sunday, now: $0, calendar: $1) }),
     ]
 
     /// Regex for "in N days" / "in N day".
@@ -136,7 +139,8 @@ struct NaturalLanguageParser {
         options: .caseInsensitive
     )
 
-    private static func extractDate(from text: inout String) -> (date: Date?, hasTime: Bool) {
+    private static func extractDate(from text: inout String, now: Date,
+                                    calendar: Calendar) -> (date: Date?, hasTime: Bool) {
         // Pull out an explicit clock time first ("at 5pm"), so it neither pollutes
         // the title nor loses to a bare date keyword.
         let time = extractTimeOfDay(from: &text)
@@ -148,9 +152,8 @@ struct NaturalLanguageParser {
            let days = Int(text[numRange]),
            let fullRange = Range(match.range, in: text) {
             text.replaceSubrange(fullRange, with: "")
-            if let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) {
-                let day = Calendar.current.startOfDay(for: date).addingTimeInterval(86399)
-                return applyTime(to: day, time: time)
+            if let date = calendar.date(byAdding: .day, value: days, to: now) {
+                return dueDate(on: date, time: time, calendar: calendar)
             }
         }
 
@@ -164,46 +167,47 @@ struct NaturalLanguageParser {
                 let origStart = text.index(text.startIndex, offsetBy: startDist)
                 let origEnd = text.index(text.startIndex, offsetBy: endDist)
                 text.replaceSubrange(origStart..<origEnd, with: "")
-                if let day = keyword.resolve() {
-                    return applyTime(to: day, time: time)
+                if let day = keyword.resolve(now, calendar) {
+                    return dueDate(on: day, time: time, calendar: calendar)
                 }
                 return (nil, time != nil)
             }
         }
 
-        // 3. Fallback: NSDataDetector for natural date expressions
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-            let detectorRange = NSRange(text.startIndex..., in: text)
-            if let match = detector.firstMatch(in: text, range: detectorRange),
-               let date = match.date,
-               let swiftRange = Range(match.range, in: text) {
-                // Only strip if the matched text looks date-like (not the entire title)
-                let matchedText = String(text[swiftRange]).trimmingCharacters(in: .whitespaces)
-                if matchedText.count < text.count {
-                    text.replaceSubrange(swiftRange, with: "")
-                    // Combine the detected day with any explicit spoken time.
-                    return time != nil ? applyTime(to: date, time: time) : (date, false)
-                }
-            }
+        // 3. Interpret Foundation's detected day in the system time zone it used.
+        if let date = extractDetectedDate(from: &text) {
+            return dueDate(on: date, time: time, calendar: .current)
         }
 
         // 4. A time with no date defaults to today at that time.
         if let time {
-            let today = Calendar.current.startOfDay(for: Date())
-            let timed = Calendar.current.date(bySettingHour: time.hour, minute: time.minute, second: 0, of: today)
-            return (timed, true)
+            return dueDate(on: now, time: time, calendar: calendar)
         }
 
         return (nil, false)
     }
 
-    /// Applies an explicit clock time to a resolved day. When no time is given,
-    /// the day is returned unchanged (preserving the existing end-of-day value).
-    private static func applyTime(to dayDate: Date, time: (hour: Int, minute: Int)?) -> (date: Date?, hasTime: Bool) {
-        guard let time else { return (dayDate, false) }
-        let start = Calendar.current.startOfDay(for: dayDate)
-        let timed = Calendar.current.date(bySettingHour: time.hour, minute: time.minute, second: 0, of: start)
-        return (timed ?? dayDate, true)
+    private static func extractDetectedDate(from text: inout String) -> Date? {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue),
+              let match = detector.firstMatch(in: text, range: range),
+              let date = match.date,
+              let swiftRange = Range(match.range, in: text) else { return nil }
+        // Leave the title intact when the detector matched the entire input.
+        let matchedText = text[swiftRange].trimmingCharacters(in: .whitespaces)
+        guard matchedText.count < text.count else { return nil }
+        text.replaceSubrange(swiftRange, with: "")
+        return date
+    }
+
+    /// Convert a resolved civil day to the shared DATE storage representation once.
+    /// With a clock, retain Foundation's matching behavior for that local day.
+    private static func dueDate(on day: Date, time: (hour: Int, minute: Int)?,
+                                calendar: Calendar) -> (date: Date?, hasTime: Bool) {
+        guard let time else { return (DueDateHelper.dateOnlyValue(for: day, calendar: calendar), false) }
+        let start = calendar.startOfDay(for: day)
+        let timed = calendar.date(bySettingHour: time.hour, minute: time.minute, second: 0, of: start)
+        return (timed, true)
     }
 
     // MARK: - Time-of-Day Extraction
@@ -272,13 +276,11 @@ struct NaturalLanguageParser {
 
     // MARK: - Helpers
 
-    private static func nextWeekday(_ weekday: Weekday) -> Date? {
-        let cal = Calendar.current
-        let today = cal.component(.weekday, from: Date())
+    private static func nextWeekday(_ weekday: Weekday, now: Date, calendar: Calendar) -> Date? {
+        let today = calendar.component(.weekday, from: now)
         var daysAhead = weekday.calendarValue - today
         if daysAhead <= 0 { daysAhead += 7 }
-        guard let date = cal.date(byAdding: .day, value: daysAhead, to: Date()) else { return nil }
-        return cal.startOfDay(for: date).addingTimeInterval(86399)
+        return calendar.date(byAdding: .day, value: daysAhead, to: now)
     }
 
     private enum Weekday {

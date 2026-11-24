@@ -8,6 +8,25 @@ import Foundation
 @Suite("ICalendarSerializer")
 struct ICalendarSerializerTests {
 
+    @Test("Actual CRLF text cannot inject VTODO properties")
+    func crlfInjectionIsEscaped() {
+        let text = "foo\r\nEND:VTODO\r\nUID:x"
+        let ics = ICalendarSerializer.serialize(uid: "safe", summary: text, description: text)
+        let lines = ics.components(separatedBy: "\r\n")
+        #expect(lines.filter { $0 == "END:VTODO" }.count == 1)
+        #expect(lines.filter { $0.hasPrefix("UID:") } == ["UID:safe"])
+        #expect(lines.contains("SUMMARY:foo\\nEND:VTODO\\nUID:x"))
+        #expect(lines.contains("DESCRIPTION:foo\\nEND:VTODO\\nUID:x"))
+    }
+
+    @Test("Literal backslash-n remains distinct from an actual newline")
+    func literalBackslashNIsEscapedFirst() {
+        let ics = ICalendarSerializer.serialize(uid: "safe", summary: "\\n", description: "\n")
+        let lines = ics.components(separatedBy: "\r\n")
+        #expect(lines.contains("SUMMARY:\\\\n"))
+        #expect(lines.contains("DESCRIPTION:\\n"))
+    }
+
     @Test("Serialize basic VTODO")
     func serializeBasic() {
         let ics = ICalendarSerializer.serialize(
@@ -23,6 +42,7 @@ struct ICalendarSerializerTests {
         #expect(ics.contains("SUMMARY:Buy milk"))
         #expect(ics.contains("VERSION:2.0"))
         #expect(ics.contains("PRODID:-//NowThis//NowThis iOS//EN"))
+        #expect(!ics.contains("CATEGORIES:"))
     }
 
     @Test("Serialize with description")

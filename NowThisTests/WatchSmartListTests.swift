@@ -157,3 +157,32 @@ struct WatchSmartListTests {
         #expect(!WatchSmartList.all.includes(task, now: now))
     }
 }
+
+
+extension WatchSmartListTests {
+    @Test("Today respects civil-day boundaries on fixed transition dates")
+    func fixedTransitionBoundaries() {
+        for (zone, month, day) in CivilDueTimeDSTTests.days {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: zone)!
+            let noon = calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+            let start = calendar.startOfDay(for: noon)
+            let next = calendar.date(byAdding: .day, value: 1, to: start)!
+            for now in [start, noon, next.addingTimeInterval(-1)] {
+                #expect(!WatchSmartList.today.includes(makeTask(), now: now, calendar: calendar))
+                for (due, allDay, expected) in [
+                    (DueDateHelper.dateOnlyValue(for: noon, calendar: calendar), true, true),
+                    (DueDateHelper.dateOnlyValue(for: next, calendar: calendar), true, false),
+                    (next, false, false), (next.addingTimeInterval(-1), false, true),
+                    (start.addingTimeInterval(-86400), false, true)] {
+                    let task = makeTask(dueDate: due, isDueDateOnly: allDay)
+                    #expect(WatchSmartList.today.includes(task, now: now, calendar: calendar) == expected,
+                            "\(zone) \(month)/\(day)")
+                    #expect(WatchSmartList.today.filter([task], now: now, calendar: calendar).count == (expected ? 1 : 0))
+                    #expect(!WatchSmartList.today.includes(makeTask(dueDate: due, isDueDateOnly: allDay,
+                        isCompleted: true), now: now, calendar: calendar))
+                }
+            }
+        }
+    }
+}

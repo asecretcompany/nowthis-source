@@ -23,7 +23,7 @@ struct WatchBridgeSnapshotTriggerTests {
         init() {
             defaults = UserDefaults(suiteName: suite)!
             entitlement = ProEntitlement(client: ProStoreTestClient(),
-                cache: ProEntitlementCache(defaults: defaults),
+                cache: ProEntitlementCache(defaults: defaults, keyProvider: { _ in Data(repeating: 0x16, count: 32) }),
                 testerBuild: { false }, forcePaywall: { false })
         }
 
@@ -93,6 +93,30 @@ struct WatchBridgeSnapshotTriggerTests {
         let snap = try #require(WatchSnapshot(contextDictionary: spy.pushedContexts[0]))
         #expect(snap.isProUnlocked == false)
         #expect(snap.tasks.count == 1)
+    }
+
+    @Test(arguments: [ProAccessKind.lifetime, .monthly, .annual])
+    func phoneProjectsSignedOfflineOwnershipWithItsDeadline(kind: ProAccessKind) async throws {
+        let suite = "NowThis.WatchSignedAccess.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cache = ProEntitlementCache(defaults: defaults, keyProvider: { _ in Data(repeating: 0x16, count: 32) })
+        let deadline = kind == .lifetime ? nil : Date().addingTimeInterval(200)
+        cache.save(ProAccessSnapshot(access: kind, validUntil: deadline))
+        let entitlement = ProEntitlement(client: ProStoreTestClient(), cache: cache,
+                                         testerBuild: { false }, forcePaywall: { false })
+        let container = try makeContainer()
+        let spy = SpySession()
+        let bridge = WatchBridge(session: spy, entitlement: entitlement, syncScheduler: SyncScheduler(), modelContainer: container)
+        bridge.pushSnapshot()
+        await waitForPush(spy)
+        let snapshot = try #require(spy.pushedContexts.last.flatMap(WatchSnapshot.init(contextDictionary:)))
+        #expect(snapshot.isProUnlocked)
+        #expect(snapshot.proAccessValidUntil == deadline)
+        #expect(snapshot.testerProOverride == nil)
+        #expect(snapshot.canEditTasks(at: Date()))
+        if let deadline { #expect(!snapshot.canEditTasks(at: deadline)) }
+        else { #expect(snapshot.canEditTasks(at: Date().addingTimeInterval(86400))) }
     }
 
     /// Covers the data-refresh push path: `handleDataRefresh()` (the hook the

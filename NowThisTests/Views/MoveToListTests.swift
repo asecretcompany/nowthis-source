@@ -141,6 +141,160 @@ struct MoveToListTests {
                 "a card whose task a sync deleted meanwhile moves nothing")
     }
 
+    private struct MoveSaveFailure: Error {}
+
+    @Test("A failed move cannot persist after either endpoint becomes read-only", arguments: [false, true])
+    func refusedMoveRetryCannotLeak(revokeSource: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = Schema(SchemaV2.models)
+        let configuration = ModelConfiguration(schema: schema, url: directory.appendingPathComponent("local.store"), cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let account = ServerAccount(displayName: "Cloud", serverBaseURL: "https://move.invalid", username: "fixture")
+        let source = TaskList(serverURL: "/source/", name: "Source", colorHex: "#007AFF")
+        let destination = TaskList(serverURL: "/destination/", name: "Destination", colorHex: "#007AFF")
+        let task = TaskItem(title: "Move target")
+        let peer = TaskItem(title: "Unrelated task")
+        context.insert(account)
+        context.insert(source)
+        context.insert(destination)
+        context.insert(task)
+        context.insert(peer)
+        source.account = account
+        destination.account = account
+        task.taskList = source
+        task.remoteHref = "/source/task.ics"
+        task.etag = "source-baseline"
+        task.isDirty = true
+        let priorStamp = Date(timeIntervalSinceReferenceDate: 120_000)
+        task.lastModifiedDate = priorStamp
+        try SyncResourceFixture.prove(task, in: context)
+        try context.save()
+        let taskID = task.id
+        let peerID = peer.id
+        let sourceID = source.id
+        let destinationID = destination.id
+        let revokedID = revokeSource ? sourceID : destinationID
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })
+        let baseline = ModelContext(container)
+        let originalMetadata = try metadata(in: baseline)
+        var primarySaves = 0
+        let errors = ErrorState()
+        #expect(!MoveDestinations.perform(task, toListID: destinationID, in: context, errorState: errors, save: {
+            primarySaves += 1
+            throw MoveSaveFailure()
+        }))
+        #expect(primarySaves == 1 && errors.isPresented)
+        let firstReader = ModelContext(container)
+        let before = try #require(try firstReader.fetch(descriptor).first)
+        #expect(before.taskList?.id == sourceID)
+        #expect(try metadata(in: firstReader) == originalMetadata)
+        errors.dismiss()
+
+        let incoming = ModelContext(container)
+        let revoked = try #require(try incoming.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == revokedID })).first)
+        revoked.isReadOnly = true
+        try incoming.save()
+        #expect(!MoveDestinations.perform(task, toListID: destinationID, in: context, errorState: errors,
+            save: { primarySaves += 1 }))
+        #expect(primarySaves == 1 && errors.isPresented)
+        #expect(errors.currentError == String(localized: TaskWriteEligibility.readOnlyEditMessage))
+
+        peer.title = "Unrelated edit saved later"
+        try context.save()
+        let reader = ModelContext(container)
+        let saved = try #require(try reader.fetch(descriptor).first)
+        let savedPeer = try #require(try reader.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == peerID })).first)
+        #expect(savedPeer.title == "Unrelated edit saved later")
+        #expect(saved.taskList?.id == sourceID)
+        #expect(saved.remoteHref == "/source/task.ics" && saved.etag == "source-baseline")
+        #expect(saved.pendingMoveFromHref == nil && saved.pendingMoveFromListID == nil)
+        #expect(saved.isDirty && saved.lastModifiedDate == priorStamp)
+        #expect(try metadata(in: reader) == originalMetadata)
+    }
+
+    @Test("A mounted move retry rejects changed source or same-ID destination replacement", arguments: [false, true])
+    func mountedMoveRejectsReplacedTarget(replaceDestination: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let schema = Schema(SchemaV2.models)
+        let configuration = ModelConfiguration(schema: schema, url: directory.appendingPathComponent("local.store"), cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let account = ServerAccount(vaultDisplayName: "Local")
+        context.insert(account)
+        let source = list("Source", in: account, context: context)
+        let destination = list("Destination", in: account, context: context)
+        let alternate = list("Alternate", in: account, context: context)
+        let task = TaskItem(title: "Move target")
+        let peer = TaskItem(title: "Peer")
+        context.insert(task)
+        context.insert(peer)
+        task.taskList = source
+        try context.save()
+        let sourceID = source.id
+        let alternateID = alternate.id
+        let destinationID = destination.id
+        let taskID = task.id
+        let peerID = peer.id
+        let target = try #require(MoveDestinations.sections(accounts: [account], currentListID: sourceID)
+            .flatMap(\.lists).first { $0.id == destinationID })
+        let request = try #require(MoveToListRequest(task: task))
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })
+        let errors = ErrorState()
+        var saves = 0
+        var revalidations = 0
+        #expect(!MoveDestinations.perform(request, to: target, in: context, errorState: errors, save: { _ in
+            saves += 1
+            throw MoveSaveFailure()
+        }))
+        try #require(saves == 1 && errors.isPresented)
+        errors.dismiss()
+
+        let incoming = ModelContext(container)
+        let incomingTask = try #require(try incoming.fetch(descriptor).first)
+        if replaceDestination {
+            let destinationDescriptor = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == destinationID })
+            let oldDestination = try #require(try incoming.fetch(destinationDescriptor).first)
+            let account = try #require(oldDestination.account)
+            incoming.delete(oldDestination)
+            try incoming.save()
+            let replacement = TaskList(id: destinationID, serverURL: "/replacement/", name: "Replacement", colorHex: "#007AFF")
+            incoming.insert(replacement)
+            replacement.account = account
+            try incoming.save()
+            try #require(replacement.persistentModelID != target.persistentID)
+        } else {
+            let alternateDescriptor = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == alternateID })
+            incomingTask.taskList = try #require(try incoming.fetch(alternateDescriptor).first)
+            try incoming.save()
+        }
+
+        #expect(!MoveDestinations.perform(request, to: target, in: context, errorState: errors,
+            save: { _ in saves += 1 }, revalidate: { revalidations += 1 }))
+        #expect(errors.isPresented)
+        #expect(saves == 1 && revalidations == 0)
+        peer.title = "Peer saved later"
+        try context.save()
+        let reader = ModelContext(container)
+        let stored = try #require(try reader.fetch(descriptor).first)
+        let savedPeer = try #require(try reader.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == peerID })).first)
+        #expect(stored.taskList?.id == (replaceDestination ? sourceID : alternateID))
+        #expect(stored.pendingMoveFromHref == nil && stored.pendingMoveFromListID == nil)
+        #expect(savedPeer.title == "Peer saved later")
+        #expect(try metadata(in: reader).isEmpty)
+    }
+
+    private func metadata(in context: ModelContext) throws -> [String: String] {
+        let rows = try context.fetch(FetchDescriptor<SyncMetadata>())
+        return Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.syncToken ?? "") })
+    }
+
     @Test("Choosing a list that has since been deleted does nothing")
     func performIgnoresAMissingList() throws {
         let container = try makeContainer()

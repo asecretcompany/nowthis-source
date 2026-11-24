@@ -29,13 +29,26 @@ actor SyncCollectionPuller {
         var hasCompletedBaseline = false
     }
 
+    struct Result: Sendable {
+        let checkpoint: Checkpoint?
+        let didPull: Bool
+    }
+
+    struct Inventory: Sendable {
+        var knownETags: [String: String]
+        var accountedETags: [String: String] = [:]
+        var invalidatedHrefs: Set<String> = []
+    }
+
     /// Each callback must return only after its changes are durable. It may throw
     /// on cancellation/save failure; imported href/ETags then allow a later resume.
     struct Callbacks: Sendable {
         var progress: (@Sendable (SyncProgress.Stage, Int, Int?) async -> Void)? = nil
+        let manifestInventory: @Sendable () async throws -> Inventory
+        let deltaInventory: @Sendable ([String]) async throws -> Inventory
         let applyBodies: @Sendable ([CalDAVClient.RemoteTask]) async throws -> Void
         let deleteExplicit: @Sendable ([String]) async throws -> Void
-        let reconcileCompleteManifest: @Sendable ([CalDAVClient.RemoteResource]) async throws -> Void
+        let reconcileCompleteManifest: @Sendable ([CalDAVClient.RemoteResource], Set<String>) async throws -> Void
         let commitCheckpoint: @Sendable (Checkpoint) async throws -> Void
     }
 
@@ -62,7 +75,7 @@ actor SyncCollectionPuller {
         self.now = now
     }
 
-    /// `knownETags` describes already durable full bodies, including interrupted imports.
+    /// Inventory callbacks provide durable matching state only for the selected branch.
     /// The parent supplies canonical hrefs and preserves dirty edits/history inside callbacks.
     /// `checkpointEligible = false` forces manifest accounting without persisting a cursor.
     /// `forceBodies` also forces a manifest, for a category/history catch-up pass.
@@ -70,9 +83,9 @@ actor SyncCollectionPuller {
     @discardableResult
     func pull(baseURL: String, calendar: CalDAVClient.RemoteCalendar,
               credentials: CalDAVClient.Credentials, scope: Scope, checkpoint: Checkpoint?,
-              knownETags: [String: String], checkpointEligible: Bool = true,
+              checkpointEligible: Bool = true,
               forceIntegrity: Bool = false, forceBodies: Bool = false,
-              callbacks: Callbacks) async throws -> Checkpoint? {
+              callbacks: Callbacks) async throws -> Result {
         guard !isRunning else { throw PullError.alreadyRunning }
         isRunning = true
         defer { isRunning = false }
@@ -96,8 +109,9 @@ actor SyncCollectionPuller {
         if checkpointEligible, cursor.hasCompletedBaseline, !requiresManifest,
            calendar.supportsSyncCollection, let token = cursor.token, !token.isEmpty {
             do {
-                return try await pullDelta(baseURL: baseURL, calendar: calendar, credentials: credentials,
-                    cursor: cursor, knownETags: knownETags, callbacks: callbacks)
+                let checkpoint = try await pullDelta(baseURL: baseURL, calendar: calendar, credentials: credentials,
+                    cursor: cursor, callbacks: callbacks)
+                return Result(checkpoint: checkpoint, didPull: true)
             } catch CalDAVSyncError.invalidSyncToken {
                 cursor.token = nil
                 cursor.ctag = nil
@@ -106,7 +120,7 @@ actor SyncCollectionPuller {
             }
         } else if checkpointEligible, !requiresManifest, !calendar.ctag.isEmpty,
                   cursor.ctag == calendar.ctag {
-            return cursor
+            return Result(checkpoint: cursor, didPull: false)
         }
 
         // Capture the discovery token BEFORE fetching the inventory. A token
@@ -119,25 +133,27 @@ actor SyncCollectionPuller {
             calendarPath: calendar.href, credentials: credentials)
         try Task.checkCancellation()
         try validateResources(manifest)
+        let inventory = try await callbacks.manifestInventory()
         try await applyResources(manifest, baseURL: baseURL, calendarPath: calendar.href,
-            credentials: credentials, knownETags: knownETags, forceBodies: forceBodies, callbacks: callbacks)
+            credentials: credentials, knownETags: inventory.knownETags, forceBodies: forceBodies, callbacks: callbacks)
         try Task.checkCancellation()
         await callbacks.progress?(.finishing, manifest.count, manifest.count)
-        try await callbacks.reconcileCompleteManifest(manifest)
+        try await callbacks.reconcileCompleteManifest(manifest, Set(inventory.knownETags.keys))
         try Task.checkCancellation()
 
-        guard checkpointEligible else { return nil }
+        guard checkpointEligible else { return Result(checkpoint: nil, didPull: true) }
         cursor = Checkpoint(scope: scope, token: baselineToken, ctag: calendar.ctag,
             lastIntegrity: startedAt, hasCompletedBaseline: true)
         try await commit(cursor, callbacks: callbacks)
-        return cursor
+        return Result(checkpoint: cursor, didPull: true)
     }
 
     private func pullDelta(baseURL: String, calendar: CalDAVClient.RemoteCalendar,
                            credentials: CalDAVClient.Credentials, cursor initial: Checkpoint,
-                           knownETags: [String: String], callbacks: Callbacks) async throws -> Checkpoint {
+                           callbacks: Callbacks) async throws -> Checkpoint {
         var cursor = initial
-        var known = knownETags
+        var previousPageETags: [String: String] = [:]
+        var earlierDeletions: Set<String> = []
         var seenTokens: Set<String> = []
         while let token = cursor.token {
             try Task.checkCancellation()
@@ -155,6 +171,21 @@ actor SyncCollectionPuller {
                   deleted.isDisjoint(with: page.resources.map(\.href)) else {
                 throw PullError.incompleteBatch
             }
+            var known: [String: String] = [:]
+            for start in stride(from: 0, to: page.resources.count, by: Self.batchSize) {
+                try Task.checkCancellation()
+                let batch = page.resources[start..<min(start + Self.batchSize, page.resources.count)]
+                let inventory = try await callbacks.deltaInventory(batch.map(\.href))
+                for resource in batch {
+                    let href = resource.href
+                    guard !earlierDeletions.contains(href), !inventory.invalidatedHrefs.contains(href) else { continue }
+                    if let previous = previousPageETags[href], inventory.accountedETags[href] == previous {
+                        known[href] = previous
+                    } else {
+                        known[href] = inventory.knownETags[href]
+                    }
+                }
+            }
             try await applyResources(page.resources, baseURL: baseURL, calendarPath: calendar.href,
                 credentials: credentials, knownETags: known, forceBodies: false, callbacks: callbacks)
             if !page.deletedHrefs.isEmpty {
@@ -164,8 +195,10 @@ actor SyncCollectionPuller {
             }
             // A page may be replayed if its commit fails. The caller's operations
             // must be idempotent and their durable href/ETags remain authoritative.
-            for resource in page.resources { known[resource.href] = resource.etag }
-            for href in page.deletedHrefs { known.removeValue(forKey: href) }
+            for resource in page.resources { previousPageETags[resource.href] = resource.etag }
+            for href in page.deletedHrefs { previousPageETags.removeValue(forKey: href) }
+            earlierDeletions.formUnion(deleted)
+            earlierDeletions.subtract(page.resources.map(\.href))
             cursor.token = page.nextToken
             if !page.hasMore { cursor.ctag = calendar.ctag }
             try await commit(cursor, callbacks: callbacks)

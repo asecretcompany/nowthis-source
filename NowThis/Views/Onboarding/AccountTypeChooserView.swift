@@ -14,25 +14,30 @@ struct AccountTypeChooserView: View {
     @State private var cardsAppeared = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            HeaderSection()
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 24) {
+                    HeaderSection()
 
-            VStack(spacing: 16) {
-                VaultCard(appeared: cardsAppeared) {
-                    createVaultAccount()
-                }
+                    VStack(spacing: 16) {
+                        VaultCard(appeared: cardsAppeared) {
+                            createVaultAccount()
+                        }
 
-                NextcloudCard(appeared: cardsAppeared) {
-                    showNextcloudSetup = true
+                        NextcloudCard(appeared: cardsAppeared) {
+                            showNextcloudSetup = true
+                        }
+                    }
+                    .padding(.horizontal, 20)
+
+                    Spacer(minLength: 0)
+
+                    FooterNote()
                 }
+                .padding(.top, 20)
+                .frame(minHeight: geometry.size.height, alignment: .top)
             }
-            .padding(.horizontal, 20)
-
-            Spacer()
-
-            FooterNote()
         }
-        .padding(.top, 20)
         .navigationTitle("Choose Mode")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showNextcloudSetup) {
@@ -75,12 +80,16 @@ private struct HeaderSection: View {
 }
 
 private struct VaultCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let appeared: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+                : AnyLayout(HStackLayout(spacing: 16))
+            layout {
                 IconBadge(
                     systemName: "lock.shield.fill",
                     gradient: [.purple, .indigo]
@@ -91,37 +100,45 @@ private struct VaultCard: View {
                         .font(.headline)
                         .foregroundStyle(.primary)
 
-                    Text("Keep everything on this device. Private. No account needed.")
+                    Text("Store tasks on this device. No account needed.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                 }
 
-                Spacer()
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Spacer()
 
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
             .glassCard(cornerRadius: 16)
+            .contentShape(.interaction, RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
         .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : 20)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Vault Mode. Keep everything on this device. Private. No account needed.")
+        .accessibilityLabel("Vault Mode. Store tasks on this device. No account needed.")
         .accessibilityAddTraits(.isButton)
     }
 }
 
 private struct NextcloudCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let appeared: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+                : AnyLayout(HStackLayout(spacing: 16))
+            layout {
                 IconBadge(
                     systemName: "cloud.fill",
                     gradient: [.blue, .cyan]
@@ -138,14 +155,18 @@ private struct NextcloudCard: View {
                         .multilineTextAlignment(.leading)
                 }
 
-                Spacer()
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Spacer()
 
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
             .glassCard(cornerRadius: 16)
+            .contentShape(.interaction, RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
         .opacity(appeared ? 1 : 0)
@@ -180,7 +201,8 @@ private struct IconBadge: View {
 private struct FooterNote: View {
     var body: some View {
         Label {
-            Text("Your data never leaves your device or your server. Zero tracking.")
+            Text("If you send tasks to Apple Calendar, your calendar provider may sync the resulting events.",
+                 comment: "Privacy note about optional Calendar integration. The calendar account may sync events created from tasks.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } icon: {

@@ -152,3 +152,28 @@ final class OverdueInTodayFilterTests: XCTestCase {
         XCTAssertFalse(result, "Task due tomorrow should NOT appear in Today")
     }
 }
+
+
+extension OverdueInTodayFilterTests {
+    func testFixedTransitionTodayBoundaries() {
+        for (zone, month, day) in CivilDueTimeDSTTests.days {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: zone)!
+            let noon = calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 12))!
+            let start = calendar.startOfDay(for: noon)
+            let next = calendar.date(byAdding: .day, value: 1, to: start)!
+            let today = DueDateHelper.dateOnlyValue(for: noon, calendar: calendar)
+            let tomorrow = DueDateHelper.dateOnlyValue(for: next, calendar: calendar)
+            for now in [start, noon, next.addingTimeInterval(-1)] {
+                for (due, allDay, expected) in [(today, true, true), (tomorrow, true, false),
+                    (next, false, false), (next.addingTimeInterval(-1), false, true),
+                    (start.addingTimeInterval(-86400), false, true)] {
+                    XCTAssertEqual(TaskListFilter.shouldIncludeInToday(dueDate: due, isDueDateOnly: allDay,
+                        isCompleted: false, now: now, calendar: calendar), expected, "\(zone) \(month)/\(day)")
+                    XCTAssertFalse(TaskListFilter.shouldIncludeInToday(dueDate: due, isDueDateOnly: allDay,
+                        isCompleted: true, now: now, calendar: calendar))
+                }
+            }
+        }
+    }
+}

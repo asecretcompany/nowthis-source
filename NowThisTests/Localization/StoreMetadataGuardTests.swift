@@ -198,19 +198,16 @@ enum StoreListingRules {
 /// `de`, `es`, `fr`, `it`, `nl` — while App Store Connect wants `de-DE`, `es-ES`, `fr-FR`, bare
 /// `it` and `nl-NL`. Nothing in a build connects them, so it is entirely possible to ship a fully
 /// German app whose German listing is in English, and no test, log line or reviewer would mention
-/// it. That is not hypothetical here: the live listing declares `languageCodesISO2A: ["EN"]`.
+/// it.
 ///
 /// The character limits are the other half. App Store Connect rejects an upload that exceeds them
 /// — after the release is cut and the build is uploaded.
 ///
-/// The files are **not bundle resources**; they are read from the working copy. See
-/// `fastlane/metadata/README.md`.
+/// The files are **not bundle resources**; they are read from the release metadata directory.
 ///
-/// The whole suite is skipped where `fastlane/metadata` is absent. The store listing is release
-/// tooling, not a shipped source, so it is not published to the `nowthis-source` mirror; without
-/// this the suite turns every public checkout red over files that checkout was never meant to
-/// have. Where the directory exists — the release checkout, the only place a listing can actually
-/// be cut — every check below runs unchanged.
+/// The whole suite is skipped where release metadata is absent. Store listings are release
+/// tooling, not shipped source, so a source checkout without them should remain testable. Where
+/// the directory exists, every check below runs unchanged.
 @Suite("App Store listing", .enabled(if: StoreListingRules.metadataDirectoryExists))
 struct StoreMetadataGuardTests {
     @Test func supportPromisesAndChoicesShipInEveryDescription() throws {
@@ -578,7 +575,7 @@ struct StoreMetadataGuardTests {
     /// listing is only wrong relative to a *third* artifact neither the English nor the
     /// translation contains: the string catalog.
     ///
-    /// So the terms are looked up in `NowThis/Localizable.xcstrings` rather than translated
+    /// So the terms are looked up in their owning app or Watch catalog rather than translated
     /// again. Where one English rendering has several catalog entries — "Completed" is both a
     /// status and a Smart List — any of their translations counts.
     @Test("Listing feature names match the shipped app")
@@ -586,26 +583,28 @@ struct StoreMetadataGuardTests {
         let catalog = try #require(
             LocalizationCatalogFixture.catalogs.first { $0.path == "NowThis/Localizable.xcstrings" })
         let entries = try LocalizationCatalogFixture.load(catalog)
+        let watchCatalog = try #require(
+            LocalizationCatalogFixture.catalogs.first { $0.path == "NowThisWatch/Localizable.xcstrings" })
+        let watchEntries = try LocalizationCatalogFixture.load(watchCatalog)
 
-        /// English rendering → the listing file that has to quote its translation.
-        let quoted: [(term: String, file: String)] = [
-            ("Today", "description"),
-            ("Upcoming", "description"),
-            ("Overdue", "description"),
-            ("All Tasks", "description"),
-            ("Needs Action", "description"),
-            ("In Progress", "description"),
-            ("Completed", "description"),
-            // The 26.10 notes name these Settings controls. Use their catalog
-            // translations so the reader can find the actual support and icon screens.
-            ("Support Development", "release_notes"),
-            ("App Icon", "release_notes"),
-            ("Ask for Due Date", "release_notes"),
+        /// English rendering → listing file and owning catalog for its translation.
+        let quoted: [(term: String, file: String, watchCatalog: Bool)] = [
+            ("Today", "description", false),
+            ("Upcoming", "description", false),
+            ("Overdue", "description", false),
+            ("All Tasks", "description", false),
+            ("Needs Action", "description", false),
+            ("In Progress", "description", false),
+            ("Completed", "description", false),
+            // The 26.10.1 notes name Watch Drafts and the app's Spotlight setting.
+            // Validate the actual terms against the catalog of the surface that owns them.
+            ("Drafts", "release_notes", true),
+            ("Spotlight", "release_notes", false),
         ]
 
         // The English listing must quote the English, or the table is naming terms this listing
         // does not actually use and every locale below is being checked against nothing.
-        for (term, file) in quoted {
+        for (term, file, _) in quoted {
             let english = try Self.field(file, inListing: "en-US")
             #expect(english.contains(term), """
                 en-US/\(file).txt does not contain "\(term)". Either the listing stopped using \
@@ -617,8 +616,9 @@ struct StoreMetadataGuardTests {
         var checked = 0
         for (locale, language) in StoreListingRules.localeMapping.sorted(by: { $0.key < $1.key })
         where language != "en" {
-            for (term, file) in quoted {
-                let candidates = Self.translations(of: term, language: language, in: entries)
+            for (term, file, usesWatchCatalog) in quoted {
+                let candidates = Self.translations(of: term, language: language,
+                    in: usesWatchCatalog ? watchEntries : entries)
                 guard !candidates.isEmpty else {
                     wrong.append("\(locale): the catalog has no \(language) translation of \"\(term)\"")
                     continue
@@ -634,6 +634,7 @@ struct StoreMetadataGuardTests {
         }
 
         let expected = quoted.count * LocalizationCatalogFixture.translationLanguages.count
+        #expect(expected == 45, "Nine current feature names must be checked in all five translation languages")
         #expect(checked == expected, "checked \(checked) of \(expected) term/locale pairs")
         #expect(wrong.isEmpty, """
             The listing calls a feature something the app does not:

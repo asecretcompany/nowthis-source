@@ -38,10 +38,13 @@ struct SyncMoveAcknowledgementTests {
         task.remoteHref = "/cal/source/move-race.ics"
         task.etag = "source-etag"
         task.isLocalOnly = false
+        try SyncResourceFixture.prove(task, in: context)
         TaskMover.move(task, to: first, in: context)
         task.remoteHref = "/cal/first/move-race.ics"
         task.etag = "first-etag"
         task.isDirty = false
+        try SyncResourceFixture.prove(task, in: context)
+        try VTODOOpaqueState.empty.store(taskID: task.id, in: context)
         try context.save()
         return Fixture(source: source, firstDestination: first, secondDestination: second, task: task)
     }

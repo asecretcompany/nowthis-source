@@ -130,6 +130,8 @@ struct WatchSnapshotBuildRequest: Sendable {
     let proAccessValidUntil: Date?
     let testerProOverride: Bool?
     let overlay: WatchSnapshotPendingOverlay
+    var completionFailureID: String? = nil
+    var completionFailureUID: String? = nil
 }
 
 /// `contextDictionary()` contains only immutable Foundation `Data`; WCSession requires

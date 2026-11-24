@@ -15,6 +15,7 @@ struct KanbanCardData {
     let status: TaskStatus
     let priority: TaskPriority
     let dueDate: Date?
+    let isDueDateOnly: Bool
     let firstTagName: String?
 
     /// Builds a snapshot from a live task, or `nil` if the task's backing row
@@ -28,7 +29,34 @@ struct KanbanCardData {
         self.status = task.status
         self.priority = task.priority
         self.dueDate = task.dueDate
+        self.isDueDateOnly = task.isDueDateOnly
         self.firstTagName = task.tags.first?.name
+    }
+
+    func dueDateLabel(timeZone: TimeZone = .current) -> String? {
+        dueDate.map {
+            DueDateFormatter.format($0, isDateOnly: isDueDateOnly, timeZone: timeZone,
+                                    timedStyle: .dateTime.month(.abbreviated).day())
+        }
+    }
+
+    func spokenDueDate(now: Date = Date(), timeZone: TimeZone = .current) -> String? {
+        guard let dueDate else { return nil }
+        if isDueDateOnly {
+            return DueDateFormatter.accessibilityLabel(dueDate, isDateOnly: isDueDateOnly, timeZone: timeZone)
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+        formatter.calendar = calendar
+        return formatter.localizedString(for: dueDate, relativeTo: now)
+    }
+
+    func isOverdue(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        guard let dueDate else { return false }
+        return now >= DueDateHelper.effectiveDeadline(for: dueDate, isDateOnly: isDueDateOnly,
+                                                       regionCalendar: calendar)
     }
 }
 
@@ -65,15 +93,15 @@ struct KanbanCardView: View {
 
             // Bottom row: due date + tag
             HStack(spacing: 6) {
-                if let due = data.dueDate {
+                if let dueLabel = data.dueDateLabel() {
                     Label {
-                        Text(due, format: .dateTime.month(.abbreviated).day())
+                        Text(dueLabel)
                             .font(.caption2)
                     } icon: {
                         Image(systemName: "calendar")
                             .font(.system(size: 9))
                     }
-                    .foregroundStyle(due < Date() ? .red : .secondary)
+                    .foregroundStyle(data.isOverdue() ? .red : .secondary)
                 }
 
                 Spacer()
@@ -111,11 +139,9 @@ struct KanbanCardView: View {
             parts.append(String(localized: "kanban.card.a11y.priority", defaultValue: "\(data.priority.displayName) priority",
                                  comment: "Kanban card accessibility label fragment appended after the task title, stating its priority; the interpolated value is the already-localized priority name (e.g. High, Medium, Low)."))
         }
-        if let due = data.dueDate {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .full
-            parts.append(String(localized: "kanban.card.a11y.due", defaultValue: "due \(formatter.localizedString(for: due, relativeTo: Date()))",
-                                 comment: "Kanban card accessibility label fragment appended mid-label (lowercase, not sentence-initial), stating the due date; the interpolated value is a system-localized relative date string, e.g. 'in 3 days'."))
+        if let dueLabel = data.spokenDueDate() {
+            parts.append(String(localized: "kanban.card.a11y.due", defaultValue: "due \(dueLabel)",
+                                 comment: "Kanban card accessibility label fragment appended mid-label (lowercase, not sentence-initial), stating the due date; the placeholder is a localized due date, e.g. 'in 3 days' or 'Nov 10, All day'."))
         }
         if data.status == .completed {
             parts.append(String(localized: "kanban.card.a11y.completed", defaultValue: "completed",

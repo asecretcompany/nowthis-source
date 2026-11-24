@@ -30,9 +30,9 @@ struct SyncCollectionPullerTests {
                      eligible: Bool = true, forceIntegrity: Bool = false, forceBodies: Bool = false) async throws -> SyncCollectionPuller.Checkpoint? {
         let puller = SyncCollectionPuller(transport: transport, now: { Self.date })
         return try await puller.pull(baseURL: "https://fixture.invalid", calendar: calendar ?? self.calendar(),
-            credentials: credentials, scope: scope, checkpoint: checkpoint, knownETags: await store.known,
+            credentials: credentials, scope: scope, checkpoint: checkpoint,
             checkpointEligible: eligible, forceIntegrity: forceIntegrity, forceBodies: forceBodies,
-            callbacks: store.callbacks)
+            callbacks: store.callbacks).checkpoint
     }
 
     @Test("First 10,000 bodies are applied serially in batches of 100, then absence, then discovery checkpoint")
@@ -64,7 +64,32 @@ struct SyncCollectionPullerTests {
         #expect(await transport.batches.flatMap { $0 }.count == (changed ? 1 : 0))
         #expect(await transport.tokens == ["old"])
         #expect(await store.manifests.isEmpty)
+        #expect(await store.inventoryKeyCounts == (changed ? [1] : []))
         #expect(result?.token == "next")
+    }
+
+    @Test("A delta looks up at most 100 exact member keys at a time")
+    func deltaInventoryIsBounded() async throws {
+        let page = CalDAVClient.SyncDeltaPage(resources: resources(201), deletedHrefs: [], nextToken: "next", hasMore: false)
+        let transport = PullFixtureTransport(pages: [.page(page)])
+        let store = PullFixtureStore()
+        let result = try await run(transport, store: store, checkpoint: baseline())
+        #expect(await store.inventoryKeyCounts == [100, 100, 1])
+        #expect(await transport.batches.map(\.count) == [100, 100, 1])
+        #expect(result?.token == "next")
+    }
+
+    @Test("A later delta page must fetch a recreated href despite a retained same-ETag row")
+    func deltaRecreationIgnoresRetainedBaseline() async throws {
+        let member = CalDAVClient.RemoteResource(href: "/tasks/restored.ics", etag: "same")
+        let transport = PullFixtureTransport(pages: [
+            .page(.init(resources: [], deletedHrefs: [member.href], nextToken: "deleted", hasMore: true)),
+            .page(.init(resources: [member], deletedHrefs: [], nextToken: "restored", hasMore: false))
+        ])
+        let store = PullFixtureStore(known: [member.href: member.etag], retainDeletedBaseline: true)
+        _ = try await run(transport, store: store, checkpoint: baseline())
+        #expect(await transport.batches == [[member.href]])
+        #expect(await store.events == ["delete:1", "checkpoint:deleted", "bodies:1", "checkpoint:restored"])
     }
 
     @Test("Interrupted bootstrap resumes from durable href/ETags and revalidates manifest")
@@ -304,11 +329,11 @@ struct SyncCollectionPullerTests {
         let puller = SyncCollectionPuller(client: client, now: { Self.date })
         let store = PullFixtureStore()
         let checkpoint = try await puller.pull(baseURL: "https://" + host, calendar: calendar(token: "before-scan"),
-            credentials: credentials, scope: scope, checkpoint: nil, knownETags: [:], callbacks: store.callbacks)
-        #expect(checkpoint?.token == "before-scan")
+            credentials: credentials, scope: scope, checkpoint: nil, callbacks: store.callbacks)
+        #expect(checkpoint.checkpoint?.token == "before-scan")
         let result = try await puller.pull(baseURL: "https://" + host, calendar: calendar(token: "after-scan"),
-            credentials: credentials, scope: scope, checkpoint: checkpoint, knownETags: await store.known, callbacks: store.callbacks)
-        #expect(result?.token == "concurrent")
+            credentials: credentials, scope: scope, checkpoint: checkpoint.checkpoint, callbacks: store.callbacks)
+        #expect(result.checkpoint?.token == "concurrent")
         #expect(await store.known["/tasks/a.ics"] == "e2")
         let requests = ScriptedDAVProtocol.requests(host: host)
         #expect(requests.count == 4)
@@ -338,12 +363,12 @@ struct SyncCollectionPullerTests {
         let store = PullFixtureStore()
         let operation = Task {
             try await puller.pull(baseURL: "https://fixture.invalid", calendar: calendar(), credentials: credentials,
-                scope: scope, checkpoint: nil, knownETags: [:], callbacks: store.callbacks)
+                scope: scope, checkpoint: nil, callbacks: store.callbacks)
         }
         await gate.waitUntilEntered()
         await #expect(throws: SyncCollectionPuller.PullError.alreadyRunning) {
             try await puller.pull(baseURL: "https://fixture.invalid", calendar: calendar(), credentials: credentials,
-                scope: scope, checkpoint: nil, knownETags: [:], callbacks: store.callbacks)
+                scope: scope, checkpoint: nil, callbacks: store.callbacks)
         }
         await gate.release()
         _ = try await operation.value
@@ -492,16 +517,30 @@ private actor PullFixtureStore {
     var events: [String] = []
     var manifests: [[CalDAVClient.RemoteResource]] = []
     var checkpoints: [SyncCollectionPuller.Checkpoint] = []
+    var inventoryKeyCounts: [Int] = []
     let failOn: String?
+    let retainDeletedBaseline: Bool
 
-    init(known: [String: String] = [:], failOn: String? = nil) {
+    init(known: [String: String] = [:], failOn: String? = nil, retainDeletedBaseline: Bool = false) {
         self.known = known
         self.failOn = failOn
+        self.retainDeletedBaseline = retainDeletedBaseline
     }
 
     nonisolated var callbacks: SyncCollectionPuller.Callbacks {
-        .init(applyBodies: { try await self.apply($0) }, deleteExplicit: { try await self.delete($0) },
-              reconcileCompleteManifest: { try await self.reconcile($0) }, commitCheckpoint: { try await self.commit($0) })
+        .init(manifestInventory: { await self.inventory() },
+              deltaInventory: { await self.inventory(hrefs: $0) },
+              applyBodies: { try await self.apply($0) }, deleteExplicit: { try await self.delete($0) },
+              reconcileCompleteManifest: { manifest, _ in try await self.reconcile(manifest) },
+              commitCheckpoint: { try await self.commit($0) })
+    }
+
+    func inventory(hrefs: [String]? = nil) -> SyncCollectionPuller.Inventory {
+        if let hrefs { inventoryKeyCounts.append(hrefs.count) }
+        let values = hrefs.map { keys in Dictionary(uniqueKeysWithValues: keys.compactMap { href in
+            known[href].map { (href, $0) }
+        }) } ?? known
+        return .init(knownETags: values, accountedETags: values)
     }
 
     func apply(_ bodies: [CalDAVClient.RemoteTask]) throws {
@@ -512,7 +551,9 @@ private actor PullFixtureStore {
 
     func delete(_ hrefs: [String]) throws {
         if failOn == "delete" { throw PullFixtureError.failed }
-        for href in hrefs { known.removeValue(forKey: href) }
+        if !retainDeletedBaseline {
+            for href in hrefs { known.removeValue(forKey: href) }
+        }
         events.append("delete:\(hrefs.count)")
     }
 

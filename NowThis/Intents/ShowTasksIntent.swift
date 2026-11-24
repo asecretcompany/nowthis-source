@@ -21,16 +21,19 @@ struct ShowTasksIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let container = try SharedModelContainer.create()
-        let result = try await performWithContainer(container)
+        let container = try SharedModelContainer.createReadOnly()
+        let result = try await perform(in: ModelContext(container))
         return .result(dialog: IntentDialog(result.dialog))
     }
 
     /// Testable entry point that accepts an injected container.
     @MainActor
     func performWithContainer(_ container: ModelContainer) async throws -> IntentDialogResult {
-        let context = container.mainContext
+        try await perform(in: container.mainContext)
+    }
 
+    @MainActor
+    func perform(in context: ModelContext) async throws -> IntentDialogResult {
         let predicate = #Predicate<TaskItem> { !$0.isDeletedLocally }
         let descriptor = FetchDescriptor<TaskItem>(
             predicate: predicate,

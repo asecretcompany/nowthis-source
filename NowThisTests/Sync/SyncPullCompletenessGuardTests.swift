@@ -3,63 +3,25 @@ import Testing
 
 @testable import NowThis
 
-/// Regression cover for **the two full-pull paths drifting apart.**
-///
-/// `SyncEngine` pulls in two places. `syncCalendar` runs when the app is in
-/// front; `performBackgroundSyncRun`, reached through the budget-owning public
-/// `performBackgroundSync` wrapper, runs from the BGTask with its own background
-/// `ModelContext`. They apply the same remote tasks through the same appliers,
-/// and then each finishes the pull its own way — which is where they differ,
-/// silently, because nothing has ever compared them.
-///
-/// `performBackgroundSync` never called `resolveParentRelationships`. Inbound
-/// subtasks carry their parent as `parentUID`, a string; the relationship the
-/// UI reads is `parentTask`. Resolving one into the other is a separate pass,
-/// and the background path skipped it. A subtask created on the server and
-/// pulled in by a background refresh therefore arrived as a top-level row —
-/// counted as one in the sidebar, shown as one in every list — and stayed that
-/// way until the next foreground sync happened to run the pass for it.
-///
-/// ## Why this is a source guard
-///
-/// Scripted transport tests now exercise both paths. This source guard additionally
-/// pins their shared orchestration entry point; neither path needs a live CalDAV
-/// server, and the difference is not in what they compute but in a step one of
-/// them omits. Nothing about the omission is observable from outside without
-/// the network. So the assertion is on the source — the same tactic the
-/// localization guards use, and brittle in the same deliberate way. Rename a
-/// function here and this fails, which is the intended cost: the point is that
-/// a *third* pull path, or a rename that drops the call, cannot land quietly.
-///
-/// The self-check below is what keeps it honest. A body extractor that
-/// silently returns nothing would make every assertion here vacuous, so each
-/// extracted body must contain a landmark that proves it is the real one.
+/// Source guards for the foreground and background routes into the shared
+/// bounded pull pipeline, plus the background-to-foreground refresh handoff.
+/// Foreground sync returns the shared pull's change signal; background sync
+/// leaves it pending until the scheduler consumes it.
+/// The common pull resolves parents, reconciles complete manifests and commits
+/// its checkpoint before publishing the resulting change.
 @Suite("Sync / pull completeness")
 struct SyncPullCompletenessGuardTests {
 
-    /// The functions that perform a complete pull of a calendar. Both must
-    /// finish it the same way.
+    /// The foreground and background owners of a complete calendar pull.
     static let fullPullFunctions = ["performBackgroundSyncRun", "syncCalendar"]
 
-    /// A step every full pull owes the store, and the landmark proving the
-    /// extractor found a real body rather than an empty string.
+    /// Entry into the shared pull path and the landmark proving a real body.
     static let requiredStep = "pullCalendarCheckingPhotoAccess("
     static let bodyLandmark = "remoteCal"
 
-    /// The signal every full pull owes the *UI*.
-    ///
-    /// A `@Query` bound to the main context does not re-emit when the sync engine's background
-    /// context commits rows to the shared store, so a pull that applied anything has to say so:
-    /// `SyncScheduler` turns that into `dataRefreshToken`, and `refreshOnInboundSync()` keys the
-    /// task views off it. `syncCalendar` accumulated it and returned it; `performBackgroundSync`
-    /// threw it away at the call — `_ = try applyRemoteTask(...)` — so a BGTask could commit new
-    /// rows and no live view ever re-queried. The foreground sync that follows on `.active`
-    /// cannot make up for it: the background pull already stored the new etags, so it finds
-    /// nothing changed and reports `false`.
+    /// Foreground sync returns this signal directly. Background sync leaves it
+    /// pending until the foreground scheduler bumps the committed query revision.
     static let inboundSignal = "inboundChanged"
-
-    /// The shape of dropping it. Both appliers return "this was a real inbound change".
-    static let discardedAppliers = ["_ = try applyRemoteTask", "_ = try processRemoteTask"]
 
     private func engineSource() throws -> String {
         let root = try LocalizationCatalogFixture.repositoryRoot()
@@ -111,8 +73,8 @@ struct SyncPullCompletenessGuardTests {
         let wrapper = try #require(body(of: "pullCalendarCheckingPhotoAccess", in: source))
         #expect(wrapper.contains("return try await pullCalendar("),
                 "The photo-access check must wrap and return the shared bounded pull result.")
-        for argument in ["remoteCal: remoteCal", "listID: listID", "accountID: accountID",
-                         "baseURL: baseURL", "credentials: credentials", "container: container",
+        for argument in ["remoteCal: remoteCal", "resourceScope: scope",
+                         "credentials: credentials", "container: container",
                          "months: months", "repairCategories: repairCategories"] {
             #expect(wrapper.contains(argument), "The wrapper stopped forwarding `\(argument)`. ")
         }
@@ -136,8 +98,8 @@ struct SyncPullCompletenessGuardTests {
         }
     }
 
-    @Test("Every full-pull path resolves parent relationships")
-    func everyFullPullResolvesParents() throws {
+    @Test("Every full-pull path enters the shared bounded pull")
+    func everyFullPullEntersSharedPipeline() throws {
         let source = try engineSource()
 
         var examined = 0
@@ -151,9 +113,8 @@ struct SyncPullCompletenessGuardTests {
             #expect(found.contains(Self.requiredStep), """
                 \(name) never calls \(Self.requiredStep).
 
-                A pull that does not resolve parentUID into parentTask leaves every inbound \
-                subtask looking like a top-level task, in every list and in the sidebar count, \
-                until some other pull happens to fix it.
+                A full-pull owner that bypasses the shared pipeline would skip its common \
+                parent, manifest and checkpoint finalization.
                 """)
             examined += 1
         }
@@ -182,14 +143,6 @@ struct SyncPullCompletenessGuardTests {
                 showing what it fetched before the pull ran. The rows are in the store; nothing \
                 asked the view to look again.
                 """)
-            for discarded in Self.discardedAppliers {
-                #expect(!found.contains(discarded), """
-                    \(name) throws away the applier's result: `\(discarded)`.
-
-                    That Bool is the inbound-change signal. Dropping it is how the background \
-                    path came to commit rows no view ever re-queried.
-                    """)
-            }
             examined += 1
         }
 
@@ -213,17 +166,15 @@ struct SyncPullCompletenessGuardTests {
         #expect(at != nil, """
             SyncScheduler never calls \(consume)().
 
-            `performBackgroundSync` runs in the BGTask and cannot bump a `@Published` the views \
-            are watching, so it leaves the fact that it applied something on the shared engine. \
-            Nothing reads it here, so a background pull's rows stay invisible to any view that \
-            was already on screen when the app went away.
+            A background pull leaves its committed-change signal pending; without this consumer \
+            the next foreground query revision would not be published.
             """)
 
         if let at {
             let after = scheduler[at.upperBound...].prefix(400)
             #expect(after.contains("dataRefreshToken"), """
-                \(consume)() is called but nothing near it bumps dataRefreshToken, so consuming \
-                the flag only clears it — the refresh it was standing for never happens.
+                \(consume)() is called but no nearby dataRefreshToken bump publishes the \
+                pending committed query revision.
                 """)
         }
     }

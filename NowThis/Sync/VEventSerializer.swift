@@ -2,8 +2,8 @@ import Foundation
 
 /// Generates RFC-5545 VEVENT `.ics` content from a `TaskItem`.
 ///
-/// Used by both `AppleCalendarSyncManager` (for event data) and
-/// `NextcloudCalendarSyncManager` (for CalDAV PUT body).
+/// Used by `NextcloudEventBody` (for the CalDAV PUT body). Apple Calendar
+/// exports use EventKit's `AppleEventContent` representation.
 ///
 /// The VEVENT is linked to the original VTODO via `RELATED-TO`.
 /// A 30-minute default duration is used when no explicit end time is available.
@@ -23,8 +23,9 @@ enum VEventSerializer {
     /// - Parameters:
     ///   - task: The `TaskItem` to convert.
     ///   - eventUID: The UID for the VEVENT (typically `{task.uid}-event`).
+    ///   - stamp: Stable serialization timestamp when comparing an in-flight request; defaults to now.
     /// - Returns: A complete `.ics` file content string, or `nil` if the task has no due date.
-    static func serialize(task: TaskItem, eventUID: String) -> String? {
+    static func serialize(task: TaskItem, eventUID: String, stamp: Date = Date()) -> String? {
         guard let dueDate = task.dueDate else { return nil }
 
         let startDate = task.startDate ?? dueDate
@@ -34,7 +35,7 @@ enum VEventSerializer {
             to: startDate
         ) ?? startDate
 
-        let now = Date()
+        let now = stamp
         let status = veventStatus(for: task)
         let summary = veventSummary(for: task)
 

@@ -17,10 +17,14 @@ protocol SpotlightSnapshotSource: Sendable {
 }
 
 actor SpotlightSnapshotReader: SpotlightSnapshotSource {
+    private let preferences: SpotlightPreferences
+    init(preferences: SpotlightPreferences = SpotlightPreferences()) { self.preferences = preferences }
+
     /// This context and every model fetched through it have one isolated owner.
     func read(container: ModelContainer, pending: SpotlightPendingChanges) throws -> [SpotlightTaskSnapshot] {
         let interval = PerformanceTrace.begin("SpotlightRead", count: pending.tasks.count)
         defer { PerformanceTrace.end("SpotlightRead", interval) }
+        let includeNotes = preferences.includesNotes
         let context = ModelContext(container)
         context.autosaveEnabled = false
         var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isDeletedLocally })
@@ -33,11 +37,13 @@ actor SpotlightSnapshotReader: SpotlightSnapshotSource {
         for task in tasks {
             let id = task.persistentModelID
             guard liveIDs.contains(id), !pending.deletedTaskIDs.contains(id) else { continue }
-            if let snapshot = SpotlightModelProjection.snapshot(from: task, pending: pending) {
+            if let snapshot = SpotlightModelProjection.snapshot(from: task, pending: pending, includeNotes: includeNotes) {
                 values[snapshot.id] = snapshot
             }
         }
-        for snapshot in pending.tasks.values { values[snapshot.id] = snapshot }
+        for snapshot in pending.tasks.values {
+            values[snapshot.id] = SpotlightProjection.applyingNotesPolicy(to: snapshot, includeNotes: includeNotes)
+        }
         return values.values.sorted { $0.id < $1.id }
     }
 }
@@ -46,7 +52,8 @@ enum SpotlightModelProjection {
     /// Call synchronously on the model's owner. No managed attribute is read
     /// until the attachment guard succeeds.
     static func snapshot(from task: TaskItem,
-                         pending: SpotlightPendingChanges = SpotlightPendingChanges()) -> SpotlightTaskSnapshot? {
+                         pending: SpotlightPendingChanges = SpotlightPendingChanges(),
+                         includeNotes: Bool = SpotlightPreferences().includesNotes) -> SpotlightTaskSnapshot? {
         guard task.modelContext != nil else { return nil }
         guard !task.isDeletedLocally else { return nil }
         var listName: String?
@@ -72,6 +79,6 @@ enum SpotlightModelProjection {
             dueDate: task.dueDate,
             completionDate: task.completedDate,
             isDeleted: false
-        ))
+        ), includeNotes: includeNotes)
     }
 }

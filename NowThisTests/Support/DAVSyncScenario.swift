@@ -1,8 +1,18 @@
 import Foundation
+import Security
 import SwiftData
 @testable import NowThis
 
 enum DAVSyncScenario {
+    static func keychain(accountID: String, password: String) -> KeychainManager {
+        KeychainManager(operations: .init(copyMatching: { query in
+            guard (query as NSDictionary)[kSecAttrAccount] as? String == accountID else {
+                return (errSecItemNotFound, nil)
+            }
+            return (errSecSuccess, Data(password.utf8) as NSData)
+        }))
+    }
+
     static func container() throws -> ModelContainer {
         try ModelContainer(for: TaskItem.self, TaskList.self, JournalEntry.self,
             Tag.self, ServerAccount.self, SyncMetadata.self, SavedFilter.self,
@@ -16,9 +26,9 @@ enum DAVSyncScenario {
             + "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
     }
     static func discovery(paths: [String]) -> [ScriptedDAVProtocol.Response] {
-        [.init(body: multistatus(prop("/principal/", "<d:current-user-principal><d:href>/principal/</d:href></d:current-user-principal>"))),
-         .init(body: multistatus(prop("/principal/", "<c:calendar-home-set><d:href>/calendars/</d:href></c:calendar-home-set>"))),
-         .init(body: multistatus(paths.map { path in
+        [.init(body: multistatus(prop("/remote.php/dav/", "<d:current-user-principal><d:href>/principal/</d:href></d:current-user-principal>"))),
+         .init(body: multistatus(prop("/principal/", "<c:calendar-home-set><d:href>/</d:href></c:calendar-home-set>"))),
+         .init(body: multistatus(prop("/", "<d:resourcetype><d:collection/></d:resourcetype>") + paths.map { path in
              prop(path, "<d:displayname>Fixture</d:displayname><d:resourcetype><c:calendar/></d:resourcetype><c:supported-calendar-component-set><c:comp name=\"VTODO\"/></c:supported-calendar-component-set><cs:getctag>c1</cs:getctag>")
          }.joined()))]
     }
@@ -31,9 +41,20 @@ enum DAVSyncScenario {
         multistatus((0..<count).map { index in prop(path + "\(index).ics", "<d:getetag>e\(index)</d:getetag>") }.joined())
     }
     @MainActor
-    static func account(in container: ModelContainer) throws -> String {
-        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://unused.invalid", username: "fixture")
+    static func account(in container: ModelContainer, host: String = "unused.invalid") throws -> String {
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://" + host, username: "fixture")
         container.mainContext.insert(account); try container.mainContext.save()
         return account.id
+    }
+
+    @MainActor
+    static func seedRecentCheckpoint(for list: TaskList, in container: ModelContainer,
+                                     ctag: String = "c1", at date: Date = Date()) throws {
+        guard let account = list.account else { throw CalDAVError.invalidResponse }
+        let scope = SyncCollectionPuller.Scope(accountID: account.id, listID: list.id, historyScope: "0")
+        let key = SyncImportCheckpoint.identity(accountID: account.id, listID: list.id,
+            baseURL: account.serverBaseURL, username: account.username, months: 0)
+        try SyncImportCheckpoint.commit(.init(scope: scope, ctag: ctag, lastIntegrity: date,
+            hasCompletedBaseline: true), id: key, collectionPath: list.serverURL, container: container)
     }
 }

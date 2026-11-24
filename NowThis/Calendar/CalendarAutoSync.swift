@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import os
 
 /// Checks user preferences and triggers calendar sync for a single task.
@@ -30,35 +31,63 @@ enum CalendarAutoSync {
     /// - Parameters:
     ///   - task: The task to sync.
     ///   - accounts: Nextcloud accounts for Nextcloud Calendar sync.
-    static func syncTaskIfEnabled(_ task: TaskItem, accounts: [ServerAccount]) async {
-        // Apple Calendar
-        if shouldSyncToAppleCalendar(task) {
-            let permissionManager = CalendarPermissionManager()
-            permissionManager.refreshStatus()
-            if permissionManager.hasAccess {
-                let appleSync = AppleCalendarSyncManager(permissionManager: permissionManager)
-                do {
-                    try appleSync.syncSingleTask(task)
-                    logger.debug("Auto-synced task '\(task.title)' to Apple Calendar")
-                } catch {
-                    logger.error("Apple Calendar auto-sync failed: \(error.localizedDescription)")
+    @discardableResult
+    static func syncTaskIfEnabled(
+        _ task: TaskItem, accounts: [ServerAccount],
+        manager: NextcloudCalendarSyncManager = NextcloudCalendarSyncManager(),
+        appleSync: @MainActor (TaskItem) throws -> Bool = syncToAppleCalendar,
+        onCommit: @escaping @MainActor () -> Void = {}
+    ) -> Task<Void, Never>? {
+        guard let container = task.modelContext?.container, !task.isDeleted else { return nil }
+        // Resolve model values synchronously, before either integration can suspend.
+        let taskID = task.id
+        let title = task.title
+        let appleEnabled = UserDefaults.standard.bool(forKey: "appleCalendarSyncEnabled")
+        let nextcloudEnabled = shouldSyncToNextcloudCalendar(task)
+        let accountIDs = accounts.filter { $0.modelContext != nil && !$0.isDeleted && $0.mode != .vault }.map(\.id)
+
+        if appleEnabled {
+            do {
+                if try syncAppleTask(taskID: taskID, container: container, sync: appleSync) {
+                    onCommit()
+                    logger.debug("Auto-synced task '\(title)' to Apple Calendar")
                 }
+            } catch {
+                logger.error("Apple Calendar auto-sync failed: \(error.localizedDescription)")
             }
         }
 
-        // Nextcloud Calendar
-        if shouldSyncToNextcloudCalendar(task) {
-            let nextcloudSync = NextcloudCalendarSyncManager()
-            for account in accounts where account.mode != .vault {
+        guard nextcloudEnabled else { return nil }
+        return Task { @MainActor in
+            for accountID in accountIDs {
                 do {
-                    nonisolated(unsafe) let unsafeTask = task
-                    nonisolated(unsafe) let unsafeAccount = account
-                    try await nextcloudSync.syncSingleTask(unsafeTask, account: unsafeAccount)
-                    logger.debug("Auto-synced task '\(task.title)' to Nextcloud Calendar")
+                    if try await manager.syncSingleTask(taskID: taskID, accountID: accountID, role: .managedMirror,
+                                                        container: container, onCommit: onCommit) {
+                        logger.debug("Auto-synced task '\(title)' to Nextcloud Calendar")
+                    }
                 } catch {
                     logger.error("Nextcloud Calendar auto-sync failed: \(error.localizedDescription)")
                 }
             }
         }
+    }
+
+    /// Apple sync acknowledges its own sidecar transaction. Never save the caller's
+    /// task context or leave it dirty before the subsequent Nextcloud request.
+    private static func syncAppleTask(taskID: String, container: ModelContainer,
+                                      sync: @MainActor (TaskItem) throws -> Bool) throws -> Bool {
+        guard !container.mainContext.hasChanges else { return false }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let task = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first,
+              !task.isDeletedLocally else { return false }
+        return try sync(task)
+    }
+
+    private static func syncToAppleCalendar(_ task: TaskItem) throws -> Bool {
+        let permissionManager = CalendarPermissionManager()
+        permissionManager.refreshStatus()
+        guard permissionManager.hasAccess else { return false }
+        return try AppleCalendarSyncManager(permissionManager: permissionManager).syncSingleTask(task)
     }
 }

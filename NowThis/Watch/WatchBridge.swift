@@ -31,6 +31,7 @@ final class WatchBridge: NSObject, ObservableObject {
     }
     private var cancellables = Set<AnyCancellable>()
     private var activated = false
+    private var completionFailure: (id: String, uid: String)?
     private var accessTask: Task<Void, Never>?
     private static let log = Logger(subsystem: "com.asecretcompany.nowthis", category: "WatchBridge")
 
@@ -81,7 +82,8 @@ final class WatchBridge: NSObject, ObservableObject {
             calendar: .current,
             proAccessValidUntil: access.validUntil,
             testerProOverride: entitlement.testerUnlocked ? true : nil,
-            overlay: WatchSnapshotPendingOverlay.capture(from: modelContainer.mainContext)
+            overlay: WatchSnapshotPendingOverlay.capture(from: modelContainer.mainContext),
+            completionFailureID: completionFailure?.id, completionFailureUID: completionFailure?.uid
         )
         snapshotJobs.submit(request)
     }
@@ -96,15 +98,36 @@ final class WatchBridge: NSObject, ObservableObject {
         catch { Self.log.error("Snapshot push failed: \(error)") }
     }
 
-    private func handle(edit: WatchEdit) -> String {
-        let outcome = WatchEditApplier.apply(edit, modelContext: modelContainer.mainContext,
-                                             isProUnlocked: entitlement.isUnlocked)
-        pushSnapshot()
-        switch outcome {
-        case .applied: return WatchEditReply.applied
-        case .rejectedLocked: return WatchEditReply.locked
-        case .unknownTask, .invalid: return WatchEditReply.unknownTask
+    private func handle(edit: WatchEdit, operationID: UUID?,
+                        reportRefusal: (WatchEditRefusalReason) -> Void = { _ in }) -> String {
+        let result = WatchEditTransaction.apply(edit, operationID: operationID, container: modelContainer,
+                                              isProUnlocked: entitlement.isUnlocked,
+                                              reportRefusal: reportRefusal,
+                                              didCommit: { self.syncScheduler.publishLocalTaskCommit() })
+        if result == WatchEditReply.unsupportedRecurrence, case .complete(let uid) = edit {
+            completionFailure = (operationID?.uuidString ?? UUID().uuidString, uid)
         }
+        pushSnapshot()
+        return result
+    }
+
+    private func reply(to edit: WatchEdit, operationID: UUID?) -> [String: Any] {
+        var refusal: WatchEditRefusalReason?
+        let result = handle(edit: edit, operationID: operationID) { refusal = $0 }
+        var reply: [String: Any] = [WatchEditReply.key: result]
+        if let refusal { reply[WatchEditReply.refusalReasonKey] = refusal.rawValue }
+        if result == WatchEditReply.unsupportedRecurrence, let failure = completionFailure {
+            reply[WatchEditReply.completionFailureIDKey] = failure.id
+            reply[WatchEditReply.completionFailureUIDKey] = failure.uid
+        }
+        return reply
+    }
+
+    private func receipts(for ids: [UUID]) -> [String: Any] {
+        let context = ModelContext(modelContainer)
+        guard let receipts = try? WatchReceiptStore.lookup(ids, in: context, now: Date()),
+              let data = try? JSONEncoder().encode(receipts) else { return [:] }
+        return [WatchEdit.receiptReplyKey: data]
     }
 
     deinit { accessTask?.cancel() }
@@ -118,6 +141,13 @@ extension WatchBridge: WCSessionDelegate {
     nonisolated func sessionDidDeactivate(_ session: WCSession) { session.activate() }
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any],
                              replyHandler: @escaping ([String: Any]) -> Void) {
+        if let rawIDs = message[WatchEdit.receiptQueryKey] as? [String] {
+            let ids = rawIDs.prefix(64).compactMap(UUID.init(uuidString:))
+            let box = ReplyBox(handler: replyHandler)
+            Task { @MainActor in box.handler(self.receipts(for: ids)) }
+            return
+        }
+        let operationID = (message[WatchEdit.operationIDKey] as? String).flatMap(UUID.init(uuidString:))
         guard let edit = WatchEdit(userInfoDictionary: message) else {
             replyHandler([WatchEditReply.key: WatchEditReply.unknownTask]); return
         }
@@ -126,11 +156,12 @@ extension WatchBridge: WCSessionDelegate {
         // requires — box it in an `@unchecked Sendable` wrapper. Safe: the box
         // is only ever invoked once, from the single `Task` below.
         let box = ReplyBox(handler: replyHandler)
-        Task { @MainActor in box.handler([WatchEditReply.key: self.handle(edit: edit)]) }
+        Task { @MainActor in box.handler(self.reply(to: edit, operationID: operationID)) }
     }
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard let edit = WatchEdit(userInfoDictionary: userInfo) else { return }
-        Task { @MainActor in _ = self.handle(edit: edit) }
+        let operationID = (userInfo[WatchEdit.operationIDKey] as? String).flatMap(UUID.init(uuidString:))
+        Task { @MainActor in _ = self.handle(edit: edit, operationID: operationID) }
     }
 }
 

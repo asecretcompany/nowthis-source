@@ -1,196 +1,254 @@
 import EventKit
 import SwiftData
 
-/// One-way push sync from NowThis tasks to Apple Calendar via EventKit.
-///
-/// Creates and manages a dedicated "NowThis" `EKCalendar` in the default
-/// calendar source. Tasks with due dates are synced as `EKEvent` entries.
-/// Completed tasks get a `✓` prefix. Deleted tasks remove their events.
-///
-/// This manager never reads events back — NowThis is always the source of truth.
+/// Only objects created and durably recorded by this local mirror may be changed.
+/// Explicit exports keep their separate legacy link on TaskItem.
 @MainActor
 final class AppleCalendarSyncManager: ObservableObject {
-
     @Published var isSyncing = false
     @Published var lastError: String?
-
-    private let permissionManager: CalendarPermissionManager
-
-    /// The identifier of the managed "NowThis" calendar.
-    private static let calendarTitleKey = "NowThis"
-    private static let calendarColorKey = "nowthis_calendar_id"
+    private let store: any AppleCalendarStore
+    private let makeJournal: (ModelContainer) -> AppleCalendarOwnershipJournal
 
     init(permissionManager: CalendarPermissionManager) {
-        self.permissionManager = permissionManager
+        // Never batch writes into the store used by the system event editor.
+        store = EventKitCalendarStore()
+        makeJournal = { AppleCalendarOwnershipJournal(container: $0) }
     }
 
-    /// Syncs all tasks with due dates to Apple Calendar.
-    ///
-    /// - Parameter modelContext: The SwiftData context to read tasks from.
-    func syncAll(modelContext: ModelContext) async {
-        guard permissionManager.hasAccess else {
-            // The same condition CalendarSyncError.noAccess describes, so it reuses that string
-            // rather than carrying a second, shorter, untranslated copy of it.
-            lastError = CalendarSyncError.noAccess.localizedDescription
-            return
-        }
+    init(store: any AppleCalendarStore,
+         makeJournal: @escaping (ModelContainer) -> AppleCalendarOwnershipJournal = { AppleCalendarOwnershipJournal(container: $0) }) {
+        self.store = store
+        self.makeJournal = makeJournal
+    }
 
+    func managedTaskIDs(container: ModelContainer) throws -> Set<String> {
+        let journal = makeJournal(container)
+        guard try journal.hasOwnershipEvidence() else { return [] }
+        return Set(try journal.taskIDs())
+    }
+
+    @discardableResult
+    func reconcileManaged(container: ModelContainer, taskIDs: Set<String>? = nil,
+                          isEnabled: @MainActor () -> Bool = { UserDefaults.standard.bool(forKey: "appleCalendarSyncEnabled") }) throws -> Bool {
+        guard isEnabled(), !container.mainContext.hasChanges else { return false }
+        guard store.hasAccess else { throw CalendarSyncError.noAccess }
+        defer { store.reset() }
+        let journal = makeJournal(container)
+        let ids = try journal.taskIDs()
+        var changed = false
+        var held = false
+        for id in ids where taskIDs?.contains(id) != false {
+            try Task.checkCancellation()
+            guard isEnabled(), !container.mainContext.hasChanges else { throw CalendarSyncError.linkUncertain }
+            do {
+                guard let link = try journal.loadLink(taskID: id), let identity = link.taskIdentity else {
+                    throw CalendarSyncError.linkUncertain
+                }
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                if let task = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first {
+                    guard CalendarMirrorState.Identity(task) == identity else { throw CalendarSyncError.linkUncertain }
+                    changed = try syncTask(task, journal: journal, requireFrozenProof: true) || changed
+                } else {
+                    guard try CalendarMirrorState.purge(for: identity, in: context) != nil else { throw CalendarSyncError.linkUncertain }
+                    changed = try removeLink(id, journal: journal, requireFrozenProof: true) || changed
+                }
+            } catch CalendarSyncError.linkUncertain {
+                store.reset()
+                held = true
+            } catch is CalendarMirrorState.Held {
+                store.reset()
+                held = true
+            }
+        }
+        if held { throw CalendarSyncError.linkUncertain }
+        return changed
+    }
+
+    @discardableResult
+    func syncAll(modelContext: ModelContext) async -> Bool {
+        guard store.hasAccess else { lastError = CalendarSyncError.noAccess.localizedDescription; return false }
+        guard !modelContext.container.mainContext.hasChanges else { return false }
         isSyncing = true
         lastError = nil
-
+        var acknowledged = false
+        defer { isSyncing = false; store.reset() }
         do {
-            let calendar = try findOrCreateCalendar()
-            let predicate = #Predicate<TaskItem> { !$0.isDeletedLocally }
-            let descriptor = FetchDescriptor<TaskItem>(
-                predicate: predicate
-            )
-            let tasks = try modelContext.fetch(descriptor)
-
+            let context = ModelContext(modelContext.container)
+            context.autosaveEnabled = false
+            let tasks = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isDeletedLocally }))
+            let journal = makeJournal(context.container)
+            _ = try journal.loadDestination()
+            let linkedIDs = try journal.taskIDs()
             for task in tasks {
-                try syncTask(task, to: calendar)
+                do { acknowledged = try syncTask(task, journal: journal) || acknowledged }
+                catch CalendarSyncError.linkUncertain {
+                    store.reset()
+                    lastError = CalendarSyncError.linkUncertain.localizedDescription
+                }
             }
-
-            // Clean up events for deleted tasks
-            try cleanupDeletedEvents(tasks: tasks, calendar: calendar)
-
-            try modelContext.save()
-        } catch {
-            lastError = error.localizedDescription
-        }
-
-        isSyncing = false
-    }
-
-    /// Syncs a single task to Apple Calendar (for per-task "Add to Calendar").
-    ///
-    /// - Parameters:
-    ///   - task: The task to sync.
-    ///   - calendarIdentifier: Optional specific calendar ID. If nil, uses the managed "NowThis" calendar.
-    func syncSingleTask(_ task: TaskItem, to calendarIdentifier: String? = nil) throws {
-        guard permissionManager.hasAccess else {
-            throw CalendarSyncError.noAccess
-        }
-
-        let store = permissionManager.eventStore
-        let calendar: EKCalendar
-
-        if let id = calendarIdentifier,
-           let specific = store.calendar(withIdentifier: id) {
-            calendar = specific
-        } else {
-            calendar = try findOrCreateCalendar()
-        }
-
-        try syncTask(task, to: calendar)
-    }
-
-    /// Returns all writable calendars for the "Add to Calendar" picker.
-    func writableCalendars() -> [EKCalendar] {
-        guard permissionManager.hasAccess else { return [] }
-        return permissionManager.eventStore
-            .calendars(for: .event)
-            .filter { $0.allowsContentModifications }
-    }
-
-    // MARK: - Private
-
-    /// Finds the existing "NowThis" calendar or creates a new one.
-    private func findOrCreateCalendar() throws -> EKCalendar {
-        let store = permissionManager.eventStore
-
-        // Search for existing
-        if let existing = store.calendars(for: .event)
-            .first(where: { $0.title == Self.calendarTitleKey }) {
-            return existing
-        }
-
-        // Create new
-        let calendar = EKCalendar(for: .event, eventStore: store)
-        calendar.title = Self.calendarTitleKey
-        calendar.cgColor = CGColor(red: 0.55, green: 0.35, blue: 0.85, alpha: 1.0) // Purple tint
-
-        // Find default source
-        if let defaultSource = store.defaultCalendarForNewEvents?.source {
-            calendar.source = defaultSource
-        } else if let localSource = store.sources.first(where: { $0.sourceType == .local }) {
-            calendar.source = localSource
-        } else if let firstSource = store.sources.first {
-            calendar.source = firstSource
-        } else {
-            throw CalendarSyncError.noCalendarSource
-        }
-
-        try store.saveCalendar(calendar, commit: true)
-        return calendar
-    }
-
-    /// Creates or updates an EKEvent for a single task.
-    private func syncTask(_ task: TaskItem, to calendar: EKCalendar) throws {
-        let store = permissionManager.eventStore
-
-        guard let dueDate = task.dueDate else {
-            // No due date — remove event if one exists
-            if let eventID = task.calendarEventID {
-                try removeEvent(identifier: eventID)
-                task.calendarEventID = nil
+            let ids = Set(tasks.map(\.id))
+            for id in linkedIDs where !ids.contains(id) {
+                do { acknowledged = try removeLink(id, journal: journal) || acknowledged }
+                catch CalendarSyncError.linkUncertain {
+                    store.reset()
+                    lastError = CalendarSyncError.linkUncertain.localizedDescription
+                }
             }
-            return
-        }
-
-        let event: EKEvent
-
-        // Try to find existing event
-        if let eventID = task.calendarEventID,
-           let existing = store.event(withIdentifier: eventID) {
-            event = existing
-        } else {
-            event = EKEvent(eventStore: store)
-            event.calendar = calendar
-        }
-
-        // Map task fields to event
-        let startDate = task.startDate ?? dueDate
-        event.title = task.status == .completed ? "✓ \(task.title)" : task.title
-        event.startDate = startDate
-        event.endDate = Calendar.current.date(byAdding: .minute, value: 30, to: startDate) ?? startDate
-        event.notes = task.descriptionText
-        event.location = task.locationName
-
-        if let url = task.url, let eventURL = URL(string: url) {
-            event.url = eventURL
-        }
-
-        try store.save(event, span: .thisEvent)
-        task.calendarEventID = event.eventIdentifier
+        } catch { lastError = error.localizedDescription }
+        return acknowledged
     }
 
-    /// Removes an EKEvent by identifier.
-    private func removeEvent(identifier: String) throws {
-        let store = permissionManager.eventStore
-        guard let event = store.event(withIdentifier: identifier) else { return }
-        try store.remove(event, span: .thisEvent)
+    @discardableResult
+    func syncSingleTask(_ task: TaskItem, to calendarIdentifier: String? = nil) throws -> Bool {
+        guard store.hasAccess else { throw CalendarSyncError.noAccess }
+        guard let container = task.modelContext?.container, !container.mainContext.hasChanges else { return false }
+        defer { store.reset() }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let id = task.id
+        guard let committed = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })).first else { return false }
+        let journal = makeJournal(container)
+        if let calendarIdentifier, try journal.loadDestination()?.binding?.id != calendarIdentifier {
+            throw CalendarSyncError.ownershipUncertain
+        }
+        return try syncTask(committed, journal: journal)
     }
 
-    /// Cleans up orphaned events for tasks that have been deleted.
-    private func cleanupDeletedEvents(tasks: [TaskItem], calendar: EKCalendar) throws {
-        let store = permissionManager.eventStore
-        let taskEventIDs = Set(tasks.compactMap(\.calendarEventID))
-
-        // Find events in NowThis calendar within a wide range
-        let startDate = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
-        let endDate = Calendar.current.date(byAdding: .year, value: 2, to: Date()) ?? Date()
-        let predicate = store.predicateForEvents(
-            withStart: startDate,
-            end: endDate,
-            calendars: [calendar]
-        )
-
-        let events = store.events(matching: predicate)
-        for event in events {
-            if !taskEventIDs.contains(event.eventIdentifier) {
-                try? store.remove(event, span: .thisEvent)
+    private func destination(journal: AppleCalendarOwnershipJournal) throws -> AppleCalendarOwnership.Destination {
+        guard store.hasAccess else { throw CalendarSyncError.noAccess }
+        if var destination = try journal.loadDestination() {
+            try verifyDestination(destination)
+            if !destination.acknowledged {
+                destination.acknowledged = true
+                try journal.persistDestination(&destination)
             }
+            return destination
         }
+        var destination = AppleCalendarOwnership.Destination(scope: try journal.scope(), eventStoreID: store.storeIdentifier)
+        try journal.persistDestination(&destination)
+        let staged = try store.stageCalendar()
+        guard AppleCalendarOwnership.validBinding(staged.binding) else { throw CalendarSyncError.ownershipUncertain }
+        destination.binding = staged.binding
+        try journal.persistDestination(&destination)
+        let receipt = try store.commitCalendar()
+        guard AppleCalendarOwnership.validBinding(receipt.binding), receipt.binding.sourceID == staged.binding.sourceID,
+              receipt.binding.sourceType == staged.binding.sourceType else { throw CalendarSyncError.ownershipUncertain }
+        destination.binding = receipt.binding
+        destination.acknowledged = true
+        try journal.persistDestination(&destination)
+        return destination
+    }
+
+    private func verifyDestination(_ destination: AppleCalendarOwnership.Destination) throws {
+        guard store.hasAccess else { throw CalendarSyncError.noAccess }
+        guard destination.eventStoreID == store.storeIdentifier,
+              let binding = destination.binding, store.calendar(binding) != nil else { throw CalendarSyncError.ownershipUncertain }
+    }
+
+    /// Permission, destination and journal errors stop their scope. An unresolved
+    /// event holds only its link; the next item reloads independent committed rows.
+    private func eventOperation<T>(destination: AppleCalendarOwnership.Destination,
+                                   _ operation: () throws -> T) throws -> T {
+        try verifyDestination(destination)
+        do { return try operation() }
+        catch {
+            try verifyDestination(destination)
+            throw CalendarSyncError.linkUncertain
+        }
+    }
+
+    private func syncTask(_ task: TaskItem, journal: AppleCalendarOwnershipJournal,
+                          requireFrozenProof: Bool = false) throws -> Bool {
+        // Validate an existing link before any destination promotion or EventKit write.
+        let stored = try journal.loadLink(taskID: task.id)
+        if let stored, let source = stored.taskIdentity, source != CalendarMirrorState.Identity(task) {
+            throw CalendarSyncError.linkUncertain
+        }
+        if task.dueDate == nil || task.isDeletedLocally {
+            return try removeLink(task.id, journal: journal, requireFrozenProof: requireFrozenProof)
+        }
+        let target = try destination(journal: journal)
+        guard let binding = target.binding, let due = task.dueDate else { throw CalendarSyncError.ownershipUncertain }
+        let start = task.startDate ?? due
+        let content = AppleEventContent(title: task.status == .completed ? "✓ \(task.title)" : task.title,
+            start: start, end: Calendar.current.date(byAdding: .minute, value: 30, to: start) ?? start,
+            notes: task.descriptionText, location: task.locationName, url: task.url.flatMap(URL.init(string:)))
+        let requested = try content.ownershipFingerprint()
+        if var link = stored {
+            guard let recorded = link.event, let existing = store.event(recorded) else { throw CalendarSyncError.linkUncertain }
+            if link.pending?.action == .remove {
+                return try removeLink(task.id, journal: journal, requireFrozenProof: requireFrozenProof)
+            }
+            var changed = false
+            let actual = try existing.content.ownershipFingerprint()
+            if link.pending?.action == .create || link.pending?.action == .update {
+                if link.pending?.expectedFingerprint == actual {
+                    link.event = existing.identity
+                    link.pending = nil
+                    try journal.persistLink(&link)
+                    changed = true
+                } else if requireFrozenProof {
+                    throw CalendarSyncError.linkUncertain
+                }
+            }
+            if link.pending == nil && actual == requested { return changed }
+            if link.pending == nil {
+                link.pending = .init(action: .update, fingerprint: requested)
+            } else {
+                // Retain the original operation and requested version until a retry
+                // proves the latest committed task fields. No identity-only ack.
+                link.pending?.retryFingerprint = requested
+            }
+            try journal.persistLink(&link)
+            let staged = try eventOperation(destination: target) { try store.stageUpdate(existing, content: content) }
+            guard staged.identity == existing.identity, !staged.recurring,
+                  try staged.content.ownershipFingerprint() == requested else { throw CalendarSyncError.linkUncertain }
+            let receipt = try eventOperation(destination: target) { try store.commitEvent() }
+            guard receipt.identity == existing.identity, !receipt.recurring,
+                  try receipt.content.ownershipFingerprint() == requested else { throw CalendarSyncError.linkUncertain }
+            link.event = receipt.identity
+            link.pending = nil
+            try journal.persistLink(&link)
+            return true
+        }
+        var link = AppleCalendarOwnership.Link(scope: target.scope, taskID: task.id,
+            taskIdentity: CalendarMirrorState.Identity(task), destinationGeneration: target.generation, pending: .init(action: .create, fingerprint: requested))
+        try journal.persistLink(&link)
+        let staged = try eventOperation(destination: target) { try store.stageEvent(calendar: binding, content: content) }
+        guard !staged.itemID.isEmpty, staged.calendar == binding, !staged.recurring,
+              try staged.content.ownershipFingerprint() == requested else { throw CalendarSyncError.linkUncertain }
+        link.event = staged.identity
+        try journal.persistLink(&link)
+        let receipt = try eventOperation(destination: target) { try store.commitEvent() }
+        guard !receipt.itemID.isEmpty, receipt.calendar == binding, !receipt.recurring,
+              try receipt.content.ownershipFingerprint() == requested else { throw CalendarSyncError.linkUncertain }
+        link.event = receipt.identity
+        link.pending = nil
+        try journal.persistLink(&link)
+        return true
+    }
+
+    private func removeLink(_ id: String, journal: AppleCalendarOwnershipJournal,
+                            requireFrozenProof: Bool = false) throws -> Bool {
+        guard var link = try journal.loadLink(taskID: id) else { return false }
+        let target = try destination(journal: journal)
+        guard let recorded = link.event, let existing = store.event(recorded) else { throw CalendarSyncError.linkUncertain }
+        if let pending = link.pending, pending.action != .remove {
+            let matches = pending.expectedFingerprint.map { expected in
+                (try? existing.content.ownershipFingerprint()) == expected
+            } ?? false
+            if requireFrozenProof && !matches { throw CalendarSyncError.linkUncertain }
+        }
+        if link.pending?.action != .remove {
+            link.pending = .init(action: .remove)
+            try journal.persistLink(&link)
+        }
+        try eventOperation(destination: target) { try store.stageRemoval(existing) }
+        try eventOperation(destination: target) { try store.commitRemoval() }
+        try journal.removeLink(link)
+        return true
     }
 }
 
@@ -199,6 +257,8 @@ final class AppleCalendarSyncManager: ObservableObject {
 enum CalendarSyncError: LocalizedError {
     case noAccess
     case noCalendarSource
+    case ownershipUncertain
+    case linkUncertain
 
     var errorDescription: String? {
         switch self {
@@ -207,6 +267,10 @@ enum CalendarSyncError: LocalizedError {
                 localized: "calendarSync.error.noAccess",
                 defaultValue: "Calendar access not granted. Please enable in Settings.",
                 comment: "Apple Calendar sync error. \"Settings\" is the iOS system app.")
+        case .ownershipUncertain, .linkUncertain:
+            return String(localized: "calendarSync.error.ownershipUncertain",
+                defaultValue: "Calendar sync paused because ownership could not be verified.",
+                comment: "Apple Calendar mirror safety error: local ownership is missing or uncertain; existing events are preserved.")
         case .noCalendarSource:
             return String(
                 localized: "calendarSync.error.noSource",

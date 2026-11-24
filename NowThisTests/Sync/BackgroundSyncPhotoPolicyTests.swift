@@ -8,11 +8,11 @@ import Testing
 struct BackgroundSyncPhotoPolicyTests {
     private let photoID = "BD2E616C-55C0-4F7C-A3C4-32AD464EC9E4"
 
-    private func fixture() throws -> (ModelContainer, ServerAccount, TaskList, TaskItem) {
+    private func fixture(host: String) throws -> (ModelContainer, ServerAccount, TaskList, TaskItem) {
         let container = try ModelContainer(for: Schema(SchemaV2.models),
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let context = container.mainContext
-        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://unused.invalid", username: "fixture")
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://" + host, username: "fixture")
         let list = TaskList(id: "photo-list", serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         let task = TaskItem(uid: "photo-task", title: "Local edit")
         context.insert(account); context.insert(list); context.insert(task)
@@ -21,13 +21,15 @@ struct BackgroundSyncPhotoPolicyTests {
         task.isLocalOnly = false; task.isDirty = true
         list.syncCTag = "c1"; list.lastFullPullDate = Date()
         SyncEngine.markCategoriesCaughtUp(listID: list.id)
+        try SyncResourceFixture.prove(task, in: context)
         try context.save()
         return (container, account, list, task)
     }
 
     // A return to TaskPhotoSync/probe/prune in the background branch adds observable work.
     @Test func backgroundSkipsBroadPhotoMaintenance() async throws {
-        let (container, account, _, task) = try fixture()
+        let host = "background-photo-policy-" + UUID().uuidString.lowercased() + ".invalid"
+        let (container, account, _, task) = try fixture(host: host)
         let photo = TaskPhoto(photoID: photoID, previewData: TaskPhotoJPEGFixture.data)
         photo.originalRequested = true; photo.originalStatus = "pending"; photo.pendingOperation = "add"
         container.mainContext.insert(photo); photo.task = task
@@ -35,7 +37,6 @@ struct BackgroundSyncPhotoPolicyTests {
         container.mainContext.insert(missing); missing.account = account; missing.photoAccessRevoked = true
         try container.mainContext.save()
         let files = BackgroundPhotoFiles()
-        let host = "background-photo-policy-" + UUID().uuidString.lowercased() + ".invalid"
         // Legacy list CTag fields do not establish the authoritative import baseline.
         // Supply the required complete task inventory, retaining this dirty task by ETag.
         let manifest = DAVSyncScenario.multistatus(DAVSyncScenario.prop(
@@ -63,7 +64,8 @@ struct BackgroundSyncPhotoPolicyTests {
 
     // An account with no discovered lists must not prune the original cache either.
     @Test func backgroundLeavesOldUnattachedCachedOriginals() async throws {
-        let (container, account, _, _) = try fixture()
+        let host = "background-no-prune-" + UUID().uuidString.lowercased() + ".invalid"
+        let (container, account, _, _) = try fixture(host: host)
         let id = UUID().uuidString
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -71,7 +73,6 @@ struct BackgroundSyncPhotoPolicyTests {
         try await cache.store(TaskPhotoJPEGFixture.data, photoID: id)
         let path = directory.appendingPathComponent(id.lowercased())
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: path.path)
-        let host = "background-no-prune-" + UUID().uuidString.lowercased() + ".invalid"
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
             ScriptedDAVProtocol.install(host: host, responses: DAVSyncScenario.discovery(paths: [])),
             retryPolicy: .init(maxAttempts: 1, baseDelay: 0)), taskPhotoCache: cache)
@@ -84,13 +85,13 @@ struct BackgroundSyncPhotoPolicyTests {
     }
 
     @Test func taskPhotoMetadataStillImports() async throws {
-        let (container, account, list, task) = try fixture()
+        let host = "background-photo-import-" + UUID().uuidString.lowercased() + ".invalid"
+        let (container, account, list, task) = try fixture(host: host)
         task.isDirty = false; list.syncCTag = nil; list.lastFullPullDate = nil
         try container.mainContext.save()
         let attachment = TaskPhotoAttachment(id: photoID, previewData: TaskPhotoJPEGFixture.data,
             originalFileID: "901", folderFileID: "900", originalRequested: true)
         let calendar = ICalendarSerializer.serialize(uid: "photo-task", summary: "Remote photo", photos: [attachment])
-        let host = "background-photo-import-" + UUID().uuidString.lowercased() + ".invalid"
         let manifest = DAVSyncScenario.multistatus(DAVSyncScenario.prop("/one/photo-task.ics", "<d:getetag>new</d:getetag>"))
         let body = DAVSyncScenario.multistatus(DAVSyncScenario.prop("/one/photo-task.ics",
             "<d:getetag>new</d:getetag><c:calendar-data>" + calendar + "</c:calendar-data>"))
@@ -112,10 +113,10 @@ struct BackgroundSyncPhotoPolicyTests {
 
     @Test(arguments: [403, 404])
     func actualCollectionDenialStillRevokesPhotoAccess(status: Int) async throws {
-        let (container, account, list, _) = try fixture()
+        let host = "background-denial-" + UUID().uuidString.lowercased() + ".invalid"
+        let (container, account, list, _) = try fixture(host: host)
         list.syncCTag = nil; list.lastFullPullDate = nil
         try container.mainContext.save()
-        let host = "background-denial-" + UUID().uuidString.lowercased() + ".invalid"
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
             ScriptedDAVProtocol.install(host: host, responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
                 .init(status: status, body: ""), .init(status: status, body: "")]),

@@ -41,62 +41,59 @@ struct SelectListsIntent: WidgetConfigurationIntent {
         listIDs: [String],
         maxTasks: Int,
         showOverdue: Bool = false,
-        container: ModelContainer
+        container: ModelContainer,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        onCandidatePage: ((Int) -> Void)? = nil
     ) throws -> (tasks: [WidgetFilteredTask], displayName: String) {
         let context = ModelContext(container)
 
-        // Fetch non-deleted tasks
-        let taskPredicate = #Predicate<TaskItem> { !$0.isDeletedLocally }
-        let descriptor = FetchDescriptor<TaskItem>(
-            predicate: taskPredicate,
-            sortBy: [
-                SortDescriptor(\TaskItem.createdDate, order: .reverse)
-            ]
-        )
-
-        var tasks = try context.fetch(descriptor)
-
-        // Exclude completed tasks (predicate can't filter enums reliably)
-        tasks = tasks.filter { $0.status != .completed }
-
-        // Filter by selected lists if any are specified
         let filterIDs = Set(listIDs)
-        if !filterIDs.isEmpty {
-            tasks = tasks.filter { task in
-                guard let listID = task.taskList?.id else { return false }
-                return filterIDs.contains(listID)
-            }
+        let allLists = filterIDs.isEmpty
+        let selectedIDs = Array(filterIDs)
+        let local = DueDateHelper.localCalendar(in: calendar)
+        let startOfToday = local.startOfDay(for: now)
+        let endOfToday = local.date(byAdding: .day, value: 1, to: startOfToday)!
+        let utcStart = DueDateHelper.dateOnlyValue(for: now, calendar: calendar)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let utcEnd = utc.date(byAdding: .day, value: 1, to: utcStart)!
+        // A conservative union admits both local timed instants and UTC-stored all-day dates.
+        // Exact calendar semantics are checked below, after the bounded candidate fetch.
+        let lower = min(startOfToday, utcStart)
+        let upper = max(endOfToday, utcEnd)
+        let missingDate = Date.distantFuture
+        let taskPredicate = #Predicate<TaskItem> {
+            !$0.isDeletedLocally && $0.dueDate != nil
+                && (allLists || ($0.taskList.flatMap { selectedIDs.contains($0.id) } ?? false))
+                && ($0.dueDate ?? missingDate) < upper
+                && (showOverdue || ($0.dueDate ?? missingDate) >= lower)
         }
-
-        // Scope to today's tasks (and optionally overdue)
-        let now = Date()
-        tasks = tasks.filter { task in
-            guard let dueDate = task.dueDate else { return false }
-            if DueDateHelper.isOnDay(dueDate, isDateOnly: task.isDueDateOnly, sameAs: now) {
-                return true
+        var descriptor = FetchDescriptor<TaskItem>(predicate: taskPredicate, sortBy: [
+            SortDescriptor(\TaskItem.dueDate),
+            SortDescriptor(\TaskItem.createdDate, order: .reverse)
+        ])
+        descriptor.fetchLimit = 128
+        var tasks: [TaskItem] = []
+        let limit = max(0, maxTasks)
+        while tasks.count < limit {
+            let page = try context.fetch(descriptor)
+            onCandidatePage?(page.count)
+            for task in page where task.status != .completed {
+                guard let due = task.dueDate else { continue }
+                let today = DueDateHelper.isOnDay(due, isDateOnly: task.isDueDateOnly,
+                                                 sameAs: now, regionCalendar: calendar)
+                let overdue = now >= DueDateHelper.effectiveDeadline(for: due,
+                    isDateOnly: task.isDueDateOnly, regionCalendar: calendar)
+                if today || (showOverdue && overdue) {
+                    tasks.append(task)
+                    if tasks.count == limit { break }
+                }
             }
-            if showOverdue && DueDateHelper.isOverdue(dueDate: dueDate, isDateOnly: task.isDueDateOnly) {
-                return true
-            }
-            return false
+            if page.count < 128 { break }
+            descriptor.fetchOffset = (descriptor.fetchOffset ?? 0) + page.count
         }
-
-        // Sort: tasks with due dates first (soonest first), then no-due-date tasks
-        tasks.sort { a, b in
-            switch (a.dueDate, b.dueDate) {
-            case let (aDate?, bDate?):
-                return aDate < bDate
-            case (_?, nil):
-                return true   // a has due date, b doesn't → a first
-            case (nil, _?):
-                return false  // b has due date, a doesn't → b first
-            case (nil, nil):
-                return false  // preserve existing order (by createdDate desc)
-            }
-        }
-
-        // Apply limit
-        let limited = Array(tasks.prefix(maxTasks))
+        let limited = tasks
 
         let widgetTasks = limited.map { task in
             WidgetFilteredTask(
@@ -118,15 +115,11 @@ struct SelectListsIntent: WidgetConfigurationIntent {
                 defaultValue: "All Lists",
                 comment: "Widget header when the widget is not filtered to particular lists.")
         } else if filterIDs.count == 1 {
-            displayName = widgetTasks.first?.listName
-                ?? tasks.first?.taskList?.name
+            displayName = try EntityQueryLookup.lists(for: selectedIDs, in: context).first?.name
                 ?? Self.fallbackListName
         } else {
             // Fetch the actual list names for the selected IDs
-            let listDescriptor = FetchDescriptor<TaskList>()
-            let allLists = try context.fetch(listDescriptor)
-            let names = allLists
-                .filter { filterIDs.contains($0.id) }
+            let names = try EntityQueryLookup.lists(for: listIDs, in: context)
                 .map(\.name)
                 .sorted()
             displayName = names.joined(separator: ", ")
@@ -149,7 +142,7 @@ struct WidgetListEntity: AppEntity {
     var name: String
 
     var displayRepresentation: DisplayRepresentation {
-        // `stringLiteral:` and not `"\(name)"` — see `TaskListEntity` in CreateTaskIntent.swift.
+        // `stringLiteral:` and not `"\(name)"` — see `TaskListEntity`.
         DisplayRepresentation(title: LocalizedStringResource(stringLiteral: name))
     }
 }
@@ -161,23 +154,25 @@ struct WidgetListEntityQuery: EntityQuery {
 
     @MainActor
     func entities(for identifiers: [String]) async throws -> [WidgetListEntity] {
-        let container = try SharedModelContainer.create()
-        let context = container.mainContext
+        let container = try SharedModelContainer.createReadOnly()
+        return try entities(for: identifiers, in: ModelContext(container))
+    }
 
-        let allLists = try context.fetch(FetchDescriptor<TaskList>())
-        return allLists
-            .filter { identifiers.contains($0.id) }
+    @MainActor
+    func entities(for identifiers: [String], in context: ModelContext) throws -> [WidgetListEntity] {
+        try EntityQueryLookup.lists(for: identifiers, in: context)
             .map { WidgetListEntity(id: $0.id, name: $0.name) }
     }
 
     @MainActor
     func suggestedEntities() async throws -> [WidgetListEntity] {
-        let container = try SharedModelContainer.create()
-        let context = container.mainContext
+        let container = try SharedModelContainer.createReadOnly()
+        return try suggestedEntities(in: ModelContext(container))
+    }
 
-        let lists = try context.fetch(
-            FetchDescriptor<TaskList>(sortBy: [SortDescriptor<TaskList>(\TaskList.name)])
-        )
+    @MainActor
+    func suggestedEntities(in context: ModelContext) throws -> [WidgetListEntity] {
+        let lists = try context.fetch(EntityQueryLookup.listSuggestionsDescriptor())
         return lists.map { WidgetListEntity(id: $0.id, name: $0.name) }
     }
 }

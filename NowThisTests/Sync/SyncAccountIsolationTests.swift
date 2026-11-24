@@ -62,7 +62,14 @@ struct SyncAccountIsolationTests {
         let responses = DAVSyncScenario.discovery(paths: ["/one/"])
             + [.init(body: DAVSyncScenario.manifest(count: 0)),
                .init(status: 201, body: "", headers: ["ETag": "pushed"], gate: gate)]
-            + DAVSyncScenario.discovery(paths: ["/one/"])
+            + DAVSyncScenario.discovery(paths: ["/one/"]).map { response in
+                // The first upload changes the server CTag, so the next pass pulls
+                // the manifest before pushing the edit saved during that upload.
+                var updated = response
+                updated.body = updated.body.replacingOccurrences(of: "<cs:getctag>c1</cs:getctag>",
+                    with: "<cs:getctag>c2</cs:getctag>")
+                return updated
+            }
             + [.init(body: DAVSyncScenario.manifest(count: 0)),
                .init(status: 204, body: "", headers: ["ETag": "newer-pushed"])]
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
@@ -72,8 +79,17 @@ struct SyncAccountIsolationTests {
         try await keychain.save(password: "fixture", for: accountID)
         let account = try #require(try container.mainContext.fetch(FetchDescriptor<ServerAccount>()).first)
         account.serverBaseURL = "https://" + host; try container.mainContext.save()
-        let scheduler = SyncScheduler(syncEngine: engine, keychainManager: keychain, onWidgetReload: {})
+        let clock = SchedulerDebounceClock()
+        let followupEntered = ScriptedDAVProtocol.Gate()
+        let followupResume = ScriptedDAVProtocol.Gate()
+        var passes = 0
+        let scheduler = SyncScheduler(syncEngine: engine, keychainManager: keychain,
+            onWidgetReload: {}, onNotificationFlush: { _ in
+                passes += 1
+                if passes == 2 { followupEntered.release(); await followupResume.wait() }
+            }, changeDebounceSleep: { try await clock.sleep(for: $0) })
         let run = Task { @MainActor in await scheduler.syncNow(modelContext: container.mainContext) }
+        defer { run.cancel(); gate.release(); followupResume.release(); scheduler.cancelInflightSync() }
         for _ in 0..<500 where ScriptedDAVProtocol.requests(host: host).count < 5 {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -82,6 +98,14 @@ struct SyncAccountIsolationTests {
         scheduler.syncAfterChange(modelContext: container.mainContext)
         scheduler.syncAfterChange(modelContext: container.mainContext)
         gate.release(); await run.value
+        #expect(!scheduler.isSyncing)
+        #expect(ScriptedDAVProtocol.requests(host: host).filter { $0.method == "PUT" }.count == 1)
+        await clock.waitForSleeps(1)
+        clock.advance(by: .seconds(2))
+        await followupEntered.wait()
+        let release = Task { followupResume.release() }
+        await scheduler.syncNow(modelContext: container.mainContext)
+        await release.value
         try await keychain.delete(for: accountID)
         let requests = ScriptedDAVProtocol.requests(host: host)
         #expect(requests.filter { $0.method == "PROPFIND" }.count == 6)
@@ -90,6 +114,10 @@ struct SyncAccountIsolationTests {
         #expect(uploads.last?.ifMatch == "\"pushed\"")
         #expect(String(decoding: uploads.last!.body, as: UTF8.self).contains("SUMMARY:After"))
         #expect(!scheduler.isSyncing)
+        #expect(scheduler.lastSyncFailure == nil)
+        let saved = try #require(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first)
+        #expect(!saved.isDirty)
+        #expect(saved.etag == "newer-pushed")
     }
 
 }

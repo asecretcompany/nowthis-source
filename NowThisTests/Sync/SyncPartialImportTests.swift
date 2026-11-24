@@ -5,12 +5,47 @@ import Testing
 
 @Suite("Committed partial imports", .serialized)
 struct SyncPartialImportTests {
+    @Test("A parser work-limit failure preserves tasks and cannot checkpoint or reconcile absence")
+    @MainActor
+    func parserAdmissionFailureIsNotAuthoritative() async throws {
+        let container = try DAVSyncScenario.container()
+        let host = "parser-limit-\(UUID().uuidString.lowercased()).invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let context = container.mainContext
+        let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
+        let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        list.account = account; context.insert(list)
+        let kept = TaskItem(uid: "keep", title: "Existing data")
+        kept.taskList = list; kept.etag = "keep-etag"; kept.remoteHref = "/one/keep.ics"
+        kept.isDirty = false; kept.isLocalOnly = false; context.insert(kept)
+        try VTODOOpaqueState.empty.store(taskID: kept.id, in: context)
+        try context.save()
+        let metadataBefore = Set(try context.fetch(FetchDescriptor<SyncMetadata>()).map(\.id))
+        let hostile = DAVSyncScenario.tasks(count: 1).replacingOccurrences(of: "END:VTODO",
+            with: "CATEGORIES:" + Array(repeating: "excess", count: 257).joined(separator: ",") + "\nEND:VTODO")
+        let configuration = ScriptedDAVProtocol.install(host: host,
+            responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
+                .init(body: DAVSyncScenario.manifest(count: 1)), .init(body: hostile)
+            ])
+        let engine = SyncEngine(calDAVClient: CalDAVClient(configuration: configuration,
+            retryPolicy: .init(maxAttempts: 1, baseDelay: 0)))
+        let result = await engine.performFullSyncOutcome(accountID: accountID,
+            serverBaseURL: "https://" + host, credentials: .init(username: "fixture", password: "fixture"),
+            modelContainer: container)
+        #expect(result.status != .completed)
+        let fresh = ModelContext(container)
+        #expect(try fresh.fetch(FetchDescriptor<TaskItem>()).map(\.id) == [kept.id])
+        #expect(try fresh.fetchCount(FetchDescriptor<NowThis.Tag>()) == 0)
+        #expect(Set(try fresh.fetch(FetchDescriptor<SyncMetadata>()).map(\.id)) == metadataBefore)
+        #expect(try fresh.fetch(FetchDescriptor<TaskList>()).first?.ctag == nil)
+        #expect(ScriptedDAVProtocol.requests(host: host).last?.method == "REPORT")
+    }
     @Test("Saved first-list tasks announce refresh even when the next list fails", arguments: [false, true])
     @MainActor
     func firstListRemainsVisible(background: Bool) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "partial-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let responses = DAVSyncScenario.discovery(paths: ["/one/", "/two/"])
             + [.init(body: DAVSyncScenario.manifest(count: 101)), .init(body: DAVSyncScenario.tasks(count: 100, startIndex: 0)), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 100)), .init(status: 503, body: "unavailable")]
         let config = ScriptedDAVProtocol.install(host: host, responses: responses)
@@ -37,8 +72,8 @@ struct SyncPartialImportTests {
     @MainActor
     func cancelledBackgroundIsNotSuccess() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "cancel-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let gate = ScriptedDAVProtocol.Gate()
         let responses = DAVSyncScenario.discovery(paths: ["/one/", "/two/"])
             + [.init(body: DAVSyncScenario.manifest(count: 101)), .init(body: DAVSyncScenario.tasks(count: 100, startIndex: 0)), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 100)), .init(body: DAVSyncScenario.manifest(count: 1), gate: gate), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 0))]
@@ -64,8 +99,8 @@ struct SyncPartialImportTests {
     @MainActor
     func unchangedCTagDoesNotAnnounceChanges() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "noop-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let responses = DAVSyncScenario.discovery(paths: ["/one/"])
             + [.init(body: DAVSyncScenario.manifest(count: 1)), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 0))]
             + DAVSyncScenario.discovery(paths: ["/one/"])
@@ -91,8 +126,8 @@ struct SyncPartialImportTests {
     @MainActor
     func changesStreamContainsCommittedBatch() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "stream-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let responses = DAVSyncScenario.discovery(paths: ["/one/", "/two/"])
             + [.init(body: DAVSyncScenario.manifest(count: 101)), .init(body: DAVSyncScenario.tasks(count: 100, startIndex: 0)), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 100)), .init(status: 503, body: "unavailable")]
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
@@ -117,7 +152,8 @@ struct SyncPartialImportTests {
     @MainActor
     func moveAnnouncesBothScopes() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "move-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try container.mainContext.fetch(FetchDescriptor<ServerAccount>()).first)
         let source = TaskList(id: "source", serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         let destination = TaskList(id: "destination", serverURL: "/two/", name: "Fixture", colorHex: "#007AFF")
@@ -126,10 +162,13 @@ struct SyncPartialImportTests {
         let task = TaskItem(uid: "moved", title: "Move the moon bakery")
         task.taskList = source; task.remoteHref = "/one/moved.ics"; task.etag = "before"
         task.isDirty = false; task.isLocalOnly = false
-        container.mainContext.insert(task); try container.mainContext.save()
+        container.mainContext.insert(task)
+        try VTODOOpaqueState.empty.store(taskID: task.id, in: container.mainContext)
+        task.attachmentStateKnown = true
+        try SyncResourceFixture.prove(task, in: container.mainContext)
+        try container.mainContext.save()
         TaskMover.move(task, to: destination, in: container.mainContext)
         try container.mainContext.save()
-        let host = "move-" + UUID().uuidString.lowercased() + ".invalid"
         let responses = DAVSyncScenario.discovery(paths: ["/one/", "/two/"])
             + [.init(body: DAVSyncScenario.manifest(count: 0)), .init(body: DAVSyncScenario.manifest(count: 0)),
                .init(status: 201, body: "", headers: ["ETag": "after"]), .init(status: 204, body: "")]
@@ -147,8 +186,8 @@ struct SyncPartialImportTests {
     @MainActor
     func rejectedCredentialsAreSharedAcrossRunners() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "auth-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let config = ScriptedDAVProtocol.install(host: host,
             responses: [.init(status: 401, body: "rejected"), .init(status: 401, body: "rejected")])
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration: config,
@@ -173,7 +212,8 @@ struct SyncPartialImportTests {
     @MainActor
     func rejectedWritesRemainPending(status: Int, method: String) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "reject-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try container.mainContext.fetch(FetchDescriptor<ServerAccount>()).first)
         let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         list.account = account; container.mainContext.insert(list)
@@ -183,9 +223,11 @@ struct SyncPartialImportTests {
             task.etag = "before"; task.isLocalOnly = false; task.isDirty = true
             task.isDeletedLocally = method == "DELETE"
             container.mainContext.insert(task)
+            try VTODOOpaqueState.empty.store(taskID: task.id, in: container.mainContext)
+        task.attachmentStateKnown = true
+        try SyncResourceFixture.prove(task, in: container.mainContext)
         }
         try container.mainContext.save()
-        let host = "reject-" + UUID().uuidString.lowercased() + ".invalid"
         let success = ScriptedDAVProtocol.Response(status: method == "PUT" ? 201 : 204,
             body: "", headers: ["ETag": "after"])
         let responses = DAVSyncScenario.discovery(paths: ["/one/"])
@@ -209,8 +251,8 @@ struct SyncPartialImportTests {
     @MainActor
     func retryConverges(background: Bool) async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "resume-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let initial = DAVSyncScenario.discovery(paths: ["/one/", "/two/"])
             + [.init(body: DAVSyncScenario.manifest(count: 101)), .init(body: DAVSyncScenario.tasks(count: 100, startIndex: 0)), .init(body: DAVSyncScenario.tasks(count: 1, startIndex: 100)), .init(status: 503, body: "unavailable")]
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
@@ -244,8 +286,8 @@ struct SyncPartialImportTests {
     @MainActor
     func sharedGateHasExplicitOutcome() async throws {
         let container = try DAVSyncScenario.container()
-        let accountID = try DAVSyncScenario.account(in: container)
         let host = "gate-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let gate = ScriptedDAVProtocol.Gate()
         var responses = DAVSyncScenario.discovery(paths: ["/one/"])
             + [.init(body: DAVSyncScenario.manifest(count: 0))]

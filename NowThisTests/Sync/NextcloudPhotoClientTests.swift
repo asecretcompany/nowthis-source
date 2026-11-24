@@ -55,6 +55,27 @@ struct NextcloudPhotoClientTests {
         #expect(try await c.inspectCalendar(calendarHref: calendar, access: access).sharees.isEmpty)
     }
 
+    @Test("Folder preparation rechecks account admission before each Files request")
+    func folderPreparationChecksEachRequest() async {
+        let c = client(preparedReplies())
+        let deadline = Date().addingTimeInterval(1800)
+        let gate = PhotoRequestAdmission(deadline: deadline)
+        let admission = ServerRetryAdmission(accountID: "fixture", checkDeadline: { _ in
+            try await gate.check()
+        }, recordDeadline: { _, _ in })
+        do {
+            _ = try await ServerRetryAdmission.$current.withValue(admission) {
+                try await c.prepareFolder(calendarHref: calendar, access: access)
+            }
+            Issue.record("Expected the active server deadline before folder mutation")
+        } catch let error as RetryDeferredError {
+            #expect(error.deadline == deadline)
+        } catch {
+            Issue.record("Expected the active server deadline, received \(type(of: error))")
+        }
+        #expect(PhotoProtocol.requests.map(\.method) == ["PROPFIND"])
+    }
+
     @Test(arguments: ["missing", "failed", "wrongNamespace", "missingAccess", "partialSharees", "duplicate"])
     func incompleteCalendarNeverMutatesShares(_ scenario: String) async throws {
         let body: String
@@ -413,6 +434,18 @@ struct NextcloudPhotoClientTests {
         #expect(PhotoProtocol.requests.isEmpty)
     }
 
+}
+
+private actor PhotoRequestAdmission {
+    let deadline: Date
+    private var allowedFirstRequest = false
+
+    init(deadline: Date) { self.deadline = deadline }
+
+    func check() throws {
+        if allowedFirstRequest { throw RetryDeferredError(deadline: deadline, httpStatusCode: 429) }
+        allowedFirstRequest = true
+    }
 }
 
 private final class PhotoProtocol: URLProtocol, @unchecked Sendable {

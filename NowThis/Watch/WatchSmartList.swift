@@ -35,25 +35,29 @@ enum WatchSmartList: String, CaseIterable, Identifiable {
     /// included (there is no `.completed` case here). Date basis matches iOS:
     /// `today`/`overdue` use `DueDateHelper.effectiveDeadline`; `upcoming` uses
     /// the raw `dueDate` against a 7-day window.
-    func includes(_ task: WatchTask, now: Date = Date()) -> Bool {
+    func includes(_ task: WatchTask, now: Date = Date(), calendar: Calendar = .current) -> Bool {
         guard !task.isCompleted else { return false }
         switch self {
         case .all:
             return true
         case .today:
             guard let due = task.dueDate else { return false }
-            let endOfToday = Calendar.current.startOfDay(for: now).addingTimeInterval(86_400)
-            return DueDateHelper.effectiveDeadline(for: due, isDateOnly: task.isDueDateOnly) <= endOfToday
+            let localCalendar = DueDateHelper.localCalendar(in: calendar)
+            guard let endOfToday = localCalendar.date(byAdding: .day, value: 1,
+                                                      to: localCalendar.startOfDay(for: now)) else { return false }
+            let deadline = DueDateHelper.effectiveDeadline(
+                for: due, isDateOnly: task.isDueDateOnly, regionCalendar: calendar)
+            return task.isDueDateOnly ? deadline <= endOfToday : deadline < endOfToday
         case .overdue:
             guard let due = task.dueDate else { return false }
-            return now >= DueDateHelper.effectiveDeadline(for: due, isDateOnly: task.isDueDateOnly)
+            return now >= DueDateHelper.effectiveDeadline(for: due, isDateOnly: task.isDueDateOnly, regionCalendar: calendar)
         case .upcoming:
             guard let due = task.dueDate else { return false }
             return due >= now && due <= now.addingTimeInterval(7 * 86_400)
         }
     }
 
-    func filter(_ tasks: [WatchTask], now: Date = Date()) -> [WatchTask] {
-        tasks.filter { includes($0, now: now) }
+    func filter(_ tasks: [WatchTask], now: Date = Date(), calendar: Calendar = .current) -> [WatchTask] {
+        tasks.filter { includes($0, now: now, calendar: calendar) }
     }
 }

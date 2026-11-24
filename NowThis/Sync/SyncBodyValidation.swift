@@ -12,7 +12,8 @@ enum SyncBodyValidation {
         var components: [String] = []
         var root: String?
         var hasCalendarComponent = false
-        var hasTodo = false
+        var todoCount = 0
+        var otherContent = false
 
         for rawLine in unfolded.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -36,7 +37,8 @@ enum SyncBodyValidation {
                         hasCalendarComponent = true
                     }
                 }
-                hasTodo = hasTodo || component == "VTODO"
+                if component == "VTODO" { todoCount += 1 }
+                if components == ["VCALENDAR"], component != "VTODO", component != "VTIMEZONE" { otherContent = true }
                 components.append(component)
             } else if line.hasPrefix("END:") {
                 let component = String(line.dropFirst("END:".count))
@@ -55,11 +57,15 @@ enum SyncBodyValidation {
             throw CalDAVError.invalidResponse
         }
 
+        if todoCount > 1 || (todoCount == 1 && otherContent) {
+            return ParsedRemoteTask(href: resource.href, etag: resource.etag, todo: nil,
+                shape: .unsupported, originalBody: resource.icsData)
+        }
         // The structural scan does not parse UIDs, dates or task properties. Parse
         // the task once with the worker's cache, after checking every component end.
         let todo = try ICalendarParser.parseSingleVTODO(from: unfolded, using: formatterCache)
-        guard !hasTodo || todo != nil else { throw CalDAVError.invalidResponse }
-        return ParsedRemoteTask(href: resource.href, etag: resource.etag, todo: todo)
+        guard todoCount == 0 || todo != nil else { throw CalDAVError.invalidResponse }
+        return ParsedRemoteTask(href: resource.href, etag: resource.etag, todo: todo, shape: todo == nil ? .nonTask : .singleTask, originalBody: resource.icsData)
     }
 
     private static func isName(_ value: String) -> Bool {

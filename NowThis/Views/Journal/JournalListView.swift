@@ -6,10 +6,12 @@ import SwiftData
 /// Appears when the user selects "Journals" in the sidebar.
 /// Entries are sorted by creation date (newest first).
 struct JournalListView: View {
+    let showsSidebarButton: Bool
 
     @State private var journals: [JournalEntry] = []
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @State private var showingNewEntry = false
 
     // No `NavigationStack` here. `MainShellView`'s detail column is this view's only host and
@@ -21,12 +23,25 @@ struct JournalListView: View {
     // toolbar and the `NavigationLink` pushes below all attach to the detail column's bar
     // unchanged. Guarded by `NavigationContainerGuardTests`.
     var body: some View {
+        let displayed = JournalVisibility.live(journals, in: modelContext)
         Group {
-            if liveJournals.isEmpty {
+            if displayed.isEmpty {
                 emptyState
             } else {
-                journalList
+                journalList(displayed)
             }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 0) {
+                if showsSidebarButton {
+                    CompactSidebarButton().padding(.leading, 8)
+                }
+                JournalStorageNotice()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+            }
+            .background(.background)
         }
         .background(InboundQueryReader(descriptor: FetchDescriptor<JournalEntry>(sortBy: [SortDescriptor(\JournalEntry.createdDate, order: .reverse)])) { journals = $0 })
         .navigationTitle("Journals")
@@ -49,18 +64,14 @@ struct JournalListView: View {
         }
     }
 
-    private var liveJournals: [JournalEntry] {
-        TaskListHelpers.liveModels(journals, in: modelContext).filter { !$0.isDeletedLocally }
-    }
-
     // MARK: - List
 
-    private var journalList: some View {
+    private func journalList(_ displayed: [JournalEntry]) -> some View {
         List {
             // Liveness before `isDeletedLocally`, and before `ForEach` reads `id`
             // to diff identity — both dereference the entry, so the guard inside
             // the row below would otherwise run two model reads too late.
-            ForEach(liveJournals) { entry in
+            ForEach(displayed) { entry in
                 if let data = JournalRowData(entry: entry) {
                     NavigationLink {
                         JournalEditorView(mode: .edit(entry))
@@ -69,7 +80,9 @@ struct JournalListView: View {
                     }
                 }
             }
-            .onDelete(perform: deleteEntries)
+            .onDelete { offsets in
+                deleteEntries(offsets.compactMap { displayed.indices.contains($0) ? displayed[$0] : nil })
+            }
         }
         .listStyle(.plain)
     }
@@ -86,16 +99,40 @@ struct JournalListView: View {
 
     // MARK: - Actions
 
-    private func deleteEntries(at offsets: IndexSet) {
-        // Must match the array the rows were built from, or the offsets point at
-        // the wrong entries.
-        let visible = liveJournals
-        for index in offsets {
-            let entry = visible[index]
+    private func deleteEntries(_ entries: [JournalEntry]) {
+        let visible = JournalVisibility.live(entries, in: modelContext)
+        guard !visible.isEmpty else { return }
+        for entry in visible {
             entry.isDeletedLocally = true
             entry.isDirty = true
         }
-        try? modelContext.save()
+        ViewPersistence.savePendingDeletion(in: modelContext, errorState: errorState)
+    }
+}
+
+/// Check storage identity before SwiftData dereferences a retained relationship or route.
+@MainActor
+struct JournalVisibility {
+    static func live(_ entries: [JournalEntry], in context: ModelContext) -> [JournalEntry] {
+        let attached = entries.filter { $0.modelContext === context }
+        let ids = attached.map(\.persistentModelID)
+        guard !ids.isEmpty else { return [] }
+        var descriptor = FetchDescriptor<JournalEntry>(predicate: #Predicate {
+            ids.contains($0.persistentModelID) && !$0.isDeletedLocally
+        })
+        // Exclude tombstones saved by another context before consulting local pending edits.
+        descriptor.includePendingChanges = false
+        let reader = ModelContext(context.container)
+        guard let stored = try? reader.fetchIdentifiers(descriptor) else { return [] }
+        let visible = Set(stored)
+        let deleted = Set(context.deletedModelsArray.map(\.persistentModelID))
+        return attached.filter {
+            visible.contains($0.persistentModelID) && !deleted.contains($0.persistentModelID) && !$0.isDeletedLocally
+        }
+    }
+
+    static func resolve(_ entry: JournalEntry, in context: ModelContext) -> JournalEntry? {
+        live([entry], in: context).first
     }
 }
 
@@ -160,5 +197,17 @@ private struct JournalRow: View {
             localized: "journal.entryRow.a11y",
             defaultValue: "\(data.title), \(data.createdDate, format: .dateTime.month(.wide).day())",
             comment: "VoiceOver label for a journal entry row. First placeholder is the user-entered title, second is the entry's date. Both are data — what is translatable here is the separator and the order."))
+    }
+}
+
+/// Shared disclosure for the journal list and editor; entries are not currently synced.
+struct JournalStorageNotice: View {
+    var body: some View {
+        Text("Journals stay on this device and don’t currently sync to Nextcloud.",
+             comment: "Explains current journal storage in the list and editor. Entries remain on this device and are not synchronized to Nextcloud. This does not describe device backup behavior or promise future sync.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("journal.storage.notice")
     }
 }

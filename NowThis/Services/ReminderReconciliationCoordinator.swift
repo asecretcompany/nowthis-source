@@ -11,6 +11,7 @@ final class ReminderReconciliationCoordinator {
     }
     private enum Failure: Error {
         case interrupted(ReminderReconciliationOutcome.Status)
+        case capacityRace
         case verification
     }
     private var generation: UInt64 = 0
@@ -54,7 +55,7 @@ final class ReminderReconciliationCoordinator {
             outcome.requestedCount = plan.requests.count
             outcome.deferredTaskIDs = plan.deferredTaskIDs
             outcome.expiredTaskIDs = plan.expiredTaskIDs
-            let verified = try await apply(plan, pending: pending, expected: expected,
+            let verified = try await apply(plan, expected: expected,
                                            policy: policy, store: store, calendar: request.calendar)
             outcome.confirmedCount = plan.requests.count
             try check(expected, policy)
@@ -79,7 +80,7 @@ final class ReminderReconciliationCoordinator {
             if currentPlan.requests != plan.requests {
                 // A separate-process widget may have completed or advanced the task.
                 // Repair its new state before returning; its ticket remains pending.
-                _ = try await apply(currentPlan, pending: verified, expected: expected,
+                _ = try await apply(currentPlan, expected: expected,
                                     policy: policy, store: store, calendar: request.calendar)
                 outcome.confirmedCount = currentPlan.requests.count
                 outcome.expiredTaskIDs.formUnion(currentPlan.expiredTaskIDs)
@@ -110,6 +111,10 @@ final class ReminderReconciliationCoordinator {
                 }
             }
             outcome.status = plan.deferredTaskIDs.isEmpty ? .confirmed : .capacityLimited
+        } catch Failure.capacityRace {
+            // A capacity race is incomplete work, not a verified plan. Keep its
+            // durable recovery tickets and never acknowledge generic failures.
+            outcome.status = .capacityLimited
         } catch Failure.interrupted(let status) {
             outcome.status = status
         } catch {
@@ -184,17 +189,23 @@ final class ReminderReconciliationCoordinator {
     private func makePlan(_ tasks: [ReminderTaskInput], request: ReminderProjectionRequest,
                       pending: [ReminderScheduler.PendingSnapshot]) async -> ReminderRequestPlan {
         let foreignCount = pending.filter { !owned($0.identifier) }.count
+        let recorder = PerformanceTrace.operationRecorder
         let work = Task.detached {
-            ReminderNotificationPlanner.planRequests(tasks: tasks, now: Date(), maxRequests: request.maxCount,
-                foreignPendingCount: foreignCount, badgesEnabled: request.badgesEnabled,
-                allDayReminderMinutes: request.allDayReminderMinutes, calendar: request.calendar)
+            PerformanceTrace.$operationRecorder.withValue(recorder) {
+                ReminderNotificationPlanner.planRequests(tasks: tasks, now: Date(), maxRequests: request.maxCount,
+                    foreignPendingCount: foreignCount, badgesEnabled: request.badgesEnabled,
+                    allDayReminderMinutes: request.allDayReminderMinutes, calendar: request.calendar)
+            }
         }
         return await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
     }
 
-    private func apply(_ plan: ReminderRequestPlan, pending: [ReminderScheduler.PendingSnapshot],
+    private func apply(_ plan: ReminderRequestPlan,
                        expected: UInt64, policy: ReminderReconcilePolicy, store: any NotificationStore,
                        calendar: Calendar) async throws -> [ReminderScheduler.PendingSnapshot] {
+        // Planning suspends; unrelated requests may have filled the center.
+        let pending = await store.pendingSnapshots()
+        try check(expected, policy)
         var present = Dictionary(pending.map { ($0.identifier, $0) }, uniquingKeysWith: { _, last in last })
         let desiredIDs = Set(plan.requests.map(\.identifier))
         let additions = plan.requests.filter { !matches($0, present[$0.identifier]) }
@@ -207,12 +218,17 @@ final class ReminderReconciliationCoordinator {
         let mustFree = newCount == 0 ? 0 : max(0, pending.count + newCount - 64)
         try check(expected, policy)
         if mustFree > 0 {
-            guard obsolete.count >= mustFree else { throw Failure.verification }
+            guard obsolete.count >= mustFree else { throw Failure.capacityRace }
             store.remove(identifiers: obsolete.prefix(mustFree).map(\.identifier))
             let freed = await store.pendingSnapshots()
             try check(expected, policy)
             present = Dictionary(freed.map { ($0.identifier, $0) }, uniquingKeysWith: { _, last in last })
-            guard present.count + newCount <= 64 else { throw Failure.verification }
+            guard present.count + newCount <= 64 else {
+                if freed.filter({ !owned($0.identifier) }).count > pending.filter({ !owned($0.identifier) }).count {
+                    throw Failure.capacityRace
+                }
+                throw Failure.verification
+            }
         }
         for entry in additions {
             try check(expected, policy)

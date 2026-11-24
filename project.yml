@@ -50,10 +50,10 @@ settings:
     PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis
     # Calendar versioning since 2026-07-27: yy.mm, with yy.mm.v for a mid-month fix,
     # on a monthly release cadence. VersionSchemeGuardTests asserts the format and ties
-    # it to RELEASE_NOTES.md's top heading. The build number restarts with each release
-    # version — TestFlight orders the builds within a version by it.
-    MARKETING_VERSION: "26.10"
-    CURRENT_PROJECT_VERSION: "15"
+    # it to RELEASE_NOTES.md's top heading. The build number is a single counter and
+    # does not restart — TestFlight orders builds by it.
+    MARKETING_VERSION: "26.11"
+    CURRENT_PROJECT_VERSION: "24"
     # String extraction. All four live here, at the project level, so a target cannot be added
     # without them — NowThisWatch and NowThisWatchWidget previously had none, and every watch
     # string would have shipped English in all five languages with a green build.
@@ -72,6 +72,32 @@ targets:
       - path: NowThis
         excludes:
           - "**/.DS_Store"
+          - Calendar/AppleCalendarStore.swift
+          - Calendar/AppleCalendarOwnership.swift
+          - Calendar/NextcloudCalendarReceipts.swift
+          - Calendar/NextcloudEventBody.swift
+          - Models/CalendarMirrorState.swift
+          - Calendar/CalendarMirrorCoordinator.swift
+          - Utilities/AppleCalendarProbe.swift
+          - Views/Calendar/CalendarTaskRescheduling.swift
+          - Theme/ContentModePickerStyle.swift
+          - Widgets/WidgetDisplayPolicy.swift
+          - Intents/TaskEntity.swift
+          - Intents/TaskEntity+Spotlight.swift
+          - Intents/TaskListEntity.swift
+      - path: NowThis/Calendar/AppleCalendarStore.swift
+      - path: NowThis/Calendar/AppleCalendarOwnership.swift
+      - path: NowThis/Calendar/NextcloudCalendarReceipts.swift
+      - path: NowThis/Calendar/NextcloudEventBody.swift
+      - path: NowThis/Models/CalendarMirrorState.swift
+      - path: NowThis/Calendar/CalendarMirrorCoordinator.swift
+      - path: NowThis/Utilities/AppleCalendarProbe.swift
+      - path: NowThis/Views/Calendar/CalendarTaskRescheduling.swift
+      - path: NowThis/Theme/ContentModePickerStyle.swift
+      - path: NowThis/Widgets/WidgetDisplayPolicy.swift
+      - path: NowThis/Intents/TaskEntity.swift
+      - path: NowThis/Intents/TaskEntity+Spotlight.swift
+      - path: NowThis/Intents/TaskListEntity.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis
@@ -80,7 +106,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: NowThis
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: Supporter2026 SupporterMidnight SupporterConfetti
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: Supporter2026 SupporterMidnight SupporterConfetti HolidayNewYear HolidayValentine HolidaySpring HolidayEaster HolidayHalloween HolidayHarvest HolidayWinter HolidayChristmas HolidayAdvent HolidayNikolaus HolidaySaintMartin HolidayCarnival HolidayOktoberfest HolidayGermanUnity HolidaySwissNational HolidayKingsDay HolidaySinterklaas HolidayFranceNational HolidayFranceMay HolidayEpiphany HolidayBonfireNight HolidayHogmanay HolidaySaintPatrick HolidaySaintDavid HolidayCanadaDay HolidaySaintJean HolidayUsIndependence HolidayMidsummer HolidayHanukkah HolidayPassover HolidayRamadan HolidayEid HolidayDiwali HolidayHoli HolidayVaisakhi HolidayVesak
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: "YES"
     entitlements:
@@ -103,7 +129,29 @@ targets:
     sources:
       - path: NowThisTests
         excludes:
+          - Calendar/AppleCalendarOwnershipTests.swift
+          - Calendar/NextcloudCalendarTransportTests.swift
+          - Calendar/CalendarMirrorLifecycleTests.swift
+          - Calendar/CalendarTaskReschedulingTests.swift
+          - Views/FloatingDateRenderingTests.swift
+          - Views/LocationDraftTests.swift
+          - Services/GeofenceReconciliationTests.swift
+          - Views/OnboardingLayoutTests.swift
+          - Views/WidgetDisplayPolicyTests.swift
+          - Intents/TaskEntityMetadataTests.swift
+          - Spotlight/SpotlightEntityLinkTests.swift
           - "**/.DS_Store"
+      - path: NowThisTests/Calendar/AppleCalendarOwnershipTests.swift
+      - path: NowThisTests/Calendar/NextcloudCalendarTransportTests.swift
+      - path: NowThisTests/Calendar/CalendarMirrorLifecycleTests.swift
+      - path: NowThisTests/Calendar/CalendarTaskReschedulingTests.swift
+      - path: NowThisTests/Views/FloatingDateRenderingTests.swift
+      - path: NowThisTests/Views/LocationDraftTests.swift
+      - path: NowThisTests/Services/GeofenceReconciliationTests.swift
+      - path: NowThisTests/Views/OnboardingLayoutTests.swift
+      - path: NowThisTests/Views/WidgetDisplayPolicyTests.swift
+      - path: NowThisTests/Intents/TaskEntityMetadataTests.swift
+      - path: NowThisTests/Spotlight/SpotlightEntityLinkTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.tests
@@ -128,6 +176,11 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: NowThisUITests
+        excludes:
+          - ContentModePickerJourneysTests.swift
+          - OnboardingCardJourneysTests.swift
+      - path: NowThisUITests/ContentModePickerJourneysTests.swift
+      - path: NowThisUITests/OnboardingCardJourneysTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.uitests
@@ -147,12 +200,18 @@ targets:
     sources:
       - path: NowThisWidget
         excludes:
+          - PortraitTaskWidgetView.swift
           - "**/.DS_Store"
+      - path: NowThisWidget/PortraitTaskWidgetView.swift
       - path: NowThis/Models
       - path: NowThis/App/AppConstants.swift
       - path: NowThis/Intents/CompleteTaskIntent.swift
+      - path: NowThis/Intents/TaskEntity.swift
       - path: NowThis/Intents/WidgetConfigurationIntent.swift
+      - path: NowThis/Widgets/WidgetDisplayPolicy.swift
+      - path: NowThis/Intents/EntityQueryLookup.swift
       - path: NowThis/Utilities/DueDateHelper.swift
+      - path: NowThis/Utilities/DueDateFormatter.swift
       # CompleteTaskIntent is this target's completion path, and a repeating task must
       # advance to its next occurrence here exactly as it does in the app. Both files are
       # Foundation-only, and the localized copy that used to sit in RecurrenceRule.swift
@@ -160,11 +219,14 @@ targets:
       # see the note in that file.
       - path: NowThis/Utilities/RecurrenceRule.swift
       - path: NowThis/Utilities/TaskCompletionLogic.swift
+      - path: NowThis/Utilities/TaskWriteEligibility.swift
       # RecurrenceRule reads and writes RRULE's UNTIL through these two. Both are
       # Foundation-only and hold no localized copy.
       - path: NowThis/Parser/TaskPhotoAttachment.swift
       - path: NowThis/Parser/ICalendarParser.swift
+      - path: NowThis/Parser/ICalendarParser+Errors.swift
       - path: NowThis/Parser/ICalendarSerializer.swift
+      - path: NowThis/Sync/VTODOOpaqueState.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asecretcompany.nowthis.widget
@@ -199,6 +261,8 @@ targets:
           - "**/.DS_Store"
       - path: NowThis/Watch/WatchPayloads.swift
       - path: NowThis/Watch/WatchOverlayState.swift
+      - path: NowThis/Watch/WatchDeliveryEngine.swift
+      - path: NowThis/Watch/WatchAddDueSelection.swift
       - path: NowThis/Watch/WatchSnapshotStore.swift
       - path: NowThis/App/AppConstants.swift
       - path: NowThis/Utilities/DueDateHelper.swift

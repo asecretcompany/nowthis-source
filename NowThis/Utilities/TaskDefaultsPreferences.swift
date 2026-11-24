@@ -68,15 +68,27 @@ struct TaskDefaultsPreferences {
     /// a missing key. A `nil` check alone cannot tell "opted out" from "never set",
     /// and both have to mean "pick one for me".
     static var defaultListID: String? {
-        let defaults = UserDefaults.standard
-        if let current = defaults.string(forKey: defaultListIDKey), !current.isEmpty {
-            return current
+        let preference = ListPreference()
+        if preference.currentID == nil, let legacy = preference.legacyID {
+            preference.commit(legacy)
         }
-        guard let legacy = defaults.string(forKey: legacySiriListIDKey), !legacy.isEmpty else {
-            return nil
+        return preference.selectedID
+    }
+
+    struct ListPreference: Sendable {
+        private let current = UserDefaults.standard.string(forKey: defaultListIDKey)
+        private let legacy = UserDefaults.standard.string(forKey: legacySiriListIDKey)
+
+        var currentID: String? { current.flatMap { $0.isEmpty ? nil : $0 } }
+        var legacyID: String? { legacy.flatMap { $0.isEmpty ? nil : $0 } }
+        var selectedID: String? { currentID ?? legacyID }
+
+        func commit(_ id: String) {
+            let defaults = UserDefaults.standard
+            guard defaults.string(forKey: defaultListIDKey) == current,
+                  defaults.string(forKey: legacySiriListIDKey) == legacy else { return }
+            setDefaultListID(id)
         }
-        defaults.set(legacy, forKey: defaultListIDKey)
-        return legacy
     }
 
     /// Stores the default-list ID. `nil` clears it, returning the app to "adopt one".

@@ -174,7 +174,20 @@ struct NavigationContainerGuardTests {
         let path = "NowThis/Views/Tasks/TaskListView.swift"
         let source = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
 
-        let sheet = try Self.block(after: ".sheet(item: $presentedHiddenTab)", in: source, file: path)
+        // Skip the complete argument list, including onDismiss's closure, before
+        // checking the presentation content. The dismissal callback is not the screen.
+        let stripped = SwiftSourceScanner.strippingComments(source)
+        let anchor = ".sheet(item: $presentedHiddenTab,"
+        #expect(stripped.components(separatedBy: anchor).count == 2,
+                "Expected exactly one hidden-destination sheet; re-anchor rather than dropping this check")
+        let start = try #require(stripped.range(of: anchor)?.lowerBound)
+        let argumentsOpen = try #require(stripped[start...].firstIndex(of: "("))
+        let arguments = try #require(Self.balanced(in: stripped, openingAt: argumentsOpen))
+        let contentOpen = Self.skippingWhitespace(in: stripped, from: arguments.upperBound)
+        try #require(contentOpen < stripped.endIndex && stripped[contentOpen] == "{")
+        let content = try #require(Self.balanced(in: stripped, openingAt: contentOpen))
+        let sheet = String(stripped[content])
+        #expect(sheet.contains("hiddenDestination(for:"), "The probe must inspect the actual sheet content")
         let destination = try Self.block(
             after: "private func hiddenDestination(for tab: AppTab) -> some View",
             in: source, file: path)

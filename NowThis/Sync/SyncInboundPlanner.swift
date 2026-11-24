@@ -41,7 +41,7 @@ actor SyncInboundPlanner {
 
     /// Resolve retained server UIDs without changing models or saving the list.
     func parentEdits(includeDirty: Bool = false) async throws -> [ParentEdit] {
-        let tasks = try values().filter { !$0.isDeletedLocally }
+        let tasks = try values(for: .hierarchyScan).filter { !$0.isDeletedLocally }
         let byUID = Dictionary(tasks.map { ($0.uid, $0) }, uniquingKeysWith: { first, _ in first })
         let rawParents = Dictionary(tasks.map { ($0.uid, $0.rawParentUID) },
             uniquingKeysWith: { first, _ in first })
@@ -58,15 +58,25 @@ actor SyncInboundPlanner {
     /// Snapshot absence is conservative; authenticated explicit hrefs can remove the final leaf.
     /// Every retained descendant protects its complete ancestor chain from cascade deletion.
     func deletionCandidates(manifest: [CalDAVClient.RemoteResource]?, explicitHrefs: [String]?,
-                            protectedUIDs: Set<String>) async throws -> [DeleteCandidate] {
+                            protectedUIDs: Set<String>,
+                            resourceScope: TaskPhotoOwnership.Scope? = nil) async throws -> [DeleteCandidate] {
         let explicit = Set(explicitHrefs ?? [])
         guard manifest?.isEmpty == false || !explicit.isEmpty else { return [] }
-        let tasks = try values()
+        let tasks = try values(for: .deletionScan)
         let manifestHrefs = Set((manifest ?? []).map(\.href))
         // Resource filenames are not UIDs, and a manifest may also contain VEVENT/VJOURNAL.
         let manifestUIDs = Set(tasks.lazy.filter { task in
             task.href.map { manifestHrefs.contains($0) } ?? false
         }.map(\.uid))
+        // Exact matches establish snapshot evidence. Other rows can be retained
+        // by canonical membership inside the same authenticated collection.
+        let collection: DAVCollectionScope?
+        if !manifestUIDs.isEmpty, let resourceScope {
+            collection = try DAVCollectionScope(baseURL: resourceScope.serverBaseURL,
+                calendarPath: resourceScope.collectionPath)
+        } else {
+            collection = nil
+        }
         // Preserve the existing UID policy, including duplicate UIDs at different hrefs.
         let explicitSurvivors = Set(tasks.lazy.filter { task in
             !explicit.contains(task.href ?? "")
@@ -82,7 +92,14 @@ actor SyncInboundPlanner {
             // No matched task UIDs means no reliable evidence for snapshot absence.
             let absent = !manifestUIDs.isEmpty && !manifestUIDs.contains(task.uid)
             let tombstoned = explicit.contains(href) && !explicitSurvivors.contains(task.uid)
-            if absent || tombstoned { candidateIDs.insert(task.id) }
+            if tombstoned {
+                candidateIDs.insert(task.id)
+            } else if absent {
+                if let collection, let canonical = try? collection.href(href), manifestHrefs.contains(canonical) {
+                    continue
+                }
+                candidateIDs.insert(task.id)
+            }
         }
 
         // Seed every retained task, including server survivors, pending overlays and tasks
@@ -142,7 +159,7 @@ actor SyncInboundPlanner {
 
     /// Context creation and model reads occur only on the planner's actor. A new context
     /// sees the latest committed state; no registered models survive into another call.
-    private func values() throws -> [TaskValue] {
+    private func values(for operation: PerformanceTrace.Operation) throws -> [TaskValue] {
         let section = try BackgroundRunBudget.current?.beginCriticalSection()
         defer { section?.end() }
         try Task.checkCancellation()
@@ -150,7 +167,9 @@ actor SyncInboundPlanner {
         context.autosaveEnabled = false
         let id = listID
         let predicate = #Predicate<TaskItem> { $0.taskList?.id == id }
-        return try context.fetch(FetchDescriptor(predicate: predicate)).map { task in
+        let rows = try context.fetch(FetchDescriptor(predicate: predicate))
+        PerformanceTrace.record(operation, rows: rows.count)
+        return rows.map { task in
             TaskValue(id: task.id, uid: task.uid, rawParentUID: task.parentUID,
                 parentID: task.parentTask?.id, href: task.remoteHref, etag: task.etag, isDirty: task.isDirty,
                 isLocalOnly: task.isLocalOnly, isDeletedLocally: task.isDeletedLocally)

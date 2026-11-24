@@ -9,10 +9,13 @@ struct SyncAccountDeletionIntegrationTests {
     @Test("Deleting an account during discovery cancels without further requests or persisted data",
           arguments: [false, true], [0, 1, 2])
     func deletionDuringDiscovery(background: Bool, discoveryResponse: Int) async throws {
+        let host = "account-deletion-" + UUID().uuidString.lowercased() + ".invalid"
+        let baseURL = "https://" + host
         let container = try DAVSyncScenario.container()
         let main = container.mainContext
         let accountID = try DAVSyncScenario.account(in: container)
         let account = try #require(try main.fetch(FetchDescriptor<ServerAccount>()).first)
+        account.serverBaseURL = baseURL
         let list = TaskList(id: "existing-list", serverURL: "/existing/",
                             name: "Existing synced list", colorHex: "#007AFF")
         list.account = account
@@ -32,8 +35,6 @@ struct SyncAccountDeletionIntegrationTests {
         }
         try main.save()
 
-        let host = "account-deletion-" + UUID().uuidString.lowercased() + ".invalid"
-        let baseURL = "https://" + host
         let scope = SyncCollectionPuller.Scope(accountID: accountID, listID: list.id, historyScope: "0")
         let checkpointID = SyncImportCheckpoint.identity(accountID: accountID, listID: list.id,
             baseURL: baseURL, username: "fixture", months: 0)
@@ -74,7 +75,7 @@ struct SyncAccountDeletionIntegrationTests {
         let paused = ScriptedDAVProtocol.requests(host: host)
         try #require(paused.count == expectedRequests, "The sync must reach the gated discovery before deletion")
         #expect(paused.last?.method == "PROPFIND")
-        let expectedPath = ["/remote.php/dav/principals/users/fixture", "/principal", "/calendars"][discoveryResponse]
+        let expectedPath = ["/remote.php/dav", "/principal", "/"][discoveryResponse]
         #expect(paused.last?.path == expectedPath || paused.last?.path == expectedPath + "/")
 
         // Keep this fixture's credential deletion in its own empty Keychain service.
@@ -93,6 +94,81 @@ struct SyncAccountDeletionIntegrationTests {
         #expect(completedRequests.allSatisfy { $0.method == "PROPFIND" })
         try expectEmptyStore(container, phase: "after \(background ? "background" : "foreground") sync resumed: \(outcome.status)")
         withExtendedLifetime(container) {}
+    }
+
+    @Test("A stale caller cannot discover or import lists under the saved account",
+          arguments: [false, true], [false, true])
+    func staleInvocationRejectsDiscovery(background: Bool, changeServer: Bool) async throws {
+        let host = "stale-list-discovery-" + UUID().uuidString.lowercased() + ".invalid"
+        let baseURL = "https://" + host
+        let container = try DAVSyncScenario.container()
+        let account = ServerAccount(displayName: "Fixture",
+            serverBaseURL: changeServer ? "https://new-server.invalid" : baseURL,
+            username: changeServer ? "fixture" : "new-user")
+        container.mainContext.insert(account)
+        try container.mainContext.save()
+        let outcome = await runSync(background: background, host: host, accountID: account.id, container: container,
+            responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
+                .init(body: DAVSyncScenario.manifest(count: 1)), .init(body: DAVSyncScenario.tasks(count: 1))
+            ])
+
+        #expect(outcome.status == .cancelled)
+        #expect(ScriptedDAVProtocol.requests(host: host).isEmpty)
+        let read = ModelContext(container)
+        #expect(try read.fetchCount(FetchDescriptor<TaskList>()) == 0)
+        #expect(try read.fetchCount(FetchDescriptor<TaskItem>()) == 0)
+    }
+
+    @Test("Changing the saved account during a pull stops reconciliation of later lists",
+          arguments: [false, true], [false, true])
+    func changedAccountStopsLaterListImport(background: Bool, changeServer: Bool) async throws {
+        let host = "superseded-list-discovery-" + UUID().uuidString.lowercased() + ".invalid"
+        let baseURL = "https://" + host
+        let container = try DAVSyncScenario.container()
+        let main = container.mainContext
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: baseURL, username: "fixture")
+        main.insert(account)
+        try main.save()
+        let gate = ScriptedDAVProtocol.Gate()
+        let responses = DAVSyncScenario.discovery(paths: ["/one/", "/two/"]) + [
+            .init(body: DAVSyncScenario.manifest(count: 0), gate: gate),
+            .init(body: DAVSyncScenario.manifest(count: 0, path: "/two/"))
+        ]
+        let run = Task {
+            await runSync(background: background, host: host, accountID: account.id, container: container,
+                responses: responses)
+        }
+        defer { run.cancel(); gate.release() }
+        for _ in 0..<500 where ScriptedDAVProtocol.requests(host: host).count < 4 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let paused = ScriptedDAVProtocol.requests(host: host)
+        try #require(paused.count == 4 && paused.last?.method == "REPORT" && paused.last?.path == "/one")
+        if changeServer { account.serverBaseURL = "https://new-server.invalid" }
+        else { account.username = "new-user" }
+        try main.save()
+        gate.release()
+
+        let outcome = await run.value
+        #expect(outcome.status == .cancelled)
+        #expect(ScriptedDAVProtocol.requests(host: host).count == 4)
+        let read = ModelContext(container)
+        let saved = try read.fetch(FetchDescriptor<TaskList>())
+        #expect(saved.map(\.serverURL) == [baseURL + "/one/"])
+    }
+
+    private func runSync(background: Bool, host: String, accountID: String, container: ModelContainer,
+                         responses: [ScriptedDAVProtocol.Response]) async -> SyncOutcome {
+        let engine = SyncEngine(calDAVClient: CalDAVClient(configuration:
+            ScriptedDAVProtocol.install(host: host, responses: responses),
+            retryPolicy: .init(maxAttempts: 1, baseDelay: 0)))
+        let credentials = CalDAVClient.Credentials(username: "fixture", password: "fixture")
+        if background {
+            return await engine.performBackgroundSyncOutcome(accountID: accountID, serverBaseURL: "https://" + host,
+                credentials: credentials, modelContainer: container, reconcileNotifications: false)
+        }
+        return await engine.performFullSyncOutcome(accountID: accountID, serverBaseURL: "https://" + host,
+            credentials: credentials, modelContainer: container, reconcileNotifications: false)
     }
 
     private func expectEmptyStore(_ container: ModelContainer, phase: String) throws {

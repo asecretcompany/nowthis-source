@@ -12,16 +12,31 @@ struct SyncBatchCommit: Sendable {
 final class SyncInboundBatchWriter {
     let container: ModelContainer
     let listID: String
+    private(set) var lastOpaqueFetchCount = 0
     private let expectedAccountID: String?
+    private let expectedResourceScope: TaskPhotoOwnership.Scope?
+    private let photoScope: TaskPhotoOwnership.Scope?
     private let planner: SyncInboundPlanner
     private var hierarchyNeedsResolution: Bool
     private var checkedDurableHierarchyWork = false
     private let checkpointID: String?
     private let mainSaveRevision: SyncMainSaveRevision
+    private let save: @MainActor @Sendable (ModelContext) throws -> Void
     init(container: ModelContainer, listID: String, expectedAccountID: String? = nil,
-         checkpointID: String? = nil, needsParentResolution: Bool = false) {
-        self.container = container; self.listID = listID
+         checkpointID: String? = nil, needsParentResolution: Bool = false,
+         photoScope: TaskPhotoOwnership.Scope? = nil,
+         save: @escaping @MainActor @Sendable (ModelContext) throws -> Void = { try $0.save() }) {
+        self.container = container; self.listID = listID; self.save = save
         self.expectedAccountID = expectedAccountID
+        self.expectedResourceScope = photoScope
+        if let photoScope { self.photoScope = photoScope }
+        else {
+            // Direct synchronous users capture before their read. A failed lookup
+            // leaves no scope, so an original-bearing response cannot be accepted.
+            let context = ModelContext(container)
+            let list = try? context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == listID })).first
+            self.photoScope = TaskPhotoOwnership.Scope(list: list)
+        }
         self.planner = SyncInboundPlanner(container: container, listID: listID)
         self.checkpointID = checkpointID
         self.hierarchyNeedsResolution = needsParentResolution
@@ -33,8 +48,24 @@ final class SyncInboundBatchWriter {
         defer { section?.end() }
         try Task.checkCancellation()
         precondition(resources.count <= 100)
+        let trace = PerformanceTrace.begin("InboundApply", count: resources.count)
+        defer { PerformanceTrace.end("InboundApply", trace) }
         let context = freshContext()
         guard let list = try list(in: context) else { throw CalDAVError.invalidResponse }
+        if resources.contains(where: { $0.todo?.photos.contains(where: { $0.originalFileID != nil }) == true }) {
+            guard photoScope?.matches(list) == true else { throw TaskPhotoOwnership.Failure.missingOwner }
+        }
+        if resources.contains(where: { $0.shape != nil }) {
+            guard let photoScope, photoScope.matches(list), photoScope.matches(try self.list(in: container.mainContext)) else {
+                throw SyncResourceState.Hold.needsRevalidation
+            }
+            let pending = container.mainContext.insertedModelsArray + container.mainContext.changedModelsArray + container.mainContext.deletedModelsArray
+            for resource in resources {
+                let key = try SyncResourceState.key(scope: photoScope, href: resource.href)
+                guard !pending.contains(where: { ($0 as? SyncMetadata)?.id == key }) else { throw SyncResourceState.Hold.needsRevalidation }
+            }
+            try SyncResourceState.observe(resources, scope: photoScope, in: context)
+        }
         let uids = resources.compactMap { $0.todo?.uid }
         let id = listID
         let predicate = #Predicate<TaskItem> { $0.taskList?.id == id && uids.contains($0.uid) }
@@ -44,12 +75,13 @@ final class SyncInboundBatchWriter {
         let sourceID = listID
         let moved = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.pendingMoveFromListID == sourceID }))
         let blocked = Set(moved.map(\.uid)).union(protected)
-        let importer = try SyncImportStore(context: context)
+        let opaqueBatch = try VTODOOpaqueState.Batch(taskIDs: saved.map(\.id), in: context)
+        let importer = try SyncImportStore(context: context, opaqueBatch: opaqueBatch)
         let (active, completed) = SyncEngine.partitionParsedTasks(resources, months: months)
         for resource in active + completed where !blocked.contains(resource.todo?.uid ?? "") {
             let previous = resource.todo.flatMap { map[$0.uid] }
             let previousParentUID = previous?.parentUID
-            if importer.apply(resource, list: list, uidMap: &map, movedAway: blocked),
+            if try importer.apply(resource, list: list, uidMap: &map, movedAway: blocked),
                previous == nil || previousParentUID != resource.todo?.parentUID {
                 hierarchyNeedsResolution = true
             }
@@ -57,6 +89,7 @@ final class SyncInboundBatchWriter {
         if repairCategories {
             _ = importer.catchUpCategories(resources.filter { !blocked.contains($0.todo?.uid ?? "") }, uidMap: map)
         }
+        lastOpaqueFetchCount = importer.opaqueFetchCount
         if hierarchyNeedsResolution, let checkpointID {
             try SyncImportCheckpoint.markHierarchyPending(id: checkpointID, in: context)
         }
@@ -70,7 +103,7 @@ final class SyncInboundBatchWriter {
         onCommit: (@Sendable (SyncBatchCommit) async -> Void)? = nil) async throws -> SyncBatchCommit? {
         guard !resources.isEmpty else { return nil }
         let candidates = try await planner.deletionCandidates(manifest: resources, explicitHrefs: nil,
-            protectedUIDs: try pendingProtection().uids)
+            protectedUIDs: try pendingProtection().uids, resourceScope: expectedResourceScope)
         return try await delete(candidates, onCommit: onCommit)
     }
 
@@ -163,6 +196,8 @@ final class SyncInboundBatchWriter {
                   !(task.isLocalOnly && task.etag == nil),
                   // A newly inserted or edited descendant after planning must never cascade.
                   task.subtasks.allSatisfy({ deletedIDs.contains($0.id) }) else { continue }
+            try CalendarMirrorState.stagePurge([task], in: context)
+            try VTODOOpaqueState.remove(tasks: [task], in: context)
             context.delete(task)
             deletedIDs.insert(task.id)
         }
@@ -239,6 +274,10 @@ final class SyncInboundBatchWriter {
         if container.mainContext.deletedModelsArray.contains(where: { ($0 as? TaskList)?.id == id }) { return nil }
         let list = try context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == id })).first
         if let expectedAccountID, list?.account?.id != expectedAccountID { return nil }
+        if let expectedResourceScope {
+            guard let saved = TaskPhotoOwnership.Scope(list: list),
+                  saved.matchesExactScope(expectedResourceScope) else { return nil }
+        }
         return list
     }
     private func commit(_ context: ModelContext) throws -> SyncBatchCommit? {
@@ -252,8 +291,11 @@ final class SyncInboundBatchWriter {
             listIDs: [listID], changedIDs: insertedIDs.union(changed.map(\.id)), deletedIDs: Set(removed.map(\.id)), kind: .tasks)
         let interval = PerformanceTrace.begin("ImportSave", count: resourcesCount(context))
         defer { PerformanceTrace.end("ImportSave", interval) }
+        try CalendarMirrorState.enqueueTaskChanges(in: context)
         ReminderSchedulingJournal.enqueueTaskChanges(in: context)
-        try context.save()
+        try save(context)
+        CalendarMirrorState.publishCommit(in: context.container,
+                                          includesTaskChanges: !change.changedIDs.isEmpty || !change.deletedIDs.isEmpty)
         guard !change.changedIDs.isEmpty || !change.deletedIDs.isEmpty else { return nil }
         return SyncBatchCommit(change: change, insertedIDs: insertedIDs)
     }

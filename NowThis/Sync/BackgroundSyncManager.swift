@@ -175,28 +175,30 @@ final class BackgroundSyncManager: @unchecked Sendable {
             return await Self.performRun(budget: budget, operation: {
                 guard let syncEngine else { return false }
                 let keychainManager = KeychainManager()
-                struct AccountSnapshot: Sendable {
-                    let id: String
-                    let username: String
-                    let serverBaseURL: String
-                }
                 let snapshots = try budget.withCriticalSection {
                     let context = ModelContext(modelContainer)
                     return try context.fetch(FetchDescriptor<ServerAccount>())
                         .filter { $0.mode == .nextcloud }
-                        .map { AccountSnapshot(id: $0.id, username: $0.username, serverBaseURL: $0.serverBaseURL) }
+                        .map(AccountCredentialScope.init)
                 }
                 let byID = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
                 let completed = try await Self.performAccounts(accountIDs: snapshots.map(\.id),
                     modelContainer: modelContainer, budget: budget) { id in
                     guard let snapshot = byID[id] else { return true }
                     try budget.checkRemoteAdmission()
-                    guard let password = try await keychainManager.retrieve(for: snapshot.id) else { return true }
+                    let admitted: CommittedAccountCredentials
+                    switch try await AccountManager.admitCredentials(
+                        accountID: id, expected: snapshot, container: modelContainer,
+                        keychainManager: keychainManager
+                    ) {
+                    case .available(let credentials): admitted = credentials
+                    case .missing: return true
+                    case .deferred: return false
+                    }
                     try budget.checkRemoteAdmission()
-                    let credentials = CalDAVClient.Credentials(username: snapshot.username, password: password)
                     let outcome = await syncEngine.performBackgroundSyncOutcome(
-                        accountID: snapshot.id, serverBaseURL: snapshot.serverBaseURL,
-                        credentials: credentials, modelContainer: modelContainer,
+                        accountID: id, serverBaseURL: admitted.scope.serverBaseURL,
+                        credentials: admitted.davCredentials, modelContainer: modelContainer,
                         syncWindowMonths: SyncPreferences.windowMonths(), reconcileNotifications: false, runBudget: budget)
                     if outcome.status == .cancelled { throw CancellationError() }
                     return outcome.status == .completed

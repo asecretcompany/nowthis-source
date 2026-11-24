@@ -9,9 +9,9 @@ final class ProStoreTestClient: ProStoreClient {
         .tipSmall: ProProductInfo(offer: .tipSmall, displayName: "Small tip", displayPrice: "€1,99")
     ]
     var evidence = ProEvidence()
+    var productLoader: (@MainActor () async throws -> [ProOffer: ProProductInfo])?
     var productError: Failure?
     var productLoads = 0
-    var productLoader: (@MainActor () async throws -> [ProOffer: ProProductInfo])?
     var evidenceError: Failure?
     var syncError: Failure?
     var result: ProPurchaseResult = .cancelled

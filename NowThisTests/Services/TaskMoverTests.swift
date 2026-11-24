@@ -28,6 +28,8 @@ struct TaskMoverTests {
         let list = TaskList(serverURL: "https://example.test\(path)", name: name, colorHex: "#007AFF")
         list.calendarPath = path
         context.insert(list)
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://example.test", username: "fixture")
+        context.insert(account); list.account = account
         return list
     }
 
@@ -36,7 +38,7 @@ struct TaskMoverTests {
         title: String,
         in list: TaskList,
         context: ModelContext
-    ) -> TaskItem {
+    ) throws -> TaskItem {
         let task = TaskItem(uid: uid, title: title)
         task.taskList = list
         task.remoteHref = "\(list.calendarPath ?? "")\(uid).ics"
@@ -44,6 +46,7 @@ struct TaskMoverTests {
         task.isLocalOnly = false
         task.isDirty = false
         context.insert(task)
+        try SyncResourceFixture.prove(task, in: context)
         return task
     }
 
@@ -56,7 +59,7 @@ struct TaskMoverTests {
 
         let source = makeList("Work", path: "/cal/work/", in: context)
         let destination = makeList("Home", path: "/cal/home/", in: context)
-        let task = makeSyncedTask(uid: "uid-1", title: "Renew passport", in: source, context: context)
+        let task = try makeSyncedTask(uid: "uid-1", title: "Renew passport", in: source, context: context)
         try context.save()
 
         let originalID = task.id
@@ -112,9 +115,9 @@ struct TaskMoverTests {
         let source = makeList("Work", path: "/cal/work/", in: context)
         let destination = makeList("Home", path: "/cal/home/", in: context)
 
-        let parent = makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
-        let child = makeSyncedTask(uid: "uid-c", title: "Write notes", in: source, context: context)
-        let grandchild = makeSyncedTask(uid: "uid-g", title: "Translate notes", in: source, context: context)
+        let parent = try makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
+        let child = try makeSyncedTask(uid: "uid-c", title: "Write notes", in: source, context: context)
+        let grandchild = try makeSyncedTask(uid: "uid-g", title: "Translate notes", in: source, context: context)
         child.parentTask = parent
         child.parentUID = parent.uid
         grandchild.parentTask = child
@@ -154,8 +157,8 @@ struct TaskMoverTests {
         let source = makeList("Work", path: "/cal/work/", in: context)
         let destination = makeList("Home", path: "/cal/home/", in: context)
 
-        let parent = makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
-        let child = makeSyncedTask(uid: "uid-c", title: "Write notes", in: source, context: context)
+        let parent = try makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
+        let child = try makeSyncedTask(uid: "uid-c", title: "Write notes", in: source, context: context)
         child.parentTask = parent
         child.parentUID = parent.uid
         try context.save()
@@ -164,8 +167,8 @@ struct TaskMoverTests {
 
         #expect(child.taskList?.id == destination.id)
         #expect(child.parentTask == nil)
-        // Clearing only the relationship is not enough: resolveParentRelationships
-        // re-reads parentUID on every sync and would re-link or strand it.
+        // Clearing only the relationship is not enough: a later inbound pull can
+        // resolve a stale server parent UID and attach the task again.
         #expect(child.parentUID == nil)
 
         // The parent is untouched — it is not part of the move.
@@ -184,7 +187,7 @@ struct TaskMoverTests {
         let work = makeList("Work", path: "/cal/work/", in: context)
         let home = makeList("Home", path: "/cal/home/", in: context)
         let errands = makeList("Errands", path: "/cal/errands/", in: context)
-        let task = makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
+        let task = try makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
         try context.save()
 
         TaskMover.move(task, to: home, in: context)
@@ -204,7 +207,7 @@ struct TaskMoverTests {
 
         let work = makeList("Work", path: "/cal/work/", in: context)
         let home = makeList("Home", path: "/cal/home/", in: context)
-        let task = makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
+        let task = try makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
         try context.save()
 
         TaskMover.move(task, to: home, in: context)
@@ -225,13 +228,14 @@ struct TaskMoverTests {
         let work = makeList("Work", path: "/cal/work/", in: context)
         let home = makeList("Home", path: "/cal/home/", in: context)
         let errands = makeList("Errands", path: "/cal/errands/", in: context)
-        let task = makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
+        let task = try makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
         try context.save()
 
         TaskMover.move(task, to: home, in: context)
         // The PUT into Home succeeded; the DELETE from Work has not run yet.
         task.remoteHref = "/cal/home/uid-1.ics"
         task.etag = "etag-home"
+        try SyncResourceFixture.prove(task, in: context)
         task.isDirty = false
         try context.save()
 
@@ -261,8 +265,8 @@ struct TaskMoverTests {
 
         let source = makeList("Work", path: "/cal/work/", in: context)
         let destination = makeList("Home", path: "/cal/home/", in: context)
-        let parent = makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
-        let deleted = makeSyncedTask(uid: "uid-d", title: "Old step", in: source, context: context)
+        let parent = try makeSyncedTask(uid: "uid-p", title: "Ship release", in: source, context: context)
+        let deleted = try makeSyncedTask(uid: "uid-d", title: "Old step", in: source, context: context)
         deleted.parentTask = parent
         deleted.parentUID = parent.uid
         deleted.isDeletedLocally = true
@@ -283,7 +287,7 @@ struct TaskMoverTests {
         let context = ModelContext(container)
 
         let work = makeList("Work", path: "/cal/work/", in: context)
-        let task = makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
+        let task = try makeSyncedTask(uid: "uid-1", title: "Renew passport", in: work, context: context)
         try context.save()
 
         let moved = TaskMover.move(task, to: work, in: context)

@@ -13,6 +13,8 @@ struct ReminderRecoveryIntegrationTests {
         let context = container.mainContext
         let list = TaskList(id: "alarm-list", serverURL: "/alarms/", name: "Alarms", colorHex: "#007AFF")
         context.insert(list)
+        let account = ServerAccount(displayName: "Fixture", serverBaseURL: "https://fixture.invalid", username: "fixture")
+        context.insert(account); list.account = account
         try context.save()
         let remote = CalDAVClient.RemoteTask(href: "/alarms/import-alarm.ics", etag: "v1", icsData: """
         BEGIN:VCALENDAR
@@ -145,15 +147,20 @@ struct ReminderRecoveryIntegrationTests {
         let foreign = ReminderScheduler.PendingSnapshot(identifier: "foreign-request",
             fireDate: nil, badge: nil, title: nil)
         let store = CoordinatorNotificationStore(pausesFirstAdd: true, pending: [foreign])
-        let run = Task { await ReminderScheduler.reconcileScheduledNotifications(
-            modelContext: context, store: store, badgesEnabled: false, policy: .background) }
+        let plans = PerformanceTrace.OperationRecorder()
+        let run = Task {
+            await PerformanceTrace.$operationRecorder.withValue(plans) {
+                await ReminderScheduler.reconcileScheduledNotifications(
+                    modelContext: context, store: store, badgesEnabled: false, policy: .background)
+            }
+        }
         await store.waitUntilAddStarted()
 
         let widget = ModelContext(container)
         widget.autosaveEnabled = false
         let saved = try #require(try widget.fetch(FetchDescriptor<TaskItem>()).first)
         if deletesTask { widget.delete(saved) }
-        else { TaskCompletionLogic.markCompleted(saved) }
+        else { try TaskCompletionLogic.markCompleted(saved) }
         try ReminderSchedulingJournal.saveTaskChanges(in: widget)
         let allTickets = try ReminderSchedulingJournal.capture(in: ModelContext(container))
         #expect(!allTickets.subtracting(capturedTickets).isEmpty)
@@ -162,6 +169,12 @@ struct ReminderRecoveryIntegrationTests {
         store.releaseAdd()
 
         let outcome = await run.value
+        if ProcessInfo.processInfo.environment["NOWTHIS_BACKLOG_MEASUREMENTS"] == "1" {
+            let optimized = ProcessInfo.processInfo.environment["NOWTHIS_T18_EXPECT_OPTIMIZED"] == "1"
+            let plannerCalls = plans.count(.reminderPlan).calls
+            print("T18_REMINDER_RACE deletesTask=\(deletesTask) plannerCalls=\(plannerCalls)")
+            #expect(plannerCalls == (optimized ? 2 : 4))
+        }
         #expect(outcome.status == .superseded)
         #expect(Set(store.pending.keys) == ["foreign-request"])
         #expect(!store.removedIdentifiers.contains("foreign-request"))
@@ -305,7 +318,7 @@ struct ReminderRecoveryIntegrationTests {
         // A separate context represents the extension's independent process save.
         let widget = ModelContext(container)
         let saved = try #require(try widget.fetch(FetchDescriptor<TaskItem>()).first)
-        TaskCompletionLogic.markCompleted(saved)
+        try TaskCompletionLogic.markCompleted(saved)
         try ReminderSchedulingJournal.saveTaskChanges(in: widget)
         store.releaseAdd()
         let interrupted = await run.value

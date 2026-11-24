@@ -6,6 +6,20 @@ import Testing
 @Suite("Import work accounting")
 @MainActor
 struct SyncImportWorkTests {
+    @Test("Inbound chunks bound category values as well as resource count")
+    func categoryWorkChunks() {
+        let resources = (0..<5).map { index in
+            var todo = ICalendarParser.VTODOData()
+            todo.uid = "cat-\(index)"
+            todo.categories = Array(repeating: "Work", count: 256)
+            return ParsedRemoteTask(href: "/one/cat-\(index).ics", etag: "e1", todo: todo)
+        }
+        let chunks = SyncEngine.inboundApplyChunks(resources)
+        #expect(chunks.map(\.count) == [2, 2, 1])
+        #expect(chunks.flatMap { $0 }.map(\.href) == resources.map(\.href))
+        #expect(chunks.allSatisfy { $0.reduce(0) { $0 + ($1.todo?.categories?.count ?? 0) } <= 512 })
+    }
+
     private func resource(uid: String, etag: String, categories: String? = "Work,work") -> CalDAVClient.RemoteTask {
         var lines = ["BEGIN:VCALENDAR", "BEGIN:VTODO", "UID:" + uid, "SUMMARY:" + uid,
             "DUE;TZID=Europe/Berlin:20261010T090000"]
@@ -24,7 +38,7 @@ struct SyncImportWorkTests {
         var map: [String: TaskItem] = [:]
         for index in 0..<100 {
             let remote = try store.parse(resource(uid: "row-\(index)", etag: "a"))
-            #expect(store.apply(remote, list: list, uidMap: &map))
+            #expect(try store.apply(remote, list: list, uidMap: &map))
         }
         #expect(store.parseCount == 100)
         #expect(store.tagFetchCount == 1)
@@ -45,12 +59,12 @@ struct SyncImportWorkTests {
         let store = try SyncImportStore(context: context)
         var map: [String: TaskItem] = [:]
         let initial = try store.parse(resource(uid: "row", etag: "a"))
-        #expect(store.apply(initial, list: list, uidMap: &map)); try context.save()
-        #expect(!store.apply(initial, list: list, uidMap: &map))
+        #expect(try store.apply(initial, list: list, uidMap: &map)); try context.save()
+        #expect(try !store.apply(initial, list: list, uidMap: &map))
         #expect(!context.hasChanges)
-        #expect(store.apply(try store.parse(resource(uid: "row", etag: "b", categories: nil)), list: list, uidMap: &map))
+        #expect(try store.apply(try store.parse(resource(uid: "row", etag: "b", categories: nil)), list: list, uidMap: &map))
         #expect(map["row"]?.tags.count == 1)
-        #expect(store.apply(try store.parse(resource(uid: "row", etag: "c", categories: "")), list: list, uidMap: &map))
+        #expect(try store.apply(try store.parse(resource(uid: "row", etag: "c", categories: "")), list: list, uidMap: &map))
         #expect(map["row"]?.tags.isEmpty == true)
         withExtendedLifetime(container) {}
     }

@@ -1,30 +1,38 @@
 import SwiftUI
 import SwiftData
-import os
 
 /// Full-featured task editor with all VTODO fields.
 ///
 /// Decomposed into focused sub-views per section so that each `body` stays
 /// under 50 lines and the type-checker keeps up with the nesting.
 struct TaskDetailView: View {
-    private static let logger = Logger(subsystem: "com.nowthis", category: "task-detail")
 
     @Bindable var task: TaskItem
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @EnvironmentObject private var syncScheduler: SyncScheduler
+    @AppStorage(TaskDetailSection.storageKey) private var storedSectionOrder = ""
+    @State private var textDraft: TaskTextDraft
+    @State private var showingTagPicker = false
     @State private var showingAddSubtask = false
     @State private var selectedPhoto: TaskPhotoSelection?
     @StateObject private var photoEditor = TaskPhotoEditorState()
+
+    init(task: TaskItem) {
+        self.task = task
+        // Keep the existing deleted-model guard ahead of all property reads, including init.
+        _textDraft = State(initialValue: task.modelContext == nil ? TaskTextDraft() : TaskTextDraft(task))
+    }
 
     var body: some View {
         // An open detail view outlives the task it edits: deleting an account
         // cascades ServerAccount → TaskList → TaskItem on the main context, and
         // the next body evaluation would read an invalidated model and trap in
         // SwiftData (`BackingData.swift:249`). Unlike a row, this view can't
-        // render from a value snapshot — its sections hold two-way `$task`
-        // bindings — so it checks liveness and leaves instead.
+        // render solely from a value snapshot because its sections read the task
+        // for their live controls, so it checks liveness and leaves instead.
         if task.modelContext == nil {
             Color.clear
                 .onAppear { dismiss() }
@@ -35,21 +43,12 @@ struct TaskDetailView: View {
 
     private var editor: some View {
         Form {
-            TitleSection(task: task)
-            StatusSection(task: task)
-            DatesSection(task: task)
-            DetailsSection(task: task)
-            TagsSection(task: task)
-            NotesSection(task: task)
-            TaskPhotosSection(task: task, onSelectPhoto: { photoID in
-                selectedPhoto = TaskPhotoSelection(id: photoID)
-            }, editor: photoEditor)
-            SubtasksSection(
-                task: task,
-                onAddSubtask: { showingAddSubtask = true }
-            )
-            LinkedJournalsSection(task: task)
+            ForEach(TaskDetailSection.decodeOrder(from: storedSectionOrder)) { section in
+                detailSection(section)
+            }
         }
+        .environment(\.saveErrorState, errorState)
+        .errorBanner(errorState)
         .navigationTitle("Task Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -58,12 +57,25 @@ struct TaskDetailView: View {
                     .fontWeight(.semibold)
             }
             ToolbarItem(placement: .secondaryAction) {
-                AddToCalendarButton(task: task)
+                AddToCalendarButton(task: task, errorState: errorState)
+            }
+            if textDraft.hasChanges {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Discard Text Changes") {
+                        textDraft.discard()
+                        textDraft.refresh(from: task)
+                    }
+                }
             }
         }
-        .onChange(of: task.title) { _, _ in reminderEditDidChange() }
-        .onChange(of: task.status) { _, _ in reminderEditDidChange() }
-        // Present outside the Form: recycled section cells must not own the viewer.
+        .interactiveDismissDisabled(textDraft.hasChanges)
+        .navigationBarBackButtonHidden(textDraft.hasChanges)
+        .onChange(of: task.title) { _, _ in textDraft.refresh(from: task) }
+        .onChange(of: task.descriptionText) { _, _ in textDraft.refresh(from: task) }
+        // Keep sheets on the editor so they survive changes to the Form's rows.
+        .sheet(isPresented: $showingTagPicker) {
+            TagPickerSheet(task: task)
+        }
         .sheet(item: $selectedPhoto) { selection in
             TaskPhotoViewer(task: task, photoID: selection.id)
         }
@@ -84,13 +96,32 @@ struct TaskDetailView: View {
         .sheet(isPresented: $showingAddSubtask) {
             AddSubtaskSheet(parentTask: task)
         }
+        .blocksTaskLinks()
     }
 
-    private func reminderEditDidChange() {
-        do {
-            try Self.saveReminderEdit(task, in: modelContext)
-        } catch {
-            Self.logger.error("Failed to save detail reminder edit: \(error.localizedDescription)")
+    @ViewBuilder
+    private func detailSection(_ section: TaskDetailSection) -> some View {
+        switch section {
+        case .title:
+            TitleSection(title: $textDraft.title)
+        case .status:
+            StatusSection(task: task)
+        case .dates:
+            DatesSection(task: task)
+        case .details:
+            DetailsSection(task: task)
+        case .tags:
+            TagsSection(task: task, onAddTag: { showingTagPicker = true })
+        case .notes:
+            NotesSection(notes: $textDraft.notes)
+        case .photos:
+            TaskPhotosSection(task: task, onSelectPhoto: { photoID in
+                selectedPhoto = TaskPhotoSelection(id: photoID)
+            }, editor: photoEditor)
+        case .subtasks:
+            SubtasksSection(task: task, onAddSubtask: { showingAddSubtask = true })
+        case .linkedJournals:
+            LinkedJournalsSection(task: task)
         }
     }
 
@@ -98,7 +129,7 @@ struct TaskDetailView: View {
     static func saveReminderEdit(
         _ task: TaskItem,
         in context: ModelContext,
-        requestReconcile: @MainActor (ModelContext) -> Void = ReminderScheduler.requestReconcile
+        requestReconcile: @MainActor (ModelContext) throws -> Void = ReminderScheduler.requestReconcileOrThrow
     ) throws {
         guard task.modelContext != nil else { return }
         try BackgroundRunBudget.protectingCurrent {
@@ -106,36 +137,226 @@ struct TaskDetailView: View {
             task.isDirty = true
             try ReminderSchedulingJournal.saveTaskChanges(in: context)
         }
-        requestReconcile(context)
+        try requestReconcile(context)
+    }
+
+    @MainActor
+    fileprivate static func admitEdit(to task: TaskItem, in context: ModelContext,
+                                      errorState: ErrorState?) -> Bool {
+        do {
+            _ = try TaskWriteEligibility(writingIn: context).task(.retained(task))
+            return true
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return false
+        }
+    }
+
+    /// Reads values that can change while an editor remains open without returning a model from the reader.
+    @MainActor
+    fileprivate static func readCommitted<Value>(_ task: TaskItem, in context: ModelContext,
+                                                 value: (TaskItem) -> Value) throws -> Value {
+        let id = task.persistentModelID
+        guard task.modelContext === context, !context.deletedModelsArray.contains(where: { $0.persistentModelID == id }) else {
+            throw TaskWriteEligibility.Refusal.taskUnavailable
+        }
+        let reader = ModelContext(context.container)
+        reader.autosaveEnabled = false
+        var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.persistentModelID == id })
+        descriptor.includePendingChanges = false
+        descriptor.fetchLimit = 1
+        guard let stored = try reader.fetch(descriptor).first, stored.persistentModelID == id,
+              !stored.isDeletedLocally, !task.isDeletedLocally else {
+            throw TaskWriteEligibility.Refusal.taskUnavailable
+        }
+        return value(stored)
+    }
+
+    @MainActor
+    @discardableResult
+    static func applyDueDateToggle(
+        _ enabled: Bool, to task: TaskItem, in context: ModelContext,
+        errorState: ErrorState?,
+        requestReconcile: @MainActor (ModelContext, (Error) -> Void) -> Bool =
+            ReminderScheduler.requestReconcile(modelContext:onSaveFailure:)
+    ) -> Bool {
+        guard admitEdit(to: task, in: context, errorState: errorState) else { return false }
+        if enabled {
+            // Newly enabled due dates are timed at the default due time so
+            // the row shows a clock time; users can flip to All Day below.
+            if task.dueDate == nil {
+                task.dueDate = DueDateHelper.timedValue(
+                    for: Date(),
+                    minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
+                )
+            }
+            task.isDueDateOnly = false
+        } else {
+            task.dueDate = nil
+            task.isDueDateOnly = false
+            task.reminderOffset = nil
+            if task.recurrenceRule != nil {
+                task.recurrenceRule = nil
+                task.lastModifiedDate = Date()
+                task.isDirty = true
+            }
+        }
+        return requestReconcile(context) { ViewPersistence.report($0, to: errorState) }
+    }
+
+    @MainActor
+    @discardableResult
+    static func applyReminderOffset(
+        _ offset: Int?, to task: TaskItem, in context: ModelContext,
+        errorState: ErrorState?,
+        requestPermission: @MainActor () -> Void = ReminderScheduler.requestPermissionIfNeeded,
+        requestReconcile: @MainActor (ModelContext, (Error) -> Void) -> Bool =
+            ReminderScheduler.requestReconcile(modelContext:onSaveFailure:)
+    ) -> Bool {
+        guard admitEdit(to: task, in: context, errorState: errorState) else { return false }
+        task.reminderOffset = offset
+        if offset != nil { requestPermission() }
+        // Clearing the offset on a dated task changes its reminder into an overdue badge.
+        return requestReconcile(context) { ViewPersistence.report($0, to: errorState) }
+    }
+
+    @MainActor
+    @discardableResult
+    static func applyHourlyNag(
+        _ enabled: Bool, to task: TaskItem, in context: ModelContext,
+        errorState: ErrorState?,
+        requestReconcile: @MainActor (ModelContext, (Error) -> Void) -> Bool =
+            ReminderScheduler.requestReconcile(modelContext:onSaveFailure:)
+    ) -> Bool {
+        do { try readCommitted(task, in: context) { _ in } }
+        catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return false
+        }
+        // Hourly nag is a device preference and uses the existing reminder recovery save.
+        task.isNaggingReminder = enabled
+        return requestReconcile(context) { ViewPersistence.report($0, to: errorState) }
+    }
+
+    @MainActor
+    static func applyRecurrenceRule(
+        _ rule: String?, replacing original: String?, committedAtOpen: String?,
+        to task: TaskItem, in context: ModelContext, errorState: ErrorState?,
+        requestReconcile: @MainActor (ModelContext, (Error) -> Void) -> Bool =
+            ReminderScheduler.requestReconcile(modelContext:onSaveFailure:)
+    ) -> Bool {
+        guard rule != original else { return true }
+        do {
+            _ = try TaskWriteEligibility(writingIn: context).task(.retained(task))
+            let stored = try readCommitted(task, in: context) { (rule: $0.recurrenceRule, hasDueDate: $0.dueDate != nil) }
+            guard (stored.rule == committedAtOpen || stored.rule == original),
+                  RecurrenceRule.isPickerRepresentable(stored.rule) else {
+                throw TaskWriteEligibility.Refusal.targetChanged
+            }
+            guard task.recurrenceRule == original else { throw TaskWriteEligibility.Refusal.targetChanged }
+            let needsDueDate = rule != nil && !stored.hasDueDate && task.dueDate == nil
+            let priorDateOnly = task.isDueDateOnly
+            let priorModified = task.lastModifiedDate
+            let priorDirty = task.isDirty
+            task.recurrenceRule = rule
+            task.lastModifiedDate = Date()
+            task.isDirty = true
+            guard needsDueDate else { return true }
+            task.dueDate = Date()
+            task.isDueDateOnly = false
+            guard requestReconcile(context, { ViewPersistence.report($0, to: errorState) }) else {
+                task.recurrenceRule = original
+                task.dueDate = nil
+                task.isDueDateOnly = priorDateOnly
+                task.lastModifiedDate = priorModified
+                task.isDirty = priorDirty
+                return false
+            }
+            return true
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return false
+        }
+    }
+
+    /// Shared by the status menu and subtask checkbox. Validation precedes every save
+    /// and reminder effect, including when recurrence advances without changing status.
+    @MainActor
+    static func applyStatusChange(
+        _ status: TaskStatus, to task: TaskItem, in context: ModelContext,
+        save: (() throws -> Void)? = nil,
+        errorState: ErrorState? = nil,
+        requestReconcile: @escaping @MainActor (ModelContext) throws -> Void = ReminderScheduler.requestReconcileOrThrow,
+        cancelReminder: @MainActor (String) -> Void = ReminderScheduler.cancelReminder
+    ) throws {
+        _ = try TaskWriteEligibility(writingIn: context).task(.retained(task))
+        let snapshot = TaskStatusSnapshot(task)
+        let completed = try TaskCompletionLogic.apply(status, to: task)
+        do { try ReminderSchedulingJournal.saveTaskChanges(in: context, save: save) }
+        catch {
+            snapshot.restore()
+            throw error
+        }
+        if completed { cancelReminder(task.id) }
+        ViewPersistence.recoverRemindersAfterCommit(errorState: errorState) {
+            try requestReconcile(context)
+        }
+    }
+
+    @MainActor
+    static func applyDone(to task: TaskItem, textDraft: TaskTextDraft, in modelContext: ModelContext,
+                          errorState: ErrorState, afterCommit: () -> Void, dismiss: () -> Void) {
+        do { _ = try TaskWriteEligibility(writingIn: modelContext).task(.retained(task)) }
+        catch TaskWriteEligibility.Refusal.readOnly where !textDraft.hasChanges {
+            dismiss()
+            return
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return
+        }
+        do {
+            try textDraft.commit(to: task) {
+                try BackgroundRunBudget.protectingCurrent {
+                    task.lastModifiedDate = Date()
+                    task.isDirty = true
+                    try ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+                }
+            }
+        } catch let error as TaskTextValidation.Failure {
+            errorState.show(error)
+            return
+        } catch {
+            ViewPersistence.report(error, to: errorState)
+            return
+        }
+        afterCommit()
+        dismiss()
     }
 
     private func saveAndDismiss() {
-        do {
-            try Self.saveReminderEdit(task, in: modelContext)
-        } catch {
-            Self.logger.error("Failed to save task details: \(error.localizedDescription)")
-            return
-        }
-        syncScheduler.syncAfterChange(modelContext: modelContext)
+        Self.applyDone(to: task, textDraft: textDraft, in: modelContext, errorState: errorState, afterCommit: {
+            ViewPersistence.recoverRemindersAfterCommit {
+                try ReminderScheduler.requestReconcileOrThrow(modelContext: modelContext)
+            }
+            syncScheduler.syncAfterChange(modelContext: modelContext)
 
-        // Auto-sync to calendar if enabled
-        let accounts = (try? modelContext.fetch(FetchDescriptor<ServerAccount>())) ?? []
-        Task {
-            await CalendarAutoSync.syncTaskIfEnabled(task, accounts: accounts)
-        }
-
-        dismiss()
+            // Auto-sync to calendar if enabled
+            let accounts = (try? modelContext.fetch(FetchDescriptor<ServerAccount>())) ?? []
+            CalendarAutoSync.syncTaskIfEnabled(task, accounts: accounts, onCommit: {
+                syncScheduler.publishLocalTaskCommit()
+            })
+        }, dismiss: { dismiss() })
     }
 }
 
 // MARK: - Title Section
 
 private struct TitleSection: View {
-    @Bindable var task: TaskItem
+    @Binding var title: String
 
     var body: some View {
         Section {
-            TextField("Task name", text: $task.title, axis: .vertical)
+            TextField("Task name", text: $title, axis: .vertical)
                 .font(.headline)
                 .lineLimit(1...4)
         }
@@ -146,6 +367,9 @@ private struct TitleSection: View {
 
 private struct StatusSection: View {
     @Bindable var task: TaskItem
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
+    @State private var completionError: TaskCompletionLogic.CompletionError?
 
     var body: some View {
         Section {
@@ -154,7 +378,11 @@ private struct StatusSection: View {
                 Spacer()
                 // An empty label literal extracted as the `""` key. The visible label is the
                 // `Label` beside it; VoiceOver gets it explicitly rather than by proximity.
-                Picker(selection: $task.status) {
+                Picker(selection: Binding(get: { task.status }, set: { status in
+                    do { try TaskDetailView.applyStatusChange(status, to: task, in: modelContext, errorState: errorState) }
+                    catch let error as TaskCompletionLogic.CompletionError { completionError = error }
+                    catch { ViewPersistence.reportTaskWriteRefusal(error, to: errorState); return }
+                })) {
                     ForEach(TaskStatus.allCases, id: \.self) { status in
                         Text(status.displayName).tag(status)
                     }
@@ -168,7 +396,10 @@ private struct StatusSection: View {
             HStack {
                 Label("Priority", systemImage: "flag")
                 Spacer()
-                Picker(selection: $task.priority) {
+                Picker(selection: Binding(get: { task.priority }, set: { priority in
+                    guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
+                    task.priority = priority
+                })) {
                     ForEach([TaskPriority.none, .low, .medium, .high], id: \.self) { pri in
                         Label(pri.displayName, systemImage: pri.icon).tag(pri)
                     }
@@ -196,12 +427,22 @@ private struct StatusSection: View {
                 Slider(
                     value: Binding(
                         get: { Double(task.percentComplete) },
-                        set: { task.percentComplete = Int($0) }
+                        set: { progress in
+                            guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
+                            task.percentComplete = Int(progress)
+                        }
                     ),
                     in: 0...100,
                     step: 5
                 )
             }
+        }
+        .alert("Repeat", isPresented: Binding(
+            get: { completionError != nil }, set: { if !$0 { completionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { completionError = nil }
+        } message: {
+            if let completionError { Text(completionError.localizedStringResource) }
         }
     }
 
@@ -215,69 +456,50 @@ private struct StatusSection: View {
 // MARK: - Dates Section
 
 private struct DatesSection: View {
-    /// Every control in this section changes what the scheduler should have pending, so it
-    /// needs a context of its own to ask for a re-plan with.
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @Bindable var task: TaskItem
-    @State private var hasStartDate: Bool
-    @State private var hasDueDate: Bool
-    @State private var isAllDay: Bool
-    @State private var showingRecurrenceSheet = false
+    @State private var recurrenceEdit: RecurrenceEdit?
 
-    init(task: TaskItem) {
-        self.task = task
-        self._hasStartDate = State(initialValue: task.startDate != nil)
-        self._hasDueDate = State(initialValue: task.dueDate != nil)
-        self._isAllDay = State(initialValue: task.isDueDateOnly)
+    private struct RecurrenceEdit: Identifiable {
+        let id = UUID()
+        let rule: String?
+        let committedRule: String?
     }
+
+    private var isAllDay: Bool { task.isDueDateOnly }
 
     var body: some View {
         Section("Dates") {
-            Toggle(isOn: $hasStartDate) {
+            Toggle(isOn: Binding(get: { task.startDate != nil }, set: { enabled in
+                guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
+                task.startDate = enabled ? (task.startDate ?? Date()) : nil
+            })) {
                 Label("Start Date", systemImage: "play.circle")
             }
-            .onChange(of: hasStartDate) { _, newValue in
-                task.startDate = newValue ? (task.startDate ?? Date()) : nil
-            }
 
-            if hasStartDate {
+            if task.startDate != nil {
                 DatePicker(
                     "Start",
                     selection: Binding(
                         get: { task.startDate ?? Date() },
-                        set: { task.startDate = $0 }
+                        set: { date in
+                            guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
+                            task.startDate = date
+                        }
                     ),
                     displayedComponents: [.date, .hourAndMinute]
                 )
                 .datePickerStyle(.compact)
             }
 
-            Toggle(isOn: $hasDueDate) {
+            Toggle(isOn: Binding(get: { task.dueDate != nil }, set: { enabled in
+                TaskDetailView.applyDueDateToggle(enabled, to: task, in: modelContext, errorState: errorState)
+            })) {
                 Label("Due Date", systemImage: "calendar.badge.clock")
             }
-            .onChange(of: hasDueDate) { _, newValue in
-                if newValue {
-                    // Newly enabled due dates are timed at the default due time so
-                    // the row shows a clock time; users can flip to All Day below.
-                    if task.dueDate == nil {
-                        task.dueDate = DueDateHelper.timedValue(
-                            for: Date(),
-                            minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
-                        )
-                    }
-                    task.isDueDateOnly = false
-                    isAllDay = false
-                } else {
-                    task.dueDate = nil
-                    task.isDueDateOnly = false
-                    isAllDay = false
-                    task.reminderOffset = nil
-                    task.recurrenceRule = nil
-                }
-                ReminderScheduler.requestReconcile(modelContext: modelContext)
-            }
 
-            if hasDueDate {
+            if task.dueDate != nil {
                 Toggle(isOn: Binding(
                     get: { isAllDay },
                     set: { setAllDay($0) }
@@ -296,30 +518,25 @@ private struct DatesSection: View {
                                 : due
                         },
                         set: { newValue in
+                            guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
                             task.dueDate = isAllDay
                                 ? DueDateHelper.dateOnlyValue(for: newValue)
                                 : newValue
+                            // Only user date edits need this save. Completion already handles
+                            // recurrence recovery; observing its due-date change would replay it.
+                            guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+                                ViewPersistence.report($0, to: errorState)
+                            }) else { return }
                         }
                     ),
                     displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
                 )
                 .datePickerStyle(.compact)
-                .onChange(of: task.dueDate) { _, _ in
-                    // Not gated on `reminderOffset`: moving a bare due date has to move its
-                    // overdue-badge notification too, or the badge fires at the old deadline.
-                    ReminderScheduler.requestReconcile(modelContext: modelContext)
-                }
 
                 Picker(selection: Binding(
                     get: { task.reminderOffset },
                     set: { newValue in
-                        task.reminderOffset = newValue
-                        if newValue != nil {
-                            ReminderScheduler.requestPermissionIfNeeded()
-                        }
-                        // Either way the plan changes: clearing a reminder on a still-dated task
-                        // turns it into an overdue-badge notification rather than nothing.
-                        ReminderScheduler.requestReconcile(modelContext: modelContext)
+                        TaskDetailView.applyReminderOffset(newValue, to: task, in: modelContext, errorState: errorState)
                     }
                 )) {
                     // Already localized at the literal inside String(localized:), so the
@@ -343,8 +560,7 @@ private struct DatesSection: View {
                     Toggle(isOn: Binding(
                         get: { task.isNaggingReminder },
                         set: { newValue in
-                            task.isNaggingReminder = newValue
-                            ReminderScheduler.requestReconcile(modelContext: modelContext)
+                            TaskDetailView.applyHourlyNag(newValue, to: task, in: modelContext, errorState: errorState)
                         }
                     )) {
                         Label(String(
@@ -357,13 +573,13 @@ private struct DatesSection: View {
                 }
             }
 
-            // Recurrence — always visible; auto-enables due date if needed
+            // Present the picker without changing the task. Its Done action applies the rule.
             Button {
-                if !hasDueDate {
-                    hasDueDate = true
-                    task.dueDate = Date()
-                }
-                showingRecurrenceSheet = true
+                do {
+                    let committed = try TaskDetailView.readCommitted(task, in: modelContext) { $0.recurrenceRule }
+                    let rule = RecurrenceRule.isPickerRepresentable(committed) ? task.recurrenceRule : committed
+                    recurrenceEdit = RecurrenceEdit(rule: rule, committedRule: committed)
+                } catch { ViewPersistence.reportTaskWriteRefusal(error, to: errorState) }
             } label: {
                 HStack {
                     Label("Repeat", systemImage: "repeat")
@@ -372,27 +588,20 @@ private struct DatesSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .sheet(isPresented: $showingRecurrenceSheet) {
-                RecurrencePickerSheet(recurrenceRule: $task.recurrenceRule)
-            }
-            .onChange(of: task.recurrenceRule) { _, newValue in
-                task.lastModifiedDate = Date()
-                task.isDirty = true
-                // Auto-enable due date when recurrence is set
-                if newValue != nil && !hasDueDate {
-                    hasDueDate = true
-                    task.dueDate = Date()
+            .sheet(item: $recurrenceEdit) { edit in
+                RecurrencePickerSheet(recurrenceRule: .constant(edit.rule)) { rule, errors in
+                    TaskDetailView.applyRecurrenceRule(rule, replacing: edit.rule, committedAtOpen: edit.committedRule, to: task,
+                        in: modelContext, errorState: errors)
                 }
             }
         }
     }
 
     private var recurrenceDisplayText: String {
-        guard let rrule = task.recurrenceRule,
-              let rule = RecurrenceRule.parse(rrule) else {
+        guard let rrule = task.recurrenceRule, !rrule.isEmpty else {
             return String(localized: "taskDetail.recurrence.never", defaultValue: "Never", comment: "Value shown next to the Repeat row in Task Detail when the task has no recurrence rule set")
         }
-        return rule.displayText
+        return RecurrenceRule.parse(rrule)?.displayText ?? RecurrenceRule.customDisplayText
     }
 
     /// Switches the due date between all-day (date-only) and timed, converting the
@@ -400,7 +609,7 @@ private struct DatesSection: View {
     /// due time; all-day values drop the time and round-trip to `DUE;VALUE=DATE`.
     private func setAllDay(_ allDay: Bool) {
         guard allDay != isAllDay else { return }
-        isAllDay = allDay
+        guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
         task.isDueDateOnly = allDay
         let current = task.dueDate ?? Date()
         if allDay {
@@ -412,7 +621,9 @@ private struct DatesSection: View {
                 minutesSinceMidnight: TaskDefaultsPreferences.dueTimeMinutes
             )
         }
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
+        guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+            ViewPersistence.report($0, to: errorState)
+        }) else { return }
     }
 }
 
@@ -421,7 +632,11 @@ private struct DatesSection: View {
 struct RecurrencePickerSheet: View {
     @Binding var recurrenceRule: String?
     @Environment(\.dismiss) private var dismiss
+    @State private var errorState = ErrorState()
     @State private var selectedPreset: RecurrencePreset
+    @State private var didEdit = false
+    private let isReadOnly: Bool
+    private let commit: ((String?, ErrorState) -> Bool)?
     @State private var customFrequency: RecurrenceRule.Frequency = .weekly
     @State private var customInterval: Int = 1
     @State private var customByDay: Set<RecurrenceRule.Weekday> = []
@@ -460,8 +675,10 @@ struct RecurrencePickerSheet: View {
         }
     }
 
-    init(recurrenceRule: Binding<String?>) {
+    init(recurrenceRule: Binding<String?>, commit: ((String?, ErrorState) -> Bool)? = nil) {
         self._recurrenceRule = recurrenceRule
+        self.commit = commit
+        self.isReadOnly = !RecurrenceRule.isPickerRepresentable(recurrenceRule.wrappedValue)
         // Determine initial preset from existing rule
         if let rrule = recurrenceRule.wrappedValue, let rule = RecurrenceRule.parse(rrule) {
             if rule.interval == 1 && rule.byDay.isEmpty {
@@ -476,7 +693,7 @@ struct RecurrencePickerSheet: View {
             }
             self._customFrequency = State(initialValue: rule.frequency)
             self._customInterval = State(initialValue: rule.interval)
-            self._customByDay = State(initialValue: Set(rule.byDay))
+            self._customByDay = State(initialValue: Set(rule.plainWeekdays))
         } else {
             self._selectedPreset = State(initialValue: .never)
         }
@@ -485,70 +702,84 @@ struct RecurrencePickerSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    ForEach(RecurrencePreset.allCases) { preset in
-                        Button {
-                            selectedPreset = preset
-                        } label: {
-                            HStack {
-                                Text(preset.displayName)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                if selectedPreset == preset {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                        }
+                if isReadOnly {
+                    Section {
+                        Text(RecurrenceRule.customDisplayText)
+                        Text("This custom repeat rule is preserved. Use a calendar app that supports it to change it.",
+                             comment: "Explanation in the read-only repeat picker for an imported rule the picker cannot represent.")
+                        if let raw = recurrenceRule { Text(verbatim: raw).font(.caption).textSelection(.enabled) }
                     }
-                }
-
-                if selectedPreset == .custom {
-                    Section("Frequency") {
-                        Picker("Every", selection: $customFrequency) {
-                            ForEach(RecurrenceRule.Frequency.allCases) { freq in
-                                Text(freq.displayName).tag(freq)
-                            }
-                        }
-
-                        Stepper(value: $customInterval, in: 1...99) {
-                            Text(verbatim: intervalLabel)
-                        }
-                    }
-
-                    if customFrequency == .weekly {
-                        Section("Days of Week") {
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
-                                ForEach(RecurrenceRule.Weekday.allCases) { day in
-                                    Button {
-                                        if customByDay.contains(day) {
-                                            customByDay.remove(day)
-                                        } else {
-                                            customByDay.insert(day)
-                                        }
-                                    } label: {
-                                        Text(verbatim: day.shortName())
-                                            .font(.caption)
-                                            .fontWeight(.medium)
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 8)
-                                            .background(
-                                                customByDay.contains(day)
-                                                    ? Color.blue : Color.clear,
-                                                in: RoundedRectangle(cornerRadius: 8)
-                                            )
-                                            .foregroundStyle(
-                                                customByDay.contains(day) ? .white : .primary
-                                            )
+                } else {
+                    Section {
+                        ForEach(RecurrencePreset.allCases) { preset in
+                            Button {
+                                selectedPreset = preset
+                            } label: {
+                                HStack {
+                                    Text(preset.displayName)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedPreset == preset {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(.blue)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
-                            .padding(.vertical, 4)
+                        }
+                    }
+
+                    if selectedPreset == .custom {
+                        Section("Frequency") {
+                            Picker("Every", selection: $customFrequency) {
+                                ForEach(RecurrenceRule.Frequency.allCases) { freq in
+                                    Text(freq.displayName).tag(freq)
+                                }
+                            }
+
+                            Stepper(value: $customInterval, in: 1...99) {
+                                Text(verbatim: intervalLabel)
+                            }
+                        }
+
+                        if customFrequency == .weekly {
+                            Section("Days of Week") {
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
+                                    ForEach(RecurrenceRule.Weekday.allCases) { day in
+                                        Button {
+                                            if customByDay.contains(day) {
+                                                customByDay.remove(day)
+                                            } else {
+                                                customByDay.insert(day)
+                                            }
+                                        } label: {
+                                            Text(verbatim: day.shortName())
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, 8)
+                                                .background(
+                                                    customByDay.contains(day)
+                                                        ? Color.blue : Color.clear,
+                                                    in: RoundedRectangle(cornerRadius: 8)
+                                                )
+                                                .foregroundStyle(
+                                                    customByDay.contains(day) ? .white : .primary
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
                         }
                     }
                 }
             }
+            .onChange(of: selectedPreset) { _, _ in didEdit = true }
+            .onChange(of: customFrequency) { _, _ in didEdit = true }
+            .onChange(of: customInterval) { _, _ in didEdit = true }
+            .onChange(of: customByDay) { _, _ in didEdit = true }
+            .errorBanner(errorState)
             .navigationTitle("Repeat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -557,8 +788,7 @@ struct RecurrencePickerSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        applyRule()
-                        dismiss()
+                        if applyRule() { dismiss() }
                     }
                     .fontWeight(.semibold)
                 }
@@ -594,28 +824,30 @@ struct RecurrencePickerSheet: View {
         }
     }
 
-    private func applyRule() {
+    private func applyRule() -> Bool {
+        guard !isReadOnly, didEdit else { return true }
+        let rule = selectedRule()
+        if let commit { return commit(rule, errorState) }
+        recurrenceRule = rule
+        return true
+    }
+
+    private func selectedRule() -> String? {
+        let frequency: RecurrenceRule.Frequency
         switch selectedPreset {
-        case .never:
-            recurrenceRule = nil
-        case .daily:
-            recurrenceRule = "FREQ=DAILY"
-        case .weekly:
-            recurrenceRule = "FREQ=WEEKLY"
-        case .monthly:
-            recurrenceRule = "FREQ=MONTHLY"
-        case .yearly:
-            recurrenceRule = "FREQ=YEARLY"
-        case .custom:
-            let rule = RecurrenceRule(
-                frequency: customFrequency,
-                interval: customInterval,
-                byDay: Array(customByDay).sorted(by: { $0.calendarWeekday < $1.calendarWeekday }),
-                count: nil,
-                until: nil
-            )
-            recurrenceRule = rule.toRRULEString()
+        case .never: return nil
+        case .daily: frequency = .daily
+        case .weekly: frequency = .weekly
+        case .monthly: frequency = .monthly
+        case .yearly: frequency = .yearly
+        case .custom: frequency = customFrequency
         }
+        let interval = selectedPreset == .custom ? customInterval : 1
+        let days = selectedPreset == .custom && frequency == .weekly
+            ? customByDay.sorted { $0.calendarWeekday < $1.calendarWeekday }.map { RecurrenceRule.ByDay(weekday: $0) }
+            : []
+        return RecurrenceRule(frequency: frequency, interval: interval, byDay: days, count: nil, until: nil)
+            .toRRULEString()
     }
 }
 
@@ -624,9 +856,20 @@ struct RecurrencePickerSheet: View {
 private struct DetailsSection: View {
     @Bindable var task: TaskItem
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @EnvironmentObject private var syncScheduler: SyncScheduler
-    @State private var showingLocationPicker = false
+    @State private var locationSheet: LocationSheet?
+    @State private var savedLocation: LocationDraft.Fields?
+    @State private var locationTaskID: String?
+    @ObservedObject private var geofences = GeofenceManager.shared
     @State private var moveRequest: MoveToListRequest?
+
+    private struct LocationSheet: Identifiable {
+        let id = UUID()
+        let draft: LocationDraft
+    }
+
+    private var location: LocationDraft.Fields { savedLocation ?? LocationDraft.Fields(task) }
 
     /// Spoken stand-in when the task has no location. Deliberately the same key the
     /// visible label uses, so VoiceOver and the screen say the same word.
@@ -639,16 +882,20 @@ private struct DetailsSection: View {
             listRow
 
             Button {
-                showingLocationPicker = true
+                if let draft = LocationDraft.open(task: task, in: modelContext, errorState: errorState) {
+                    locationTaskID = task.id
+                    savedLocation = draft.savedFields
+                    locationSheet = LocationSheet(draft: draft)
+                }
             } label: {
                 HStack {
                     Label("Location", systemImage: "mappin")
                     Spacer()
-                    if let name = task.locationName {
+                    if let name = location.name {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(name)
                                 .font(.subheadline)
-                            if let radius = task.geofenceRadius {
+                            if let radius = location.radius, radius.isFinite, radius > 0 {
                                 Text(verbatim: String(
                                     localized: "location.geofence.radiusValue",
                                     defaultValue: "\(Measurement(value: radius, unit: UnitLength.meters).formatted(.measurement(width: .narrow))) radius",
@@ -670,9 +917,24 @@ private struct DetailsSection: View {
             // The `%@` is spoken, so its fallback has to be localized too. A bare "not set"
             // here made VoiceOver say "Ort, not set" beside a screen correctly reading
             // "Keiner" — the outer key translates, the argument filling it did not.
-            .accessibilityLabel("Location, \(task.locationName ?? Self.noLocationSpoken)")
-            .sheet(isPresented: $showingLocationPicker) {
-                LocationPickerView(task: task)
+            .accessibilityLabel("Location, \(location.name ?? Self.noLocationSpoken)")
+            .sheet(item: $locationSheet) { sheet in
+                LocationPickerView(task: task, draft: sheet.draft) { fields in
+                    savedLocation = fields
+                    syncScheduler.publishLocalTaskCommit()
+                }
+            }
+            .onChange(of: syncScheduler.latestCommittedChange?.revision) { _, _ in
+                guard let locationTaskID, let change = syncScheduler.latestCommittedChange,
+                      change.changedIDs.contains(locationTaskID) else { return }
+                if let fields = try? LocationDraft.committedFields(for: task, in: modelContext) {
+                    savedLocation = fields
+                }
+            }
+            if location.coordinate != nil, let issue = geofences.permissionIssue {
+                Text(issue.message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -680,7 +942,10 @@ private struct DetailsSection: View {
                 Spacer()
                 TextField("https://...", text: Binding(
                     get: { task.url ?? "" },
-                    set: { task.url = $0.isEmpty ? nil : $0 }
+                    set: { url in
+                        guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
+                        task.url = url.isEmpty ? nil : url
+                    }
                 ))
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(.secondary)
@@ -715,9 +980,12 @@ extension DetailsSection {
         // Reads "List, Work"; the button trait says it can be changed.
         .accessibilityElement(children: .combine)
         .sheet(item: $moveRequest) { request in
-            MoveToListSheet(request: request) { listID in
-                guard MoveDestinations.perform(task, toListID: listID, in: modelContext) else { return }
+            MoveToListSheet(request: request) { destination, errors in
+                guard MoveDestinations.perform(request, to: destination, in: modelContext, errorState: errors,
+                    revalidate: { syncScheduler.syncAfterChange(modelContext: modelContext) }) else { return false }
+                syncScheduler.publishLocalTaskCommit()
                 syncScheduler.syncAfterChange(modelContext: modelContext)
+                return true
             }
         }
     }
@@ -726,16 +994,34 @@ extension DetailsSection {
 // MARK: - Notes Section
 
 private struct NotesSection: View {
-    @Bindable var task: TaskItem
+    @Binding var notes: String
+    @State private var isExpanded = false
+    @ScaledMetric(relativeTo: .body) private var compactHeight = 170.0
+    @ScaledMetric(relativeTo: .body) private var expandedHeight = 320.0
 
     var body: some View {
-        Section("Notes") {
-            TextEditor(text: Binding(
-                get: { task.descriptionText ?? "" },
-                set: { task.descriptionText = $0.isEmpty ? nil : $0 }
-            ))
-            .frame(minHeight: 100)
-            .font(.body)
+        Section {
+            TextEditor(text: $notes)
+                .font(.body)
+                .frame(height: isExpanded ? expandedHeight : compactHeight)
+                .accessibilityLabel("Notes")
+        } header: {
+            HStack {
+                Text("Notes")
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    if isExpanded {
+                        Text("Collapse Notes", comment: "Button that returns the task notes editor to its default height.")
+                    } else {
+                        Text("Expand Notes", comment: "Button that makes the task notes editor taller.")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .textCase(nil)
+            }
         }
     }
 }
@@ -789,7 +1075,9 @@ private struct SubtasksSection: View {
 
 private struct SubtaskRow: View {
     @Bindable var subtask: TaskItem
+    @State private var completionError: TaskCompletionLogic.CompletionError?
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     var body: some View {
         HStack(spacing: 10) {
@@ -817,25 +1105,27 @@ private struct SubtaskRow: View {
 
             Spacer()
         }
+        .alert("Repeat", isPresented: Binding(
+            get: { completionError != nil }, set: { if !$0 { completionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { completionError = nil }
+        } message: {
+            if let completionError { Text(completionError.localizedStringResource) }
+        }
     }
 
     private func toggleSubtask() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            if subtask.status == .completed {
-                subtask.status = .needsAction
-                subtask.completedDate = nil
-            } else {
-                subtask.status = .completed
-                subtask.completedDate = Date()
+        do {
+            try withAnimation(.easeInOut(duration: 0.2)) {
+                try TaskDetailView.applyStatusChange(
+                    subtask.status == .completed ? .needsAction : .completed,
+                    to: subtask, in: modelContext, errorState: errorState)
             }
-            subtask.lastModifiedDate = Date()
-            subtask.isDirty = true
-        }
+        } catch let error as TaskCompletionLogic.CompletionError {
+            completionError = error
+            return
+        } catch { ViewPersistence.reportTaskWriteRefusal(error, to: errorState); return }
         HapticManager.checkbox()
-        do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext) }
-        catch { return }
-        if subtask.status == .completed { ReminderScheduler.cancelReminder(for: subtask.id) }
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 
@@ -844,7 +1134,10 @@ private struct SubtaskRow: View {
 private struct AddSubtaskSheet: View {
     let parentTask: TaskItem
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
+    @EnvironmentObject private var syncScheduler: SyncScheduler
     @Environment(\.dismiss) private var dismiss
+    @State private var creationDraft = TaskCreationDraft()
     @State private var subtaskTitle = ""
     @FocusState private var isFocused: Bool
 
@@ -860,11 +1153,16 @@ private struct AddSubtaskSheet: View {
                 Spacer()
             }
             .padding(.top, 20)
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationTitle("Add Subtask")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        creationDraft.discardOwnedChanges()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { createSubtask() }
@@ -875,20 +1173,23 @@ private struct AddSubtaskSheet: View {
             .onAppear { isFocused = true }
         }
         .presentationDetents([.medium])
+        .onDisappear { creationDraft.discardOwnedChanges() }
     }
 
     private func createSubtask() {
+        guard parentTask.modelContext != nil else { return }
         let trimmed = subtaskTitle.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
-        let subtask = TaskItem(title: trimmed)
-        subtask.parentTask = parentTask
-        subtask.taskList = parentTask.taskList
-        subtask.parentUID = parentTask.uid
-        subtask.isDirty = true
-
-        modelContext.insert(subtask)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        do {
+            guard try creationDraft.subtask(title: trimmed, parent: parentTask,
+                in: modelContext.container) != nil else { return }
+        } catch let refusal as TaskWriteEligibility.Refusal {
+            ViewPersistence.reportTaskWriteRefusal(refusal, to: errorState, creating: true)
+            return
+        } catch { errorState.show(error); return }
+        guard creationDraft.saveOwnedChanges(errorState: errorState) else { return }
+        syncScheduler.publishLocalTaskCommit()
         HapticManager.success()
         dismiss()
     }
@@ -898,12 +1199,14 @@ private struct AddSubtaskSheet: View {
 
 /// Shows journal entries linked to this task (P12-4).
 private struct LinkedJournalsSection: View {
+    @Environment(\.modelContext) private var modelContext
     let task: TaskItem
 
     var body: some View {
-        if !task.associatedJournals.isEmpty {
+        let journals = JournalVisibility.live(task.associatedJournals, in: modelContext)
+        if !journals.isEmpty {
             Section("Linked Journals") {
-                ForEach(task.associatedJournals) { journal in
+                ForEach(journals) { journal in
                     NavigationLink {
                         JournalEditorView(mode: .edit(journal))
                     } label: {
@@ -931,7 +1234,9 @@ private struct LinkedJournalsSection: View {
 
 private struct TagsSection: View {
     @Bindable var task: TaskItem
-    @State private var showingTagPicker = false
+    let onAddTag: () -> Void
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     var body: some View {
         Section("Tags") {
@@ -939,6 +1244,8 @@ private struct TagsSection: View {
                 FlowLayout(spacing: 8) {
                     ForEach(task.tags) { tag in
                         TagPill(tag: tag) {
+                            guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState),
+                                  tag.modelContext === modelContext, !tag.isDeleted else { return }
                             withAnimation {
                                 task.tags.removeAll { $0.id == tag.id }
                                 TaskListHelpers.markTagsChanged(on: task)
@@ -949,13 +1256,10 @@ private struct TagsSection: View {
                 .padding(.vertical, 4)
             }
 
-            Button(action: { showingTagPicker = true }) {
+            Button(action: onAddTag) {
                 Label("Add Tag", systemImage: "tag")
                     .foregroundStyle(.purple)
             }
-        }
-        .sheet(isPresented: $showingTagPicker) {
-            TagPickerSheet(task: task)
         }
     }
 }
@@ -1052,6 +1356,7 @@ private struct TagPickerSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Tag.name) private var allTags: [Tag]
+    @State private var errorState = ErrorState()
     @State private var newTagName = ""
     @State private var newTagColor = "#AF52DE"
 
@@ -1065,6 +1370,7 @@ private struct TagPickerSheet: View {
             List {
                 Section("Existing Tags") {
                     ForEach(allTags) { tag in
+                        let isSelected = task.tags.contains { $0.id == tag.id }
                         Button {
                             toggleTag(tag)
                         } label: {
@@ -1075,12 +1381,14 @@ private struct TagPickerSheet: View {
                                 Text(tag.name)
                                     .foregroundStyle(.primary)
                                 Spacer()
-                                if task.tags.contains(where: { $0.id == tag.id }) {
+                                if isSelected {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(.blue)
+                                        .accessibilityHidden(true)
                                 }
                             }
                         }
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
 
@@ -1116,6 +1424,7 @@ private struct TagPickerSheet: View {
                     .disabled(newTagName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+            .errorBanner(errorState)
             .navigationTitle("Tags")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1129,6 +1438,8 @@ private struct TagPickerSheet: View {
     }
 
     private func toggleTag(_ tag: Tag) {
+        guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState),
+              tag.modelContext === modelContext, !tag.isDeleted else { return }
         if let index = task.tags.firstIndex(where: { $0.id == tag.id }) {
             task.tags.remove(at: index)
         } else {
@@ -1148,11 +1459,46 @@ private struct TagPickerSheet: View {
     private func createAndAddTag() {
         let trimmed = newTagName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        guard TaskDetailView.admitEdit(to: task, in: modelContext, errorState: errorState) else { return }
         let tag = Tag(name: trimmed, color: newTagColor)
         modelContext.insert(tag)
         task.tags.append(tag)
         TaskListHelpers.markTagsChanged(on: task)
         newTagName = ""
         HapticManager.success()
+    }
+}
+
+/// Only the fields TaskCompletionLogic changes, captured immediately before a synchronous attempt.
+struct TaskStatusSnapshot {
+    let task: TaskItem
+    let status: TaskStatus
+    let completedDate: Date?
+    let dueDate: Date?
+    let startDate: Date?
+    let percentComplete: Int
+    let lastModifiedDate: Date?
+    let isDirty: Bool
+
+    init(_ task: TaskItem) {
+        self.task = task
+        status = task.status
+        completedDate = task.completedDate
+        dueDate = task.dueDate
+        startDate = task.startDate
+        percentComplete = task.percentComplete
+        lastModifiedDate = task.lastModifiedDate
+        isDirty = task.isDirty
+    }
+
+    func restore() {
+        guard task.modelContext != nil else { return }
+        task.status = status
+        task.completedDate = completedDate
+        task.dueDate = dueDate
+        task.startDate = startDate
+        task.percentComplete = percentComplete
+        task.lastModifiedDate = lastModifiedDate
+        task.isDirty = isDirty
     }
 }

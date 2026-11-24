@@ -35,6 +35,11 @@ struct TaskGlanceData: Equatable, Identifiable {
         self.dueDate = task.dueDate
         self.isDueDateOnly = task.isDueDateOnly
     }
+
+    func spokenAllDayDueDate(timeZone: TimeZone = .current) -> String? {
+        guard isDueDateOnly, let dueDate else { return nil }
+        return DueDateFormatter.accessibilityLabel(dueDate, isDateOnly: isDueDateOnly, timeZone: timeZone)
+    }
 }
 
 /// A snapshot paired with the live task it came from.

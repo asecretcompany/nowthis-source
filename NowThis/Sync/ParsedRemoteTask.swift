@@ -5,4 +5,6 @@ struct ParsedRemoteTask: Sendable {
     let href: String
     let etag: String
     let todo: ICalendarParser.VTODOData?
+    var shape: SyncResourceState.Shape? = nil
+    var originalBody: String? = nil
 }

@@ -4,8 +4,8 @@ import Foundation
 ///
 /// Applied by ``NewTaskDefaults`` and configurable globally
 /// (``TaskDefaultsPreferences``) or per-list (`TaskList.defaultDueDateRule`).
-/// Resulting due dates are **date-only** (all-day) values — a new task never
-/// assumes a due *time* unless the user sets one.
+/// The rule selects a calendar day; ``NewTaskDefaults`` applies the configured
+/// default due time unless the user chooses an all-day date.
 enum DefaultDueDateRule: String, CaseIterable, Identifiable, Sendable {
     /// No due date — matches the app's historical behavior.
     case none

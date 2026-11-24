@@ -1,5 +1,14 @@
 import Foundation
 
+struct DAVDiscoveryResponse: Sendable {
+    let resources: [DAVXMLParser.DAVResource]
+    let responseURL: URL
+}
+
+enum DAVDiscoveryContext {
+    @TaskLocal static var deadline: ContinuousClock.Instant?
+}
+
 /// URLSession-based CalDAV HTTP client for Nextcloud Tasks.
 ///
 /// All operations use `async/await` and run on background threads.
@@ -16,7 +25,7 @@ actor CalDAVClient {
     // MARK: - Types
 
     /// Credentials for a CalDAV request.
-    struct Credentials {
+    struct Credentials: Sendable {
         let username: String
         let password: String
 
@@ -71,7 +80,7 @@ actor CalDAVClient {
 
     /// The outcome of a calendar-home PROPFIND, split at the source so a caller cannot
     /// accidentally treat a discarded collection as a live one.
-    struct DiscoveredCalendars {
+    struct DiscoveredCalendars: Sendable {
         let live: [RemoteCalendar]
         let trashed: [RemoteCalendar]
     }
@@ -140,6 +149,10 @@ actor CalDAVClient {
             delegate: CalDAVClientRedirectDelegate(), delegateQueue: nil)
     }
 
+    deinit {
+        session.invalidateAndCancel()
+    }
+
     /// Sets the absolute deadline for the current serialized collection run.
     /// A later run may replace or clear it before starting its own requests.
     func setRunDeadline(_ deadline: Date?) {
@@ -153,6 +166,90 @@ actor CalDAVClient {
     func clearRunBudget(runID: UUID) {
         guard runBudget?.runID == runID else { return }
         runBudget = nil
+    }
+
+    func discoveryProperties(at url: URL, properties: [String], depth: String,
+                             allowedOrigin: URL, credentials: Credentials, stage: DAVDiscoveryFailure.Stage = .principal,
+                             strictPropertyEvidence: Bool = false,
+                             singleAttempt: Bool = false,
+                             requireExactResponse: Bool = false,
+                             validateAttempt: (@Sendable () async throws -> Void)? = nil) async throws -> DAVDiscoveryResponse {
+        guard NextcloudServerAddress.sameOrigin(url, allowedOrigin),
+              let request = Self.makeDAVRequest(method: "PROPFIND", url: url.absoluteString,
+                body: propfindBody(properties: properties), credentials: credentials, depth: depth) else {
+            throw DAVDiscoveryFailure(stage: stage, method: .propfind, httpStatus: nil, reason: .untrustedAddress)
+        }
+        let budget = runBudget ?? BackgroundRunBudget.current
+        let cutoff = DAVDiscoveryContext.deadline
+        let policy = singleAttempt ? RetryPolicy(maxAttempts: 1, baseDelay: 0) : retryPolicy
+        // Give retry admission the discovery allowance as well as the run's
+        // deadline. An authoritative server wait that exceeds it must become
+        // RetryDeferredError, rather than being lost to the outer timeout.
+        let discoveryRetryUntil = cutoff.map { cutoff in
+            let duration = max(.zero, cutoff - ContinuousClock.now).components
+            return now().addingTimeInterval(Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
+        }
+        let retryUntil = [budget == nil ? retryDeadline : nil, discoveryRetryUntil].compactMap { $0 }.min()
+        let session = session
+        let maxBytes = maxResponseBytes
+        let clock = now
+        let jitter = jitter
+        let sleep = sleep
+        let data: Data
+        let response: URLResponse
+        do {
+            // Discovery shares normal DAV retry semantics, including durable
+            // Retry-After deferral. Its absolute allowance also bounds backoff.
+            (data, response) = try await DeadlineRequestExecutor.perform(deadline: cutoff) {
+                try await withRetry(policy: policy, deadline: retryUntil, runBudget: budget,
+                                    now: clock, jitter: jitter, sleep: sleep) {
+                    try await validateAttempt?()
+                    let result = try await Self.performRequest(request, session: session,
+                        budget: budget, maxResponseBytes: maxBytes, now: clock,
+                        exactTarget: strictPropertyEvidence || requireExactResponse, allowRedirects: !requireExactResponse,
+                        discoveryOrigin: allowedOrigin,
+                        validateRedirect: validateAttempt)
+                    guard let http = result.1 as? HTTPURLResponse, let finalURL = http.url,
+                          NextcloudServerAddress.sameOrigin(finalURL, allowedOrigin),
+                          !requireExactResponse || Self.isPinnedTarget(finalURL, of: url) else {
+                        throw DAVDiscoveryFailure(stage: stage, method: .propfind, httpStatus: nil, reason: .untrustedAddress)
+                    }
+                    if requireExactResponse { try Self.validateCalendarResponseLength(result.0, response: http) }
+                    switch http.statusCode {
+                    case 200, 207: return result
+                    case 401: throw CalDAVError.unauthorized
+                    case 403: throw CalDAVError.forbidden
+                    case 404 where requireExactResponse: throw CalendarCollectionProofError.absent
+                    case 404: throw CalDAVError.notFound
+                    case 429: throw CalDAVError.rateLimited(retryAfter: nil)
+                    default: throw CalDAVError.serverError(statusCode: http.statusCode)
+                    }
+                }
+            }
+        } catch is RetryDeferredError where policy.connectionFailuresOnly {
+            // Setup has no later scheduled run to consume retry deferrals. Its
+            // connection-only backoff must surface the exhausted allowance.
+            throw DAVDiscoveryFailure(stage: stage, method: .propfind,
+                httpStatus: nil, reason: .deadlineExceeded)
+        } catch let error as DAVRedirectRejection {
+            throw DAVDiscoveryFailure(stage: stage, method: .propfind,
+                httpStatus: error.httpStatus, reason: .untrustedAddress)
+        } catch let error as BackgroundBudgetExhausted {
+            if let cutoff, ContinuousClock.now >= cutoff,
+               budget == nil || cutoff < budget!.remoteCutoff {
+                throw DAVDiscoveryFailure(stage: stage, method: .propfind, httpStatus: nil, reason: .deadlineExceeded)
+            }
+            throw error
+        }
+        guard let http = response as? HTTPURLResponse, let finalURL = http.url else {
+            throw CalDAVError.invalidResponse
+        }
+        do {
+            return DAVDiscoveryResponse(resources: try DAVXMLParser().parse(data: data, strictPropertyEvidence: strictPropertyEvidence),
+                responseURL: finalURL)
+        } catch {
+            throw DAVDiscoveryFailure(stage: stage, method: .propfind, httpStatus: http.statusCode, reason: .unsupportedResponse)
+        }
     }
 
     // MARK: - Discovery
@@ -174,7 +271,8 @@ actor CalDAVClient {
         guard let encodedUsername = credentials.username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             throw CalDAVError.invalidURL
         }
-        let nextcloudPath = resolveURL(baseURL: baseURL, path: "/remote.php/dav/principals/users/\(encodedUsername)/")
+        let principalEndpoint = try nextcloudEndpoint(baseURL: baseURL, suffix: "/remote.php/dav/principals/users/\(encodedUsername)/")
+        let nextcloudPath = try resolveURL(baseURL: baseURL, path: principalEndpoint)
 
         // Verify it exists
         let body = propfindBody(properties: ["<d:current-user-principal/>"])
@@ -216,7 +314,7 @@ actor CalDAVClient {
         principalPath: String,
         credentials: Credentials
     ) async throws -> String {
-        let url = resolveURL(baseURL: baseURL, path: principalPath)
+        let url = try resolveURL(baseURL: baseURL, path: principalPath)
 
         let body = propfindBody(properties: [
             "<c:calendar-home-set xmlns:c=\"urn:ietf:params:xml:ns:caldav\"/>"
@@ -241,7 +339,7 @@ actor CalDAVClient {
 
         // Nextcloud fallback
         let encodedUser = credentials.username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? credentials.username
-        let fallback = "/remote.php/dav/calendars/\(encodedUser)/"
+        let fallback = try nextcloudEndpoint(baseURL: baseURL, suffix: "/remote.php/dav/calendars/\(encodedUser)/")
         return fallback
     }
 
@@ -258,7 +356,7 @@ actor CalDAVClient {
         calendarHomePath: String,
         credentials: Credentials
     ) async throws -> DiscoveredCalendars {
-        let url = resolveURL(baseURL: baseURL, path: calendarHomePath)
+        let url = try resolveURL(baseURL: baseURL, path: calendarHomePath)
 
         let body = propfindBody(properties: [
             "<d:displayname/>",
@@ -295,8 +393,8 @@ actor CalDAVClient {
     /// Splits a parsed calendar-home multistatus into the collections that should sync and the
     /// ones the server has thrown away.
     ///
-    /// **Why this is pure and static.** The test suite has no `URLProtocol` stub anywhere, so
-    /// anything left behind the network call in `discoverTaskCalendars` cannot be tested at all.
+    /// This split is tested directly with parsed DAV resources and through the live discovery path.
+    /// Keeping it pure makes the server's href/name and trash conventions independently testable.
     ///
     /// **Why it exists.** Discovery used to filter on `isVTODOSupported` and "not the home
     /// itself" and nothing else, so a calendar sitting in Nextcloud's trash was imported as an
@@ -509,7 +607,7 @@ actor CalDAVClient {
         calendarPath: String,
         credentials: Credentials
     ) async throws -> [RemoteTask] {
-        let url = resolveURL(baseURL: baseURL, path: calendarPath)
+        let url = try resolveURL(baseURL: baseURL, path: calendarPath)
 
         let body = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -543,13 +641,9 @@ actor CalDAVClient {
     /// The task resources in a multistatus, or a failure if any of them arrived
     /// without its content.
     ///
-    /// Responses with no `calendar-data` used to be dropped silently, which was
-    /// right while the pull could only add and update: there was nothing to
-    /// apply. `SyncEngine.tasksDeletedOnServer` changed what a drop means. A
-    /// dropped resource contributes no UID, so the local task it belongs to is
-    /// absent from the fetched set — which is now the definition of "deleted on
-    /// the server". One propstat that came back without its data would delete
-    /// that task permanently.
+    /// A missing body makes the collection inventory incomplete. The bounded live
+    /// pull uses complete-manifest absence to reconcile server deletions, so dropping
+    /// this resource would make its local task look absent and could delete it.
     ///
     /// The collection itself is the one response that legitimately carries no
     /// calendar data, and it identifies itself: its href *is* the calendar
@@ -591,14 +685,14 @@ actor CalDAVClient {
         taskPath: String,
         credentials: Credentials
     ) async throws -> RemoteTask {
-        let url = resolveURL(baseURL: baseURL, path: taskPath)
+        let url = try resolveURL(baseURL: baseURL, path: taskPath)
 
         let (data, response) = try await sendDAVRequest(
             method: "GET",
             url: url,
             body: nil,
             credentials: credentials,
-            depth: nil
+            depth: nil, exactTarget: true
         )
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -631,9 +725,10 @@ actor CalDAVClient {
         taskPath: String,
         icsData: String,
         etag: String?,
-        credentials: Credentials
+        credentials: Credentials,
+        validateAttempt: (@Sendable () async throws -> Void)? = nil
     ) async throws -> String {
-        let url = resolveURL(baseURL: baseURL, path: taskPath)
+        let url = try resolveURL(baseURL: baseURL, path: taskPath)
 
         guard let requestURL = URL(string: url) else {
             throw CalDAVError.invalidURL
@@ -655,8 +750,10 @@ actor CalDAVClient {
         }
 
         let budget = runBudget ?? BackgroundRunBudget.current
-        return try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget] in
-            let (_, response) = try await Self.performRequest(request, session: session, budget: budget)
+        return try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget, maxResponseBytes] in
+            try await validateAttempt?()
+            let (_, response) = try await Self.performRequest(request, session: session, budget: budget,
+                maxResponseBytes: maxResponseBytes, now: now, exactTarget: true, validateRedirect: validateAttempt)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw CalDAVError.invalidResponse
@@ -672,16 +769,14 @@ actor CalDAVClient {
             case 403:
                 throw CalDAVError.forbidden
             case 429:
-                let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
-                    .flatMap { RetryPolicy.retryAfter($0, now: now()) }
-                throw CalDAVError.rateLimited(retryAfter: retryAfter)
+                throw CalDAVError.rateLimited(retryAfter: nil)
             case 412:
                 // Precondition Failed — the resource was modified on the server
                 let serverEtag = (httpResponse.value(forHTTPHeaderField: "ETag") ?? "")
                     .replacingOccurrences(of: "\"", with: "")
                 throw CalDAVError.conflict(etag: serverEtag.isEmpty ? nil : serverEtag)
             default:
-                throw Self.httpFailure(httpResponse, now: now())
+                throw CalDAVError.serverError(statusCode: httpResponse.statusCode)
             }
         }
     }
@@ -700,9 +795,10 @@ actor CalDAVClient {
         baseURL: String,
         taskPath: String,
         etag: String?,
-        credentials: Credentials
+        credentials: Credentials,
+        validateAttempt: (@Sendable () async throws -> Void)? = nil
     ) async throws {
-        let url = resolveURL(baseURL: baseURL, path: taskPath)
+        let url = try resolveURL(baseURL: baseURL, path: taskPath)
 
         guard let requestURL = URL(string: url) else {
             throw CalDAVError.invalidURL
@@ -717,27 +813,23 @@ actor CalDAVClient {
         }
 
         let budget = runBudget ?? BackgroundRunBudget.current
-        try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget] in
-            let (_, response) = try await Self.performRequest(request, session: session, budget: budget)
+        try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget, maxResponseBytes] in
+            try await validateAttempt?()
+            let (_, response) = try await Self.performRequest(request, session: session, budget: budget,
+                maxResponseBytes: maxResponseBytes, now: now, exactTarget: true, validateRedirect: validateAttempt)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw CalDAVError.invalidResponse
             }
 
             if httpResponse.statusCode == 429 {
-                let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
-                    .flatMap { RetryPolicy.retryAfter($0, now: now()) }
-                throw CalDAVError.rateLimited(retryAfter: retryAfter)
-            }
-            if (500...599).contains(httpResponse.statusCode) {
-                throw Self.httpFailure(httpResponse, now: now())
+                throw CalDAVError.rateLimited(retryAfter: nil)
             }
             try Self.checkDeleteStatus(httpResponse.statusCode)
         }
     }
 
-    /// Maps a DELETE's status code to success or a `CalDAVError`. 429 is handled
-    /// by the caller, which has the `Retry-After` header this does not.
+    /// Maps a DELETE's status code to success or a `CalDAVError`.
     ///
     /// 403 used to fall through to `serverError`, which the sync banner words as
     /// "the server is having problems" — wrong, and it hid that the user may not
@@ -788,87 +880,87 @@ actor CalDAVClient {
         """
     }
 
-    /// Writes a calendar's display name and colour back to the server with `PROPPATCH`.
-    ///
-    /// The client could previously only ever *read* `calendar-color`. Recolouring a list was
-    /// therefore a local-only change, and the discovery pass at the top of the next sync
-    /// replaced it with the server's copy — about two seconds later, since a data change
-    /// schedules one.
+    /// A metadata write is accepted only with successful results for both requested properties.
     func updateCalendarProperties(
         baseURL: String,
         calendarPath: String,
         name: String,
         colorHex: String,
-        credentials: Credentials
+        credentials: Credentials,
+        validateAttempt: @escaping @Sendable () async throws -> Void = {}
     ) async throws {
-        let url = resolveURL(baseURL: baseURL, path: calendarPath)
-        guard let requestURL = URL(string: url) else {
+        let url = try resolveURL(baseURL: baseURL, path: calendarPath)
+        guard let target = URL(string: url), CalDAVDiscovery.sameCollection(target, target) else {
             throw CalDAVError.invalidURL
         }
 
-        var request = URLRequest(url: requestURL)
+        var request = URLRequest(url: target)
         request.httpMethod = "PROPPATCH"
         request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
         request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.calendarPropertyPatchBody(name: name, colorHex: colorHex)
-            .data(using: .utf8)
+        request.httpBody = Data(Self.calendarPropertyPatchBody(name: name, colorHex: colorHex).utf8)
 
         let budget = runBudget ?? BackgroundRunBudget.current
-        try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget] in
-            let (_, response) = try await Self.performRequest(request, session: session, budget: budget)
+        try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil,
+            runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget, maxResponseBytes] in
+            try await validateAttempt()
+            let (data, response) = try await Self.performRequest(request, session: session,
+                budget: budget, maxResponseBytes: maxResponseBytes, now: now, exactTarget: true, validateRedirect: validateAttempt)
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw CalDAVError.invalidResponse
-            }
-
-            switch httpResponse.statusCode {
-            case 200, 204, 207:
-                return
-            case 401:
-                throw CalDAVError.unauthorized
-            case 403:
-                throw CalDAVError.forbidden
-            case 404:
-                throw CalDAVError.notFound
-            case 429:
-                let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
-                    .flatMap { RetryPolicy.retryAfter($0, now: now()) }
-                throw CalDAVError.rateLimited(retryAfter: retryAfter)
-            default:
-                throw Self.httpFailure(httpResponse, now: now())
+            guard let http = response as? HTTPURLResponse, let finalURL = http.url,
+                  CalDAVDiscovery.sameCollection(target, finalURL) else { throw CalDAVError.invalidResponse }
+            switch http.statusCode {
+            case 207:
+                let resources = try DAVXMLParser().parse(data: data, strictPropertyEvidence: true)
+                let resource = try Self.exactPropertyResponse(resources, responseURL: finalURL, target: target)
+                guard resource.propertyOccurrences == [
+                    "{DAV:}displayname": 1, "{http://apple.com/ns/ical/}calendar-color": 1
+                ],
+                let nameStatus = resource.propertyStatus("displayname"),
+                let colorStatus = resource.propertyStatus("calendar-color", namespace: "http://apple.com/ns/ical/") else {
+                    throw CalDAVError.invalidResponse
+                }
+                let statuses = [nameStatus, colorStatus]
+                if statuses.contains(403) || statuses.contains(424) { throw CalDAVError.forbidden }
+                guard statuses.allSatisfy({ (200..<300).contains($0) }) else { throw CalDAVError.invalidResponse }
+            case 200, 204: throw CalDAVError.invalidResponse
+            case 401: throw CalDAVError.unauthorized
+            case 403: throw CalDAVError.forbidden
+            case 404: throw CalDAVError.notFound
+            case 429: throw CalDAVError.rateLimited(retryAfter: nil)
+            default: throw CalDAVError.serverError(statusCode: http.statusCode)
             }
         }
     }
 
-    /// Creates a new VTODO calendar on the server using `MKCALENDAR`.
-    ///
-    /// - Parameters:
-    ///   - baseURL: The server base URL.
-    ///   - calendarHomePath: The calendar home URL path.
-    ///   - name: Display name for the new calendar.
-    ///   - color: Optional hex color (e.g., "#007AFF").
-    ///   - credentials: Authentication credentials.
-    /// - Returns: The href of the newly created calendar.
+    struct CalendarCreation: Sendable {
+        let href: String
+        let adopted: Bool
+    }
+
+    /// Creates or verifies the one target allocated to a persisted local list identity.
     func createCalendar(
         baseURL: String,
         calendarHomePath: String,
+        listID: String,
         name: String,
         color: String?,
-        credentials: Credentials
-    ) async throws -> String {
-        // Sanitize name into a URL-safe slug
-        let slug = name
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
-        let calendarPath = calendarHomePath.hasSuffix("/")
-            ? "\(calendarHomePath)\(slug)/"
-            : "\(calendarHomePath)/\(slug)/"
-        let url = resolveURL(baseURL: baseURL, path: calendarPath)
+        credentials: Credentials,
+        alreadyDiscovered: Bool = false,
+        validateAccount: @escaping @Sendable () async throws -> Void = {}
+    ) async throws -> CalendarCreation {
+        let home = try resolveURL(baseURL: baseURL, path: calendarHomePath)
+        guard let homeURL = URL(string: home) else { throw CalDAVError.invalidURL }
+        let target = try CalDAVDiscovery.creationTarget(listID: listID, homeURL: homeURL)
+        let marker = CalDAVDiscovery.creationMarker(listID: listID)
+        if alreadyDiscovered {
+            try await verifyCalendarCreation(target: target, marker: marker, credentials: credentials,
+                validateAttempt: validateAccount)
+            return CalendarCreation(href: target.absoluteString, adopted: true)
+        }
 
-        // Build MKCALENDAR XML body
         var colorProp = ""
-        if let color = color, !color.isEmpty {
+        if let color, !color.isEmpty {
             colorProp = """
                 <x:calendar-color xmlns:x="http://apple.com/ns/ical/">\(Self.xmlEscape(Self.calendarColorValue(color)))</x:calendar-color>
             """
@@ -876,54 +968,203 @@ actor CalDAVClient {
 
         let body = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+        <c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:n="https://nowthis.app/ns/caldav">
           <d:set>
             <d:prop>
               <d:displayname>\(Self.xmlEscape(name))</d:displayname>
               <c:supported-calendar-component-set>
                 <c:comp name="VTODO"/>
               </c:supported-calendar-component-set>
+              <n:creation-id>\(marker)</n:creation-id>
               \(colorProp)
             </d:prop>
           </d:set>
         </c:mkcalendar>
         """
 
-        guard let requestURL = URL(string: url) else {
-            throw CalDAVError.invalidURL
-        }
-
-        var request = URLRequest(url: requestURL)
+        var request = URLRequest(url: target)
         request.httpMethod = "MKCALENDAR"
         request.setValue(credentials.basicAuthHeader, forHTTPHeaderField: "Authorization")
         request.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body.data(using: .utf8)
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        request.httpBody = Data(body.utf8)
 
         let budget = runBudget ?? BackgroundRunBudget.current
-        return try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, calendarPath, now, budget] in
-            let (_, response) = try await Self.performRequest(request, session: session, budget: budget)
+        let created = try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil,
+            runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, budget, maxResponseBytes] in
+            try await validateAccount()
+            let (_, response) = try await Self.performRequest(request, session: session,
+                budget: budget, maxResponseBytes: maxResponseBytes, now: now, exactTarget: true, validateRedirect: validateAccount)
+            guard let http = response as? HTTPURLResponse, let finalURL = http.url,
+                  CalDAVDiscovery.sameCollection(target, finalURL) else { throw CalDAVError.invalidResponse }
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw CalDAVError.invalidResponse
+            switch http.statusCode {
+            case 201: return true
+            case 401: throw CalDAVError.unauthorized
+            case 403: throw CalDAVError.forbidden
+            case 405, 412: return false
+            case 429: throw CalDAVError.rateLimited(retryAfter: nil)
+            default: throw CalDAVError.serverError(statusCode: http.statusCode)
             }
+        }
+        if !created {
+            try await verifyCalendarCreation(target: target, marker: marker, credentials: credentials,
+                validateAttempt: validateAccount)
+        }
+        return CalendarCreation(href: target.absoluteString, adopted: !created)
+    }
 
-            switch httpResponse.statusCode {
-            case 201:
-                return calendarPath
-            case 401:
-                throw CalDAVError.unauthorized
-            case 403:
+    private func verifyCalendarCreation(target: URL, marker: String, credentials: Credentials,
+                                        validateAttempt: @escaping @Sendable () async throws -> Void) async throws {
+        let cutoff = ContinuousClock.now.advanced(by: .seconds(45))
+        let deadline = min(DAVDiscoveryContext.deadline ?? cutoff, cutoff)
+        let response = try await DAVDiscoveryContext.$deadline.withValue(deadline) {
+            try await discoveryProperties(at: target, properties: [
+                "<d:resourcetype/>",
+                "<c:supported-calendar-component-set xmlns:c=\"urn:ietf:params:xml:ns:caldav\"/>",
+                "<x:deleted-at xmlns:x=\"http://nextcloud.com/ns\"/>",
+                "<n:creation-id xmlns:n=\"https://nowthis.app/ns/caldav\"/>"
+            ], depth: "0", allowedOrigin: target, credentials: credentials, stage: .collections,
+                strictPropertyEvidence: true, validateAttempt: validateAttempt)
+        }
+        let resource = try Self.exactPropertyResponse(response.resources, responseURL: response.responseURL, target: target)
+        let deletedStatus = resource.uniquePropertyStatus("deleted-at", namespace: "http://nextcloud.com/ns")
+        guard resource.isCalendar, resource.isVTODOSupported, resource.deletedAt.isEmpty,
+              (resource.propertyStatus("deleted-at", namespace: "http://nextcloud.com/ns") == nil
+                  || deletedStatus == 404 || (200..<300).contains(deletedStatus ?? 0)),
+              (200..<300).contains(resource.uniquePropertyStatus("resourcetype") ?? 0),
+              (200..<300).contains(resource.uniquePropertyStatus("supported-calendar-component-set",
+                  namespace: "urn:ietf:params:xml:ns:caldav") ?? 0),
+              (200..<300).contains(resource.uniquePropertyStatus("creation-id", namespace: "https://nowthis.app/ns/caldav") ?? 0),
+              resource.creationID == marker else { throw CalDAVDiscovery.ambiguousCollection }
+    }
+
+    private static func exactPropertyResponse(_ resources: [DAVXMLParser.DAVResource],
+        responseURL: URL, target: URL) throws -> DAVXMLParser.DAVResource {
+        guard CalDAVDiscovery.sameCollection(target, responseURL), resources.count == 1,
+              let resource = resources.first, resource.hrefOccurrences == 1, !resource.href.isEmpty,
+              resource.responseStatusCode == nil,
+              URL(string: resource.href, encodingInvalidCharacters: false) != nil,
+              let href = URL(string: resource.href, relativeTo: responseURL)?.absoluteURL,
+              CalDAVDiscovery.sameCollection(target, href) else { throw CalDAVError.invalidResponse }
+        return resource
+    }
+
+    /// Creates only the caller's retained target, then independently proves its binding.
+    func ensureEventCollection(target: URL, marker: String, create: Bool, credentials: Credentials,
+                               validate: @escaping CalendarRequestValidation) async throws -> URL {
+        if create {
+            guard var request = Self.makeDAVRequest(method: "MKCALENDAR", url: target.absoluteString,
+                body: Self.eventCollectionCreationBodyV1(marker: marker), credentials: credentials,
+                depth: nil) else { throw CalDAVError.invalidURL }
+            request.setValue("*", forHTTPHeaderField: "If-None-Match")
+            do {
+                let (_, response) = try await calendarEventRequest(request, validate: validate)
+                switch response.statusCode {
+                case 201, 405, 409, 412, 500...506, 508...599: break
+                default: throw Self.calendarEventHTTPError(response.statusCode)
+                }
+            } catch let error as URLError where error.code == .networkConnectionLost || error.code == .timedOut {
+                // The server may have applied the conditional create before the response was lost.
+            }
+        }
+
+        let response = try await discoveryProperties(at: target, properties: [
+            "<d:resourcetype/>", "<c:supported-calendar-component-set xmlns:c=\"urn:ietf:params:xml:ns:caldav\"/>",
+            "<n:creation-id xmlns:n=\"https://nowthis.app/ns/caldav\"/>",
+            "<x:deleted-at xmlns:x=\"http://nextcloud.com/ns\"/>", "<d:current-user-privilege-set/>"
+        ], depth: "0", allowedOrigin: target, credentials: credentials, stage: .collections,
+           strictPropertyEvidence: true, singleAttempt: true, requireExactResponse: true, validateAttempt: validate)
+        let resource = try Self.exactPropertyResponse(response.resources, responseURL: response.responseURL, target: target)
+        let trashNamespace = "http://nextcloud.com/ns"
+        let markerNamespace = "https://nowthis.app/ns/caldav"
+        let deletedStatus = resource.uniquePropertyStatus("deleted-at", namespace: trashNamespace)
+        let markerStatus = resource.uniquePropertyStatus("creation-id", namespace: markerNamespace)
+        let components = resource.uniquePropertyStatus("supported-calendar-component-set", namespace: "urn:ietf:params:xml:ns:caldav")
+        let markerSucceeded = (200..<300).contains(markerStatus ?? 0)
+        let markerMatches = !marker.isEmpty && resource.creationID.utf8.elementsEqual(marker.utf8)
+        let hasResourceType = (200..<300).contains(resource.uniquePropertyStatus("resourcetype") ?? 0)
+        if markerSucceeded && !resource.creationID.isEmpty && !markerMatches {
+            throw CalendarCollectionProofError.contradictoryClaim
+        }
+        if hasResourceType && (!resource.isCalendar || !resource.deletedAt.isEmpty || Self.isTrashbinHref(target.path)
+            || markerStatus == 404 || resource.propertyStatus("creation-id", namespace: markerNamespace) == nil
+            || (markerSucceeded && !markerMatches)
+            || ((200..<300).contains(components ?? 0) && resource.veventComponentCount == 0)) {
+            throw CalendarCollectionProofError.contradictoryClaim
+        }
+        guard hasResourceType, resource.isCalendar, resource.veventComponentCount == 1, resource.deletedAt.isEmpty,
+              resource.propertyStatus("deleted-at", namespace: trashNamespace) == nil
+                  || deletedStatus == 404 || (200..<300).contains(deletedStatus ?? 0),
+              (200..<300).contains(components ?? 0), markerSucceeded, markerMatches else {
+            throw CalDAVDiscovery.ambiguousCollection
+        }
+        if resource.propertyStatus("current-user-privilege-set") != nil {
+            let status = resource.uniquePropertyStatus("current-user-privilege-set")
+            guard status == 404 || ((200..<300).contains(status ?? 0)
+                && !resource.privileges.isDisjoint(with: ["all", "write", "write-content"])) else {
                 throw CalDAVError.forbidden
-            case 429:
-                let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
-                    .flatMap { RetryPolicy.retryAfter($0, now: now()) }
-                throw CalDAVError.rateLimited(retryAfter: retryAfter)
-            case 405:
-                // Calendar already exists — return the path
-                return calendarPath
-            default:
-                throw Self.httpFailure(httpResponse, now: now())
             }
+        }
+        try await validate()
+        return target
+    }
+
+    /// Immutable wire template for the v1 destination envelope. A future template needs a new version.
+    private nonisolated static func eventCollectionCreationBodyV1(marker: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:n="https://nowthis.app/ns/caldav">
+          <d:set><d:prop>
+            <d:displayname>NowThis</d:displayname>
+            <c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set>
+            <n:creation-id>\(xmlEscape(marker))</n:creation-id>
+          </d:prop></d:set>
+        </c:mkcalendar>
+        """
+    }
+
+    /// One bounded attempt. A caller with a durable intent decides whether an uncertain response can be recovered.
+    func calendarEventRequest(_ request: URLRequest, responseLimit: Int? = nil, validate: @escaping CalendarRequestValidation)
+        async throws -> (Data, HTTPURLResponse) {
+        guard let target = request.url, NextcloudServerAddress.sameOrigin(target, target) else {
+            throw CalDAVError.invalidURL
+        }
+        let budget = runBudget ?? BackgroundRunBudget.current
+        let policy = RetryPolicy(maxAttempts: 1, baseDelay: 0)
+        let limit = min(maxResponseBytes, responseLimit ?? maxResponseBytes)
+        do {
+            return try await withRetry(policy: policy, deadline: budget == nil ? retryDeadline : nil,
+                runBudget: budget, now: now) { [session, now] in
+                try await validate()
+                let (data, response) = try await Self.performRequest(request, session: session, budget: budget,
+                    maxResponseBytes: limit, now: now, exactTarget: true, allowRedirects: false, discoveryOrigin: target)
+                guard let http = response as? HTTPURLResponse, let url = http.url,
+                      Self.isPinnedTarget(url, of: target) else { throw CalDAVError.invalidResponse }
+                try Self.validateCalendarResponseLength(data, response: http)
+                return (data, http)
+            }
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        }
+    }
+
+    private nonisolated static func validateCalendarResponseLength(_ body: Data, response: HTTPURLResponse) throws {
+        // Bodyless statuses carry no comparable representation, and URLSession may deliver decoded bytes.
+        guard response.statusCode != 204, response.statusCode != 304, response.expectedContentLength >= 0 else { return }
+        if let coding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespaces),
+           !coding.isEmpty, coding.caseInsensitiveCompare("identity") != .orderedSame { return }
+        guard response.expectedContentLength == Int64(body.count) else { throw CalDAVError.invalidResponse }
+    }
+
+    nonisolated static func calendarEventHTTPError(_ status: Int) -> CalDAVError {
+        switch status {
+        case 401: .unauthorized
+        case 403: .forbidden
+        case 404: .notFound
+        case 412: .conflict(etag: nil)
+        case 429: .rateLimited(retryAfter: nil)
+        default: .serverError(statusCode: status)
         }
     }
 
@@ -973,7 +1214,9 @@ actor CalDAVClient {
     static func makeRedirectRequest(
         from originalRequest: URLRequest,
         proposed request: URLRequest
-    ) -> URLRequest {
+    ) -> URLRequest? {
+        guard let source = originalRequest.url, let target = request.url,
+              sameOrigin(source, target), target.user == nil, target.password == nil else { return nil }
         var redirectRequest = request
         redirectRequest.httpMethod = originalRequest.httpMethod
         redirectRequest.httpBody = originalRequest.httpBody
@@ -983,19 +1226,12 @@ actor CalDAVClient {
         redirectRequest.cachePolicy = originalRequest.cachePolicy
         redirectRequest.timeoutInterval = originalRequest.timeoutInterval
 
-        // Only forward credentials to same-origin redirects to prevent leaking
-        let sameOrigin = originalRequest.url?.host == request.url?.host
-            && originalRequest.url?.scheme == request.url?.scheme
-            && originalRequest.url?.port == request.url?.port
-
-        if sameOrigin {
-            if let auth = originalRequest.value(forHTTPHeaderField: "Authorization") {
-                redirectRequest.setValue(auth, forHTTPHeaderField: "Authorization")
-            }
+        if let auth = originalRequest.value(forHTTPHeaderField: "Authorization") {
+            redirectRequest.setValue(auth, forHTTPHeaderField: "Authorization")
         }
 
         // Non-sensitive headers — always preserve for CalDAV compatibility
-        for header in ["Content-Type", "Depth"] {
+        for header in ["Content-Type", "Depth", "If-Match", "If-None-Match"] {
             if let value = originalRequest.value(forHTTPHeaderField: header) {
                 redirectRequest.setValue(value, forHTTPHeaderField: header)
             }
@@ -1011,7 +1247,8 @@ actor CalDAVClient {
         body: String?,
         credentials: Credentials,
         depth: String?,
-        recognizesInvalidSyncToken: Bool = false
+        recognizesInvalidSyncToken: Bool = false,
+        exactTarget: Bool = false
     ) async throws -> (Data, URLResponse) {
         guard let request = Self.makeDAVRequest(
             method: method,
@@ -1027,9 +1264,9 @@ actor CalDAVClient {
         defer { PerformanceTrace.end("DAVRequest", interval) }
         let budget = runBudget ?? BackgroundRunBudget.current
         do {
-            return try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, method, maxResponseBytes, budget] in
+            return try await withRetry(policy: retryPolicy, deadline: budget == nil ? retryDeadline : nil, runBudget: budget, now: now, jitter: jitter, sleep: sleep) { [request, session, now, maxResponseBytes, budget] in
                 let (data, response) = try await Self.performRequest(request, session: session,
-                    budget: budget, maxResponseBytes: method == "REPORT" || method == "GET" ? maxResponseBytes : nil)
+                    budget: budget, maxResponseBytes: maxResponseBytes, now: now, exactTarget: exactTarget)
 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw CalDAVError.invalidResponse
@@ -1048,11 +1285,9 @@ actor CalDAVClient {
                 case 404:
                     throw CalDAVError.notFound
                 case 429:
-                    let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
-                        .flatMap { RetryPolicy.retryAfter($0, now: now()) }
-                    throw CalDAVError.rateLimited(retryAfter: retryAfter)
+                    throw CalDAVError.rateLimited(retryAfter: nil)
                 default:
-                    throw Self.httpFailure(httpResponse, now: now())
+                    throw CalDAVError.serverError(statusCode: httpResponse.statusCode)
                 }
             }
         } catch let error as BackgroundBudgetExhausted {
@@ -1081,30 +1316,86 @@ actor CalDAVClient {
     /// The request and absolute cutoff are immutable for this attempt, including
     /// redirects. URLSession's idle allowance alone cannot stop a trickling body.
     private static func performRequest(_ original: URLRequest, session: URLSession,
-        budget: BackgroundRunBudget?, maxResponseBytes: Int? = nil) async throws -> (Data, URLResponse) {
+        budget: BackgroundRunBudget?, maxResponseBytes: Int, now: @escaping @Sendable () -> Date,
+        exactTarget: Bool = false, allowRedirects: Bool = true, discoveryOrigin: URL? = nil,
+        validateRedirect: (@Sendable () async throws -> Void)? = nil) async throws -> (Data, URLResponse) {
         try BackgroundBudgetExhausted.checkAdmission(budget)
         var adjusted = original
         if let budget {
             adjusted.timeoutInterval = min(adjusted.timeoutInterval, BackgroundBudgetExhausted.remainingSeconds(budget))
         }
         let request = adjusted
-        let deadline = budget?.remoteCutoff
-        return try await DeadlineRequestExecutor.perform(deadline: deadline) {
-            if let maxResponseBytes {
-                return try await DAVResponseLimit(maxBytes: maxResponseBytes).data(
-                    for: request, configuration: session.configuration, session: session
-                ) { proposed in Self.makeRedirectRequest(from: request, proposed: proposed) }
+        let deadline = [budget?.remoteCutoff, DAVDiscoveryContext.deadline].compactMap { $0 }.min()
+        let redirectValidator: (@Sendable () async throws -> Void)?
+        if let validateRedirect {
+            // URLSession delegate callbacks do not inherit the operation's task-local budget.
+            let phase = BackgroundRunBudget.phase
+            redirectValidator = {
+                try BackgroundBudgetExhausted.checkAdmission(budget)
+                try await BackgroundRunBudget.$current.withValue(budget) {
+                    try await BackgroundRunBudget.$phase.withValue(phase) {
+                        try await validateRedirect()
+                    }
+                }
+                try BackgroundBudgetExhausted.checkAdmission(budget)
             }
-            return try await session.data(for: request)
+        } else {
+            redirectValidator = nil
         }
+        let admission = ServerRetryAdmission.current
+        let receipt = RetryAfterReceipt()
+        let collector = DAVResponseLimit(maxBytes: maxResponseBytes) { response in
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 429 || ((500...599).contains(http.statusCode) && http.statusCode != 507),
+                  let header = http.value(forHTTPHeaderField: "Retry-After"),
+                  let target = http.url, let source = request.url,
+                  request.value(forHTTPHeaderField: "Authorization") != nil,
+                  Self.sameOrigin(source, target), target.user == nil, target.password == nil,
+                  !exactTarget || Self.isPinnedTarget(target, of: source),
+                  discoveryOrigin.map({ NextcloudServerAddress.sameOrigin(target, $0) }) ?? true else { return }
+            let receivedAt = now()
+            guard let wait = RetryPolicy.retryAfter(header, now: receivedAt) else { return }
+            let retryDeadline = wait > 0 ? receivedAt.addingTimeInterval(wait) : nil
+            let error = HTTPRetryError(statusCode: http.statusCode, retryAfter: wait, retryDeadline: retryDeadline)
+            if receipt.store(error), let retryDeadline {
+                admission?.retain(RetryDeferredError(deadline: retryDeadline, httpStatusCode: http.statusCode))
+            }
+        }
+        let result = try await DeadlineRequestExecutor.perform(deadline: deadline) {
+            try await collector.data(
+                for: request, configuration: session.configuration, session: session, validateRedirect: redirectValidator
+            ) { proposed in
+                guard allowRedirects else { return nil }
+                if exactTarget {
+                    guard let source = request.url, let destination = proposed.url,
+                          Self.isPinnedTarget(destination, of: source) else { return nil }
+                }
+                return Self.makeRedirectRequest(from: request, proposed: proposed)
+            }
+        }
+        // A complete retry response uses the same absolute deadline already recorded
+        // at receipt. Body, cancellation and cutoff failures propagate separately.
+        if let error = receipt.error { throw error }
+        return result
     }
 
-    private static func httpFailure(_ response: HTTPURLResponse, now: Date) -> any Error {
-        if (500...599).contains(response.statusCode), response.statusCode != 507,
-           let delay = RetryPolicy.retryAfter(response.value(forHTTPHeaderField: "Retry-After"), now: now) {
-            return HTTPRetryError(statusCode: response.statusCode, retryAfter: delay)
+    private static func isPinnedTarget(_ candidate: URL, of request: URL) -> Bool {
+        CalDAVDiscovery.sameCollection(request, candidate) && request.query == candidate.query && candidate.fragment == nil
+    }
+
+    private final class RetryAfterReceipt: @unchecked Sendable {
+        private let lock = NSLock()
+        private var received: HTTPRetryError?
+
+        var error: HTTPRetryError? { lock.withLock { received } }
+
+        func store(_ error: HTTPRetryError) -> Bool {
+            lock.withLock {
+                guard received == nil else { return false }
+                received = error
+                return true
+            }
         }
-        return CalDAVError.serverError(statusCode: response.statusCode)
     }
 
     /// Generates a PROPFIND XML body.
@@ -1120,23 +1411,36 @@ actor CalDAVClient {
         """
     }
 
+    /// Construct only Nextcloud's fallback endpoints beneath its installation path.
+    /// Server-returned hrefs continue to resolve as ordinary DAV URLs, so an
+    /// already-prefixed href never acquires the installation path twice.
+    private func nextcloudEndpoint(baseURL: String, suffix: String) throws -> String {
+        guard let base = URLComponents(string: baseURL), base.query == nil, base.fragment == nil else {
+            throw CalDAVError.invalidURL
+        }
+        var prefix = base.percentEncodedPath
+        while prefix.hasSuffix("/") { prefix.removeLast() }
+        return prefix + suffix
+    }
+
     /// Resolves a relative path against a base URL.
-    private func resolveURL(baseURL: String, path: String) -> String {
-        if path.hasPrefix("http://") || path.hasPrefix("https://") {
-            return path
+    private func resolveURL(baseURL: String, path: String) throws -> String {
+        guard let base = URL(string: baseURL),
+              let target = URL(string: path, relativeTo: base)?.absoluteURL,
+              Self.sameOrigin(base, target), target.user == nil, target.password == nil else {
+            throw CalDAVError.invalidURL
         }
+        return target.absoluteString
+    }
 
-        // Strip trailing slashes from baseURL to prevent double-slash paths
-        var cleanBase = baseURL
-        while cleanBase.hasSuffix("/") {
-            cleanBase = String(cleanBase.dropLast())
+    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        func port(_ url: URL) -> Int? {
+            url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
         }
-
-        guard let base = URL(string: cleanBase) else { return cleanBase + path }
-        let scheme = base.scheme ?? "https"
-        let host = base.host ?? ""
-        let port = base.port.map { ":\($0)" } ?? ""
-        return "\(scheme)://\(host)\(port)\(path)"
+        guard let scheme = lhs.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = lhs.host?.lowercased(), !host.isEmpty else { return false }
+        return scheme == rhs.scheme?.lowercased() && host == rhs.host?.lowercased()
+            && port(lhs) == port(rhs)
     }
 
     /// Escapes special XML characters for safe interpolation into XML bodies.
@@ -1156,6 +1460,10 @@ actor CalDAVClient {
 /// original method, body, and headers (especially Authorization), which is required
 /// for CalDAV operations.
 private final class CalDAVClientRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let redirectBudget = DAVRedirectBudget()
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        redirectBudget.complete(taskID: task.taskIdentifier)
+    }
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -1168,6 +1476,7 @@ private final class CalDAVClientRedirectDelegate: NSObject, URLSessionTaskDelega
             return
         }
 
+        guard redirectBudget.allow(taskID: task.taskIdentifier) else { completionHandler(nil); return }
         completionHandler(
             CalDAVClient.makeRedirectRequest(from: originalRequest, proposed: request)
         )

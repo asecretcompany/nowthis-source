@@ -4,9 +4,14 @@ import Foundation
 final class ScriptedDAVProtocol: URLProtocol, @unchecked Sendable {
     struct RecordedRequest: Sendable {
         let method: String
+        let url: URL
         let path: String
         let body: Data
         let ifMatch: String?
+        let ifNoneMatch: String?
+        let depth: String?
+        let basicAuthUsername: String?
+        let authorizationLabel: String?
         var bodyBytes: Int { body.count }
     }
     struct Response: Sendable {
@@ -14,6 +19,11 @@ final class ScriptedDAVProtocol: URLProtocol, @unchecked Sendable {
         var body: String
         var headers: [String: String] = [:]
         var gate: Gate? = nil
+        var responseURL: URL? = nil
+        var errorCode: URLError.Code? = nil
+        var redirectURL: URL? = nil
+        var bodyGate: Gate? = nil
+        var bodyForRequest: (@Sendable (RecordedRequest) -> String)? = nil
     }
     final class Gate: @unchecked Sendable {
         private let lock = NSLock()
@@ -35,13 +45,20 @@ final class ScriptedDAVProtocol: URLProtocol, @unchecked Sendable {
     private struct State {
         var responses: [String: [Response]] = [:]
         var requests: [String: [RecordedRequest]] = [:]
+        var authorizationLabels: [String: [String: String]] = [:]
     }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var state = State()
     private var operation: Task<Void, Never>?
 
-    static func install(host: String, responses: [Response]) -> URLSessionConfiguration {
-        lock.lock(); state.responses[host] = responses; state.requests[host] = []; lock.unlock()
+    static func install(
+        host: String, responses: [Response], authorizationLabels: [String: String] = [:]
+    ) -> URLSessionConfiguration {
+        lock.lock()
+        state.responses[host] = responses
+        state.requests[host] = []
+        state.authorizationLabels[host] = authorizationLabels
+        lock.unlock()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [Self.self]
         configuration.httpAdditionalHeaders = ["X-Fixture-Host": host]
@@ -71,24 +88,58 @@ final class ScriptedDAVProtocol: URLProtocol, @unchecked Sendable {
             body = bytes
         } else { body = Data() }
         Self.lock.lock()
-        Self.state.requests[host, default: []].append(.init(
-            method: request.httpMethod ?? "", path: request.url!.path,
-            body: body, ifMatch: request.value(forHTTPHeaderField: "If-Match")))
+        let authorizationLabel = request.value(forHTTPHeaderField: "Authorization").flatMap {
+            Self.state.authorizationLabels[host]?[$0]
+        }
+        let recorded = RecordedRequest(
+            method: request.httpMethod ?? "", url: request.url!, path: request.url!.path,
+            body: body, ifMatch: request.value(forHTTPHeaderField: "If-Match"),
+            ifNoneMatch: request.value(forHTTPHeaderField: "If-None-Match"),
+            depth: request.value(forHTTPHeaderField: "Depth"),
+            basicAuthUsername: Self.basicAuthUsername(request), authorizationLabel: authorizationLabel)
+        Self.state.requests[host, default: []].append(recorded)
         let response = Self.state.responses[host]?.isEmpty == false
             ? Self.state.responses[host]!.removeFirst() : nil
         Self.lock.unlock()
         guard let response else {
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable)); return
         }
-        operation = Task {
+        operation = Task { @Sendable [self] in
             if let gate = response.gate { await gate.wait() }
             guard !Task.isCancelled else { return }
-            let http = HTTPURLResponse(url: request.url!, statusCode: response.status,
+            if let code = response.errorCode {
+                client?.urlProtocol(self, didFailWithError: URLError(code)); return
+            }
+            let http = HTTPURLResponse(url: response.responseURL ?? request.url!, statusCode: response.status,
                                        httpVersion: "HTTP/1.1", headerFields: response.headers)!
+            if let destination = response.redirectURL {
+                client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: destination), redirectResponse: http)
+                client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocolDidFinishLoading(self)
+                return
+            }
             client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data(response.body.utf8))
+            let body = Data((response.bodyForRequest?(recorded) ?? response.body).utf8)
+            if let bodyGate = response.bodyGate {
+                let split = body.count / 2
+                client?.urlProtocol(self, didLoad: Data(body.prefix(split)))
+                await bodyGate.wait()
+                guard !Task.isCancelled else { return }
+                client?.urlProtocol(self, didLoad: Data(body.dropFirst(split)))
+            } else {
+                client?.urlProtocol(self, didLoad: body)
+            }
             client?.urlProtocolDidFinishLoading(self)
         }
     }
+
+    private static func basicAuthUsername(_ request: URLRequest) -> String? {
+        guard let header = request.value(forHTTPHeaderField: "Authorization"), header.hasPrefix("Basic "),
+              let encoded = Data(base64Encoded: String(header.dropFirst(6))),
+              let credentials = String(data: encoded, encoding: .utf8),
+              let separator = credentials.firstIndex(of: ":") else { return nil }
+        return String(credentials[..<separator])
+    }
+
     override func stopLoading() { operation?.cancel() }
 }

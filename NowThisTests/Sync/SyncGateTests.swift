@@ -83,7 +83,7 @@ struct SyncGateTests {
             try? await engine.performFullSync(
                 accountID: "test-account",
                 serverBaseURL: "https://invalid.example.com",
-                credentials: CalDAVClient.Credentials(username: "x", password: "x"),
+                credentials: CalDAVClient.Credentials(username: "testuser", password: "x"),
                 modelContainer: container
             )
         }
@@ -95,7 +95,7 @@ struct SyncGateTests {
         try? await engine.performBackgroundSync(
             accountID: "test-account",
             serverBaseURL: "https://invalid.example.com",
-            credentials: CalDAVClient.Credentials(username: "x", password: "x"),
+            credentials: CalDAVClient.Credentials(username: "testuser", password: "x"),
             modelContainer: container
         )
 

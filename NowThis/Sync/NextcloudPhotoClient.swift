@@ -485,6 +485,8 @@ actor NextcloudPhotoClient {
 
     private func request(_ url: URL, method: String, body: Data? = nil, access: PhotoServerAccess, headers: [String: String] = [:], accepted: Set<Int>, original: Bool = false) async throws -> Data {
         try Task.checkCancellation()
+        try await ServerRetryAdmission.current?.check()
+        try Task.checkCancellation()
         let remaining = runDeadline?.timeIntervalSinceNow ?? 60
         guard remaining > 0 else { throw CancellationError() }
         let server = try Server(access)

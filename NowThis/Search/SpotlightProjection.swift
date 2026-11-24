@@ -1,6 +1,28 @@
 import Foundation
 import CryptoKit
 
+/// Notes are private unless the user explicitly opts in. An absent upgrade
+/// preference has the same meaning as an explicit opt-out.
+struct SpotlightPreferences: Sendable {
+    static let notesKey = "spotlightIncludeNotes"
+    static let didChange = Notification.Name("NowThis.SpotlightNotesPreferenceChanged")
+    let suiteName: String?
+
+    init(suiteName: String? = nil) { self.suiteName = suiteName }
+
+    private var defaults: UserDefaults {
+        suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
+    }
+
+    var includesNotes: Bool { defaults.bool(forKey: Self.notesKey) }
+
+    func setIncludesNotes(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.notesKey)
+        NotificationCenter.default.post(name: Self.didChange, object: nil,
+                                        userInfo: ["suite": suiteName ?? "standard"])
+    }
+}
+
 /// Immutable input captured from a context owner before Spotlight work suspends.
 struct SpotlightTaskInput: Sendable {
     let id: String
@@ -73,19 +95,34 @@ struct SpotlightIndexDelta: Sendable, Equatable {
 }
 
 enum SpotlightProjection {
+    /// Apply at every external-write boundary too: pending inputs may have been
+    /// captured before opt-out, and replayed fingerprints may describe old notes.
+    static func applyingNotesPolicy(to snapshot: SpotlightTaskSnapshot, includeNotes: Bool) -> SpotlightTaskSnapshot {
+        guard !includeNotes, snapshot.contentDescription != nil else { return snapshot }
+        return SpotlightTaskSnapshot(id: snapshot.id, title: snapshot.title,
+            containerTitle: snapshot.containerTitle, keywords: snapshot.keywords,
+            priorityDescription: snapshot.priorityDescription, dueDate: snapshot.dueDate,
+            completionDate: snapshot.completionDate)
+    }
+
     static func fingerprint(_ snapshot: SpotlightTaskSnapshot) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: try encoder.encode(snapshot))
+        let digest = SHA256.hash(data: try encoder.encode(snapshot))
             .map { String(format: "%02x", $0) }.joined()
+        if #available(iOS 27.0, *) {
+            // Refresh existing items once to add the entity link to their indexed payload.
+            return "task-entity-v1:\(digest)"
+        }
+        return digest
     }
 
-    static func snapshot(from input: SpotlightTaskInput) -> SpotlightTaskSnapshot? {
+    static func snapshot(from input: SpotlightTaskInput, includeNotes: Bool = SpotlightPreferences().includesNotes) -> SpotlightTaskSnapshot? {
         guard !input.isDeleted else { return nil }
         return SpotlightTaskSnapshot(
             id: input.id,
             title: input.title,
-            contentDescription: input.contentDescription,
+            contentDescription: includeNotes ? input.contentDescription : nil,
             containerTitle: input.containerTitle,
             keywords: input.keywords,
             priorityDescription: input.priorityDescription,

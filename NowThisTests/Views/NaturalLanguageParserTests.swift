@@ -81,9 +81,8 @@ final class NaturalLanguageParserTests: XCTestCase {
         XCTAssertEqual(result.cleanTitle, "Call dentist")
 
         let expected = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-        let expectedDay = Calendar.current.startOfDay(for: expected)
-        let resultDay = Calendar.current.startOfDay(for: result.dueDate!)
-        XCTAssertEqual(resultDay, expectedDay)
+        XCTAssertEqual(result.dueDate, DueDateHelper.dateOnlyValue(for: expected))
+        XCTAssertFalse(result.dueHasTime)
     }
 
     func testParseToday() {
@@ -91,9 +90,8 @@ final class NaturalLanguageParserTests: XCTestCase {
         XCTAssertNotNil(result.dueDate)
         XCTAssertEqual(result.cleanTitle, "Submit report")
 
-        let expectedDay = Calendar.current.startOfDay(for: Date())
-        let resultDay = Calendar.current.startOfDay(for: result.dueDate!)
-        XCTAssertEqual(resultDay, expectedDay)
+        XCTAssertEqual(result.dueDate, DueDateHelper.dateOnlyValue(for: Date()))
+        XCTAssertFalse(result.dueHasTime)
     }
 
     func testParseInNDays() {
@@ -102,9 +100,98 @@ final class NaturalLanguageParserTests: XCTestCase {
         XCTAssertEqual(result.cleanTitle, "Review code")
 
         let expected = Calendar.current.date(byAdding: .day, value: 3, to: Date())!
-        let expectedDay = Calendar.current.startOfDay(for: expected)
-        let resultDay = Calendar.current.startOfDay(for: result.dueDate!)
-        XCTAssertEqual(resultDay, expectedDay)
+        XCTAssertEqual(result.dueDate, DueDateHelper.dateOnlyValue(for: expected))
+        XCTAssertFalse(result.dueHasTime)
+    }
+
+    func testKeywordsAndClocksAroundDaylightSavingTransitions() throws {
+        let schedules = [
+            ("America/Los_Angeles", "03-07", "03-08", "03-10"),
+            ("America/Los_Angeles", "10-31", "11-01", "11-03"),
+            ("Europe/Berlin", "03-28", "03-29", "03-31"),
+            ("Europe/Berlin", "10-24", "10-25", "10-27"),
+            ("Australia/Sydney", "04-04", "04-05", "04-07"),
+            ("Australia/Sydney", "10-03", "10-04", "10-06"),
+            ("UTC", "03-07", "03-08", "03-10"),
+        ]
+        let iso = ISO8601DateFormatter()
+
+        for (zone, saturday, sunday, tuesday) in schedules {
+            var local = Calendar(identifier: .gregorian)
+            local.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+            let saturdayNow = try XCTUnwrap(iso.date(from: "2026-\(saturday)T12:00:00Z"))
+            let sundayNow = try XCTUnwrap(iso.date(from: "2026-\(sunday)T12:00:00Z"))
+            let cases = [
+                ("today", saturdayNow, saturday),
+                ("tomorrow", saturdayNow, sunday),
+                ("in 3 days", saturdayNow, tuesday),
+                ("next sunday", saturdayNow, sunday),
+                ("today", sundayNow, sunday),
+                ("", sundayNow, sunday),
+            ]
+            for (keyword, now, target) in cases {
+                let context = "\(zone), \(now), \(keyword)"
+                let midnightUTC = try XCTUnwrap(iso.date(from: "2026-\(target)T00:00:00Z"))
+                if !keyword.isEmpty {
+                    let bare = NaturalLanguageParser.parse("Buy milk \(keyword)", now: now, calendar: local)
+                    XCTAssertEqual(bare.cleanTitle, "Buy milk", context)
+                    XCTAssertFalse(bare.dueHasTime, context)
+                    XCTAssertEqual(bare.dueDate, midnightUTC, context)
+                }
+
+                let timed = NaturalLanguageParser.parse("Buy milk \(keyword) at 5:30pm", now: now, calendar: local)
+                XCTAssertEqual(timed.cleanTitle, "Buy milk", context)
+                XCTAssertTrue(timed.dueHasTime, context)
+                let due = try XCTUnwrap(timed.dueDate, context)
+                let monthDay = target.split(separator: "-")
+                let expected = local.date(from: DateComponents(
+                    year: 2026, month: Int(monthDay[0]), day: Int(monthDay[1]),
+                    hour: 17, minute: 30, second: 0
+                ))
+                XCTAssertEqual(due, expected, context)
+            }
+        }
+    }
+
+    func testRegionCalendarKeepsGregorianDateOnlyStorage() throws {
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = try XCTUnwrap(TimeZone(identifier: "Australia/Sydney"))
+        let iso = ISO8601DateFormatter()
+        let now = try XCTUnwrap(iso.date(from: "2026-10-03T12:00:00Z"))
+        let expected = try XCTUnwrap(iso.date(from: "2026-10-04T00:00:00Z"))
+
+        let result = NaturalLanguageParser.parse("Buy milk tomorrow", now: now, calendar: buddhist)
+
+        XCTAssertFalse(result.dueHasTime)
+        XCTAssertEqual(result.dueDate, expected)
+    }
+
+    func testDetectorFallbackForExplicitCalendarDate() throws {
+        // A named month with a year goes through Foundation's date detector.
+        // This expression doesn't require a relative clock or an injected calendar.
+        let result = NaturalLanguageParser.parse("Buy milk March 8, 2026")
+        let expected = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-03-08T00:00:00Z"))
+
+        XCTAssertEqual(result.cleanTitle, "Buy milk")
+        XCTAssertFalse(result.dueHasTime)
+        XCTAssertEqual(result.dueDate, expected)
+    }
+
+    func testDetectorFallbackCombinesExplicitClockOnDetectedDay() throws {
+        let local = DueDateHelper.localCalendar()
+        let expected = try XCTUnwrap(local.date(from: DateComponents(
+            year: 2026, month: 3, day: 8, hour: 17, minute: 30
+        )))
+        var injected = Calendar(identifier: .gregorian)
+        injected.timeZone = try XCTUnwrap(TimeZone(identifier: "Pacific/Kiritimati"))
+
+        let result = NaturalLanguageParser.parse(
+            "Buy milk March 8, 2026 at 5:30pm", now: .distantPast, calendar: injected
+        )
+
+        XCTAssertEqual(result.cleanTitle, "Buy milk")
+        XCTAssertTrue(result.dueHasTime)
+        XCTAssertEqual(result.dueDate, expected)
     }
 
     func testNoDate() {

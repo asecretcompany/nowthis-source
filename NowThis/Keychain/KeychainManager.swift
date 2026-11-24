@@ -39,21 +39,34 @@ actor KeychainManager {
     // MARK: - Properties
 
     private let service: String
+    private let operations: Operations
+
+    struct Operations: Sendable {
+        var add: @Sendable (CFDictionary) -> OSStatus = { SecItemAdd($0, nil) }
+        var update: @Sendable (CFDictionary, CFDictionary) -> OSStatus = { SecItemUpdate($0, $1) }
+        var copyMatching: @Sendable (CFDictionary) -> (OSStatus, AnyObject?) = { query in
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query, &result)
+            return (status, result)
+        }
+        var delete: @Sendable (CFDictionary) -> OSStatus = { SecItemDelete($0) }
+    }
 
     // MARK: - Initializer
 
     /// Creates a KeychainManager scoped to the given service identifier.
     /// - Parameter service: The Keychain service name. Defaults to the app's CalDAV service.
-    init(service: String = AppConstants.keychainService) {
+    init(service: String = AppConstants.keychainService, operations: Operations = Operations()) {
         self.service = service
+        self.operations = operations
     }
 
     // MARK: - Public API
 
     /// Saves or updates a password for the given account identifier.
     ///
-    /// Uses delete-then-add to handle the `errSecDuplicateItem` case cleanly,
-    /// avoiding the need to distinguish between insert and update operations.
+    /// Replaces only the value of an existing item, preserving its protection.
+    /// If there is no item yet, inserts one with device-only protection.
     ///
     /// - Parameters:
     ///   - password: The plaintext password or app-password to store.
@@ -65,23 +78,23 @@ actor KeychainManager {
             throw KeychainError.unexpectedData
         }
 
-        // Purge prior occurrence to avoid duplicate errors
-        let deleteQuery: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: accountID
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountID,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        let changes = [kSecValueData as String: data] as CFDictionary
+        var status = operations.update(query as CFDictionary, changes)
+        if status == errSecItemNotFound {
+            var newItem = query
+            newItem[kSecValueData as String] = data
+            newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = operations.add(newItem as CFDictionary)
+            if status == errSecDuplicateItem {
+                // Another caller inserted this identity between the update and add.
+                status = operations.update(query as CFDictionary, changes)
+            }
+        }
         guard status == errSecSuccess else {
             throw KeychainError.osError(status)
         }
@@ -102,8 +115,7 @@ actor KeychainManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var dataTypeRef: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
+        let (status, dataTypeRef) = operations.copyMatching(query as CFDictionary)
 
         if status == errSecItemNotFound { return nil }
 
@@ -132,9 +144,57 @@ actor KeychainManager {
             kSecAttrAccount as String: accountID
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let status = operations.delete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.osError(status)
         }
     }
+
+    /// Synchronous so launch can authenticate a cache without crossing the actor.
+    /// This separate, non-synchronizing item uses the main app's default access
+    /// group; no Widget/Watch access group or CalDAV credential policy is changed.
+    nonisolated static func proEntitlementSigningKey(
+        createIfMissing: Bool,
+        service: String = "com.asecretcompany.nowthis.pro-cache"
+    ) throws -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "snapshot-signing.v1",
+            kSecAttrSynchronizable as String: false
+        ]
+        var readQuery = query
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        if status == errSecSuccess {
+            guard let data = result as? Data, data.count == 32 else {
+                throw KeychainError.unexpectedData
+            }
+            return data
+        }
+        guard status == errSecItemNotFound else { throw KeychainError.osError(status) }
+        guard createIfMissing else { return nil }
+
+        var data = Data(count: 32)
+        let randomStatus = data.withUnsafeMutableBytes {
+            SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!)
+        }
+        guard randomStatus == errSecSuccess else { throw KeychainError.osError(randomStatus) }
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            // Another caller won creation. Never replace an existing signing key.
+            guard let existing = try proEntitlementSigningKey(createIfMissing: false, service: service) else {
+                throw KeychainError.itemNotFound
+            }
+            return existing
+        }
+        guard addStatus == errSecSuccess else { throw KeychainError.osError(addStatus) }
+        return data
+    }
+
 }

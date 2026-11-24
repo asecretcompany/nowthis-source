@@ -9,6 +9,7 @@ struct ProUpsellView: View {
     @State private var retryOffer: ProOffer?
     @State private var managing = false
     @State private var confirmingLifetime = false
+    @State private var showingAllArtwork = false
     @ScaledMetric(relativeTo: .caption) private var iconPreviewMinimumWidth: CGFloat = 80
 
     private var presentation: SupportPurchasePresentation {
@@ -18,11 +19,8 @@ struct ProUpsellView: View {
     var body: some View {
         Section("Support Development") {
             VStack(alignment: .leading, spacing: 10) {
-                Text(verbatim: String(localized: "pro.support.title", defaultValue: "Help support continued development",
-                                      comment: "Heading: optional support funds ongoing development. Keep NowThis and Supporter unchanged."))
-                    .font(.headline)
                 Text(verbatim: String(localized: "pro.ios.body",
-                                      defaultValue: "All iOS productivity features, including future additions, are included with the app. Supporter is an optional way to support continued development.",
+                                      defaultValue: "All iOS productivity features, including future additions, are included with the app.",
                                       comment: "Permanent promise: all functional iOS features, including future ones, require no Supporter. Icons are optional cosmetics."))
                 Text(verbatim: String(localized: "pro.watch.body",
                                       defaultValue: "Viewing tasks and using complications on Apple Watch are always free. Supporter adds checking off and adding tasks on Apple Watch, including by voice, plus supporter app icons.",
@@ -33,10 +31,6 @@ struct ProUpsellView: View {
                 Text(verbatim: String(localized: "pro.legacy.body",
                                       defaultValue: "Pro has been renamed to Supporter. Previous Pro and Apple Watch unlock purchases have automatically become Lifetime Supporter, including all current and future Supporter features and artwork. No subscription or repurchase is needed.",
                                       comment: "Explicit rename announcement: original Pro and Watch unlock purchases automatically become Lifetime Supporter with all future benefits, without paying again."))
-                    .font(.footnote).foregroundStyle(.secondary)
-                Text(verbatim: String(localized: "pro.support.body",
-                                      defaultValue: "NowThis has no ads and no tracking. Becoming a Supporter helps fund continued development.",
-                                      comment: "Optional support funds development; no ads or tracking."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .font(.subheadline)
@@ -129,11 +123,29 @@ struct ProUpsellView: View {
     }
 
     private var artworkPreview: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(verbatim: String(localized: "icon.preview.title", defaultValue: "Supporter icons", comment: "Heading for the optional Supporter app icon preview gallery."))
-                .font(.headline)
+        let icons = AppIconCatalog.icons.filter { $0.collectionID != nil }
+        let visibleIcons = icons.prefix(showingAllArtwork ? icons.count : 2)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(verbatim: String(localized: "icon.preview.title", defaultValue: "Supporter icons", comment: "Heading for the optional Supporter app icon preview gallery."))
+                    .font(.headline)
+                Spacer(minLength: 8)
+                if icons.count > 2 {
+                    Button {
+                        showingAllArtwork.toggle()
+                    } label: {
+                        if showingAllArtwork {
+                            Text("Fewer Icons")
+                        } else {
+                            Text("More Icons")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: iconPreviewMinimumWidth), spacing: 16, alignment: .top)], spacing: 12) {
-                ForEach(AppIconCatalog.icons.filter { $0.collectionID != nil }, id: \.id) { icon in
+                ForEach(visibleIcons, id: \.id) { icon in
                     VStack(spacing: 6) {
                         Image(icon.previewAssetName)
                             .resizable().scaledToFit()
@@ -148,7 +160,7 @@ struct ProUpsellView: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            Text(verbatim: String(localized: "icon.preview.body", defaultValue: "Choose a look you love. Earned icons are yours to keep, even after a subscription ends.", comment: "Optional cosmetic reward. Earned artwork remains owned after a paid subscription expires."))
+            Text(verbatim: String(localized: "icon.preview.body", defaultValue: "You keep earned icons after your subscription ends.", comment: "Optional cosmetic reward. Earned artwork remains owned after a paid subscription expires."))
                 .font(.footnote).foregroundStyle(.secondary)
             NavigationLink {
                 AppIconPickerView()

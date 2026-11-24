@@ -64,6 +64,7 @@ struct AccessibilityCopyGuardTests {
         "NowThis/Intents/WidgetConfigurationIntent.swift": ["NowThis/Localizable.xcstrings",
                                                             "NowThisWidget/Localizable.xcstrings"],
         "NowThis/Utilities/DueDateFormatter.swift": ["NowThis/Localizable.xcstrings",
+                                                     "NowThisWidget/Localizable.xcstrings",
                                                      "NowThisWatch/Localizable.xcstrings",
                                                      "NowThisWatchWidget/Localizable.xcstrings"],
         "NowThis/Watch/WatchSmartList.swift": ["NowThis/Localizable.xcstrings",

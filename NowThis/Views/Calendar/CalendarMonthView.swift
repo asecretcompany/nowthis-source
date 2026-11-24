@@ -9,11 +9,18 @@ import SwiftData
 /// Supports drag-to-reschedule: drop a task on a date cell to update its due date.
 struct CalendarMonthView: View {
 
+    /// The fixed grid position is the identity. The label or date can change in that position.
+    struct Slot<Value>: Identifiable {
+        let id: Int
+        let value: Value
+    }
+
     let tasks: [TaskItem]
     @Binding var selectedDate: Date
     @Binding var displayedMonth: Date
-    var projection: CalendarTaskProjection? = nil
+    let projection: CalendarTaskProjection
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
 
     private let columns = Array(repeating: GridItem(.flexible()), count: 7)
 
@@ -41,13 +48,12 @@ struct CalendarMonthView: View {
         return leading < 0 ? leading + 7 : leading
     }
 
-    private var weekdaySymbols: [String] {
-        Self.weekdayHeaderSymbols(for: Calendar.current)
+    static func weekdayHeaderSlots(for calendar: Calendar) -> [Slot<String>] {
+        weekdayHeaderSymbols(for: calendar).enumerated().map { Slot(id: $0.offset, value: $0.element) }
     }
 
     var body: some View {
-        let buckets = projection ?? CalendarTaskProjection(rows: tasks.glanceRows())
-        return VStack(spacing: 12) {
+        VStack(spacing: 12) {
             // Month navigation header
             monthHeader
 
@@ -56,22 +62,24 @@ struct CalendarMonthView: View {
 
             // Day grid
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(daysInMonth, id: \.self) { day in
-                    if let day = day {
+                ForEach(Self.monthSlots(for: displayedMonth, calendar: .current)) { slot in
+                    if let day = slot.value {
+                        let bucket = projection.bucket(on: day)
                         DayCell(
                             date: day,
                             isToday: Calendar.current.isDateInToday(day),
                             isSelected: Calendar.current.isDate(day, inSameDayAs: selectedDate),
-                            highestPriority: buckets.bucket(on: day).highestPriority,
-                            taskCount: buckets.bucket(on: day).rows.count
+                            highestPriority: bucket.highestPriority,
+                            taskCount: bucket.rows.count
                         )
                         .onTapGesture {
                             selectedDate = day
                         }
                         .dropDestination(for: String.self) { droppedIDs, _ in
-                            reschedule(taskIDs: droppedIDs, to: day)
-                            return true
+                            CalendarTaskRescheduling.drop(taskIDs: droppedIDs, to: day, among: tasks,
+                                                          in: modelContext, errorState: errorState)
                         }
+                        .id(Calendar.current.startOfDay(for: day))
                     } else {
                         // Empty cell for padding
                         Color.clear
@@ -116,8 +124,8 @@ struct CalendarMonthView: View {
 
     private var weekdayRow: some View {
         HStack {
-            ForEach(weekdaySymbols, id: \.self) { symbol in
-                Text(symbol)
+            ForEach(Self.weekdayHeaderSlots(for: .current)) { slot in
+                Text(slot.value)
                     .font(.caption2)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
@@ -128,11 +136,9 @@ struct CalendarMonthView: View {
 
     // MARK: - Data
 
-    /// Generates the array of dates (with nil for empty leading cells).
-    private var daysInMonth: [Date?] {
-        let calendar = Calendar.current
-        guard let range = calendar.range(of: .day, in: .month, for: displayedMonth),
-              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: displayedMonth))
+    static func monthSlots(for month: Date, calendar: Calendar) -> [Slot<Date?>] {
+        guard let range = calendar.range(of: .day, in: .month, for: month),
+              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: month))
         else { return [] }
 
         var days: [Date?] = Array(repeating: nil,
@@ -143,7 +149,7 @@ struct CalendarMonthView: View {
                 days.append(date)
             }
         }
-        return days
+        return days.enumerated().map { Slot(id: $0.offset, value: $0.element) }
     }
 
     private func advanceMonth(by value: Int) {
@@ -152,30 +158,6 @@ struct CalendarMonthView: View {
                 displayedMonth = newMonth
             }
         }
-    }
-
-    /// Reschedules tasks to a new date when dropped on a day cell.
-    private func reschedule(taskIDs: [String], to newDate: Date) {
-        for id in taskIDs {
-            guard let task = tasks.first(where: { $0.id == id }) else { continue }
-            // Preserve the time-of-day if the task already had a due date
-            if let oldDue = task.dueDate {
-                let calendar = Calendar.current
-                let timeComponents = calendar.dateComponents([.hour, .minute], from: oldDue)
-                var newComponents = calendar.dateComponents([.year, .month, .day], from: newDate)
-                newComponents.hour = timeComponents.hour
-                newComponents.minute = timeComponents.minute
-                task.dueDate = calendar.date(from: newComponents) ?? newDate
-            } else {
-                task.dueDate = newDate
-            }
-            task.isDirty = true
-            task.lastModifiedDate = Date()
-        }
-        HapticManager.softImpact()
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
-        // See CalendarWeekView: a drag moves the deadline but not the notification.
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
     }
 }
 

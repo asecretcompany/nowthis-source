@@ -16,10 +16,31 @@ struct KanbanBoardView: View {
     static let allListsPredicate = #Predicate<TaskList> { _ in true }
     static let activeTasksPredicate = #Predicate<TaskItem> { !$0.isDeletedLocally && $0.parentTask == nil }
 
+    /// Central descriptor for both the inbound reader and the fresh liveness
+    /// check, so the delivered row set and deletion guard always use one scope.
+    static func taskDescriptor(mode: BoardMode, selectedListID: String?) -> FetchDescriptor<TaskItem> {
+        let predicate: Predicate<TaskItem>
+        if mode == .statusBoard {
+            guard let selectedListID else {
+                let noSelection = #Predicate<TaskItem> { _ in false }
+                return FetchDescriptor(predicate: noSelection,
+                    sortBy: [SortDescriptor(\TaskItem.createdDate, order: .reverse)])
+            }
+            predicate = #Predicate<TaskItem> {
+                !$0.isDeletedLocally && $0.parentTask == nil && $0.taskList?.id == selectedListID
+            }
+        } else {
+            predicate = activeTasksPredicate
+        }
+        return FetchDescriptor(predicate: predicate,
+            sortBy: [SortDescriptor(\TaskItem.createdDate, order: .reverse)])
+    }
+
     @State private var taskLists: [TaskList] = []
     @State private var allTasks: [TaskItem] = []
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @Environment(\.syncCommands) private var syncCommands
 
     /// The way out when this screen is the hidden-destination sheet rather than a tab.
@@ -43,6 +64,7 @@ struct KanbanBoardView: View {
     /// share `showCompletedTasks` in `KanbanListSwipeView`.
     @AppStorage("kanbanSelectedListID") private var selectedListID = KanbanListScope.unset
     @AppStorage("kanbanBoardMode") private var boardMode: BoardMode = .statusBoard
+    @State private var completionError: TaskCompletionLogic.CompletionError?
     @State private var draggedTaskID: String?
     /// Where each card is on screen, so a drop can tell which cards it landed between.
     @State private var cardFrames = KanbanCardFrames()
@@ -76,7 +98,7 @@ struct KanbanBoardView: View {
     private static let columnGap: CGFloat = 14
 
     /// Names the board's visible area, which each column measures its position in.
-    private static let boardSpace = "kanbanBoard"
+    nonisolated private static let boardSpace = "kanbanBoard"
 
     /// How long a drag rests over a partly visible column before the board
     /// scrolls to it — long enough that a card merely passing over it on the way
@@ -109,14 +131,23 @@ struct KanbanBoardView: View {
                 }
             }
             .background(InboundQueryReader(descriptor: FetchDescriptor<TaskList>(sortBy: [SortDescriptor(\TaskList.name)])) { taskLists = $0 })
-            .background(InboundQueryReader(descriptor: FetchDescriptor(predicate: Self.activeTasksPredicate,
-                sortBy: [SortDescriptor(\TaskItem.createdDate, order: .reverse)])) { allTasks = $0 })
+            .background(InboundQueryReader(descriptor: Self.taskDescriptor(mode: boardMode,
+                selectedListID: boardMode == .statusBoard ? selectedList?.id : nil),
+                scope: "\(boardMode.rawValue):\(boardMode == .statusBoard ? selectedList?.id ?? "" : "")",
+                listID: boardMode == .statusBoard ? selectedList?.id : nil) { allTasks = $0 })
             .navigationTitle("Board")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
             .navigationDestination(for: TaskItem.self) { task in
                 TaskDetailView(task: task)
             }
+        }
+        .alert("Repeat", isPresented: Binding(
+            get: { completionError != nil }, set: { if !$0 { completionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { completionError = nil }
+        } message: {
+            if let completionError { Text(completionError.localizedStringResource) }
         }
     }
 
@@ -219,7 +250,7 @@ struct KanbanBoardView: View {
                     Text(mode.displayName).tag(mode)
                 }
             }
-            .pickerStyle(.segmented)
+            .contentModePickerStyle()
             .frame(width: 160)
             .accessibilityLabel("Board mode")
         }
@@ -276,7 +307,8 @@ struct KanbanBoardView: View {
 
     private var liveRoots: [TaskItem] {
         TaskListHelpers.liveTasks(allTasks, in: modelContext,
-            matching: FetchDescriptor(predicate: Self.activeTasksPredicate))
+            matching: Self.taskDescriptor(mode: boardMode,
+                selectedListID: boardMode == .statusBoard ? selectedList?.id : nil))
     }
 
     private var selectedList: TaskList? {
@@ -299,52 +331,91 @@ struct KanbanBoardView: View {
     /// column changes status first and then takes its place. `index` counts the
     /// column's other cards — see `KanbanReorder`.
     private func moveTasks(ids: [String], to status: TaskStatus, at index: Int) {
-        // Liveness, for the same reason the row's swipe actions carry it: a
-        // drop resolves a turn after the drag began, and writing to a task an
-        // account delete has cascaded away traps exactly like reading one.
-        let moving = ids.compactMap { id in
-            allTasks.first { $0.modelContext != nil && $0.id == id }
-        }
-        let others = tasksForColumn(status).filter { !ids.contains($0.id) }
+        let draggedIDs = Set(ids)
+        let moving = liveRoots.filter { draggedIDs.contains($0.id) }
+        let others = tasksForColumn(status).filter { !draggedIDs.contains($0.id) }
+        let outcome = Self.commitMove(moving, to: status, at: index, among: others, in: modelContext,
+                                      errorState: errorState)
+        if outcome.unsupportedRecurrence { completionError = .unsupportedRecurrence }
+        guard outcome.saved else { return }
 
-        var completedIDs: [String] = []
-        var changedStatus = false
-        for task in moving where task.status != status {
-            changedStatus = true
-            // Shared with the checkbox rather than copied beside it. The copy that
-            // used to live here had drifted: it advanced a recurring task's due
-            // date without moving its start date with it.
-            if TaskCompletionLogic.apply(status, to: task) {
-                completedIDs.append(task.id)
-            }
-        }
-
-        // A repeating card dragged to Done advances to its next occurrence and
-        // stays in To Do, so only the cards that actually arrived take a place.
-        KanbanReorder.place(moving.filter { $0.status == status }, at: index, among: others)
-
-        // A card dropped back where it was changes nothing, and is not worth a
-        // save, a widget reload or a sync.
-        guard modelContext.hasChanges else { return }
-        do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext) }
-        catch { return }
-        // Completing a task ends its reminders, including the hourly nag — the
-        // same call `TaskRowView` makes for the checkbox. Dragging a card to Done
-        // never made it, and the bulk sweep only runs after a sync, so on a
-        // local-only Vault account nothing ever cancelled them.
-        for id in completedIDs {
+        for id in outcome.completedIDs {
             ReminderScheduler.cancelReminder(for: id)
         }
         WidgetCenter.shared.reloadAllTimelines()
-        // See TaskRowView: dragging a recurring card to Done advances its due date.
-        // A reorder moves no dates, so it skips the reconcile.
-        if changedStatus {
-            ReminderScheduler.requestReconcile(modelContext: modelContext)
+        if outcome.changedStatus {
+            guard ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+                ViewPersistence.report($0, to: errorState)
+            }) else { return }
         }
-        // The task list's own reorder and checkbox both ask for this. The board
-        // never did, so a drag reached the server only when something else next
-        // triggered a sync.
         syncCommands.syncAfterChange(modelContext)
+    }
+
+    struct MoveOutcome {
+        var saved = false
+        var unsupportedRecurrence = false
+        var changedStatus = false
+        var completedIDs: [String] = []
+    }
+
+    @MainActor
+    static func commitMove(_ moving: [TaskItem], to status: TaskStatus, at index: Int, among others: [TaskItem],
+                           in context: ModelContext, errorState: ErrorState? = nil) -> MoveOutcome {
+        var outcome = MoveOutcome()
+        var statusChanges: [(task: TaskItem, completion: TaskCompletionLogic.Completion?)] = []
+        var arrived: [TaskItem] = []
+        for task in moving {
+            if task.status == status {
+                arrived.append(task)
+                continue
+            }
+            if status != .completed {
+                statusChanges.append((task, nil))
+                arrived.append(task)
+                continue
+            }
+            do {
+                let completion = try TaskCompletionLogic.completion(for: task)
+                statusChanges.append((task, completion))
+                if case .finished = completion { arrived.append(task) }
+            } catch { outcome.unsupportedRecurrence = true }
+        }
+        let ranks = KanbanReorder.assignments(for: arrived, at: index, among: others)
+        guard !statusChanges.isEmpty || !ranks.isEmpty else { return outcome }
+        do {
+            try TaskWriteEligibility(writingIn: context).tasks(statusChanges.map(\.task) + ranks.map(\.task))
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return MoveOutcome()
+        }
+        let statusSnapshots = statusChanges.map { TaskStatusSnapshot($0.task) }
+        let orderSnapshots = ranks.map { (task: $0.task, order: $0.task.manualSortOrder,
+                                         dirty: $0.task.isDirty, modified: $0.task.lastModifiedDate) }
+        let now = Date()
+        for change in statusChanges {
+            if let completion = change.completion {
+                if !TaskCompletionLogic.apply(completion, to: change.task, now: now) {
+                    outcome.completedIDs.append(change.task.id)
+                }
+            } else {
+                TaskCompletionLogic.applyNoncompletion(status, to: change.task, now: now)
+            }
+        }
+        for assignment in ranks {
+            TaskListHelpers.setManualRank(assignment.rank, on: assignment.task, now: now)
+        }
+        guard ViewPersistence.saveOrReport(in: context, errorState: errorState) else {
+            statusSnapshots.forEach { $0.restore() }
+            for snapshot in orderSnapshots where snapshot.task.modelContext != nil {
+                snapshot.task.manualSortOrder = snapshot.order
+                snapshot.task.isDirty = snapshot.dirty
+                snapshot.task.lastModifiedDate = snapshot.modified
+            }
+            return MoveOutcome(unsupportedRecurrence: outcome.unsupportedRecurrence)
+        }
+        outcome.saved = true
+        outcome.changedStatus = !statusChanges.isEmpty
+        return outcome
     }
 
     /// Highlights the column a card is over and, when the drag rests there,

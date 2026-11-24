@@ -9,6 +9,17 @@ import Foundation
 @Suite("Sync Failure Classification")
 struct SyncFailureTests {
 
+    @Test("Discovery diagnostics preserve stage status without exporting private addresses", arguments: DAVDiscoveryFailure.Reason.allCases)
+    func discoveryDiagnostics(reason: DAVDiscoveryFailure.Reason) {
+        let error = DAVDiscoveryFailure(stage: .collections, method: .propfind, httpStatus: 404, reason: reason)
+        let failure = SyncFailure.from(error)
+        #expect(failure?.httpStatusCode == 404)
+        #expect(failure?.message != SyncFailure.unknownMessage)
+        #expect(failure?.isUserActionable == false)
+        #expect(failure?.message.contains("https://") == false)
+        #expect(failure?.message.contains("password") == false)
+    }
+
     // MARK: - Authentication
 
     @Test("401 unauthorized maps to authentication (actionable)")
@@ -105,13 +116,22 @@ struct SyncFailureTests {
     @Test("Discovery and addressing failures map to configuration (actionable)")
     func discoveryFailuresAreConfiguration() {
         let cases: [CalDAVError] = [
-            .notFound, .invalidURL, .noCalendarHomeSet, .noUserPrincipal
+            .invalidURL, .noCalendarHomeSet, .noUserPrincipal
         ]
         for error in cases {
             let failure = SyncFailure.from(error)
             #expect(failure?.category == .configuration, "\(error) should be configuration")
             #expect(failure?.isUserActionable == true)
         }
+    }
+
+    @Test("404 not found is unknown and gives accurate non-actionable guidance")
+    func notFoundIsUnknown() {
+        let failure = SyncFailure.from(CalDAVError.notFound)
+        #expect(failure?.category == .unknown)
+        #expect(failure?.isUserActionable == false)
+        #expect(failure?.message == "The server could not find a requested list or task. Your other lists may still be available.")
+        #expect(failure?.httpStatusCode == 404)
     }
 
     // MARK: - Unknown
@@ -161,4 +181,29 @@ struct SyncFailureTests {
         let fresh = SyncFailure.from(CalDAVError.forbidden)
         #expect(SyncFailureBanner.isVisible(failure: fresh, dismissed: dismissed) == true)
     }
+    @Test(arguments: [URLError.cannotFindHost, .dnsLookupFailed])
+    func dnsFailureHasVPNGuidance(code: URLError.Code) {
+        let underlying = URLError(code, userInfo: [NSLocalizedDescriptionKey: "private host and token"])
+        for error: any Error in [underlying, CalDAVError.networkError(underlying: underlying),
+                                SyncError.calDAVError(.networkError(underlying: underlying))] {
+            let failure = SyncFailure.from(error)
+            #expect(failure?.category == .connection)
+            #expect(failure?.message == "Can't find the server. Check the server name, DNS settings and any VPN connection. For a Tailscale machine name, use the full name ending in .ts.net.")
+            #expect(failure?.message.contains("private") == false)
+        }
+    }
+
+    @Test(arguments: [URLError.serverCertificateUntrusted, .serverCertificateHasBadDate,
+                      .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .secureConnectionFailed])
+    func tlsFailureExplainsHostnameTrust(code: URLError.Code) {
+        for error: any Error in [URLError(code), CalDAVError.networkError(underlying: URLError(code))] {
+            #expect(SyncFailure.from(error)?.message == "Couldn't establish a secure connection. Use the HTTPS server name that matches its certificate, not a replacement IP address. For Tailscale HTTPS, use the full name ending in .ts.net.")
+        }
+    }
+
+    @Test(arguments: [URLError.cannotConnectToHost, .notConnectedToInternet, .networkConnectionLost, .timedOut])
+    func reachabilityFailureMentionsVPNAndLocalNetwork(code: URLError.Code) {
+        #expect(SyncFailure.from(URLError(code))?.message == "Can't reach the server. Check your internet and VPN connections. For a local server, also check NowThis's Local Network access in Settings.")
+    }
+
 }

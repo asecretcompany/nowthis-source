@@ -6,18 +6,77 @@ import Testing
 @Suite("Upload acknowledgement races", .serialized)
 @MainActor
 struct SyncUploadRaceTests {
+    @Test("Oversized mutation acknowledgement preserves pending state and conditional retry", arguments: [false, true])
+    func oversizedAcknowledgement(deleting: Bool) async throws {
+        let container = try DAVSyncScenario.container()
+        let context = container.mainContext
+        let host = "oversize-ack-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
+        let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
+        let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
+        list.account = account; context.insert(list)
+        SyncEngine.markCategoriesCaughtUp(listID: list.id)
+        let local = TaskItem(uid: "fixture-0", title: "Pending edit")
+        local.taskList = list; local.isDirty = true; local.isLocalOnly = false
+        local.remoteHref = "/one/0.ics"; local.etag = "e0"
+        local.isDeletedLocally = deleting; local.attachmentStateKnown = true
+        context.insert(local)
+        try VTODOOpaqueState.empty.store(taskID: local.id, in: context)
+        try SyncResourceFixture.prove(local, in: context)
+        try context.save()
+        let config = ScriptedDAVProtocol.install(host: host,
+            responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
+                .init(body: DAVSyncScenario.manifest(count: 1)),
+                .init(status: 200, body: String(repeating: "x", count: 4097),
+                      headers: ["ETag": "committed-e1"])
+            ])
+        let engine = SyncEngine(calDAVClient: CalDAVClient(configuration: config,
+            retryPolicy: .init(maxAttempts: 3, baseDelay: 0), maxResponseBytes: 4096))
+        _ = await engine.performFullSyncOutcome(accountID: accountID,
+            serverBaseURL: "https://" + host, credentials: .init(username: "fixture", password: "fixture"), modelContainer: container)
+        let persisted = try #require(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first)
+        #expect(persisted.isDirty)
+        #expect(persisted.isDeletedLocally == deleting)
+        #expect(persisted.etag == "e0", "An indeterminate reply cannot acknowledge server state")
+        let mutations = ScriptedDAVProtocol.requests(host: host).filter { $0.method == "PUT" || $0.method == "DELETE" }
+        #expect(mutations.count == 1, "Requests: \(ScriptedDAVProtocol.requests(host: host).map(\.method))")
+        #expect(mutations.first?.ifMatch == "\"e0\"")
+        if !deleting {
+            // The next pull reports the original ETag, then the conditional write
+            // discovers the server already committed. Reconciliation must retain
+            // the local edit rather than blindly overwriting with no condition.
+            _ = ScriptedDAVProtocol.install(host: host,
+                responses: DAVSyncScenario.discovery(paths: ["/one/"]).map { response in
+                    var changed = response
+                    changed.body = changed.body.replacingOccurrences(of: "<cs:getctag>c1</cs:getctag>", with: "<cs:getctag>c2</cs:getctag>")
+                    return changed
+                } + [
+                    .init(body: DAVSyncScenario.manifest(count: 1)),
+                    .init(status: 412, body: "", headers: ["ETag": "committed-e1"]),
+                    .init(status: 503, body: "reconciliation unavailable")
+                ])
+            _ = await engine.performFullSyncOutcome(accountID: accountID,
+                serverBaseURL: "https://" + host, credentials: .init(username: "fixture", password: "fixture"), modelContainer: container)
+            let retriedWrites = ScriptedDAVProtocol.requests(host: host).filter { $0.method == "PUT" }
+            #expect(retriedWrites.count == 1)
+            #expect(retriedWrites.first?.ifMatch == "\"e0\"")
+            #expect(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).first?.isDirty == true)
+        }
+        withExtendedLifetime(container) {}
+    }
+
     @Test("A successful old upload keeps a newer saved or unsaved edit pending", arguments: [true, false])
     func newerEditSurvives(saveEdit: Bool) async throws {
         let container = try DAVSyncScenario.container()
         let context = container.mainContext
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "ack-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
         let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         list.account = account; context.insert(list)
         let local = TaskItem(uid: "local", title: "Before")
         local.taskList = list; local.isDirty = true
         context.insert(local); try context.save()
-        let host = "ack-" + UUID().uuidString.lowercased() + ".invalid"
         let gate = ScriptedDAVProtocol.Gate()
         defer { gate.release() }
         let responses = DAVSyncScenario.discovery(paths: ["/one/"]) + [
@@ -94,13 +153,13 @@ struct SyncUploadRaceTests {
     func acceptedThenCancelledRetries() async throws {
         let container = try DAVSyncScenario.container()
         let context = container.mainContext
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "cancel-ack-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
         let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         list.account = account; context.insert(list)
         let local = TaskItem(uid: "retry", title: "Train moon pigeons")
         local.taskList = list; local.isDirty = true; context.insert(local); try context.save()
-        let host = "cancel-ack-" + UUID().uuidString.lowercased() + ".invalid"
         let gate = ScriptedDAVProtocol.Gate(); defer { gate.release() }
         let config = ScriptedDAVProtocol.install(host: host, responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [
             .init(body: DAVSyncScenario.manifest(count: 0)), .init(status: 201, body: "", gate: gate)])
@@ -126,15 +185,18 @@ struct SyncUploadRaceTests {
     @Test("Restoring a task while DELETE is suspended preserves the newer task")
     func undoDeleteDuringRequest() async throws {
         let container = try DAVSyncScenario.container(); let context = container.mainContext
-        let accountID = try DAVSyncScenario.account(in: container)
+        let host = "undo-delete-" + UUID().uuidString.lowercased() + ".invalid"
+        let accountID = try DAVSyncScenario.account(in: container, host: host)
         let account = try #require(try context.fetch(FetchDescriptor<ServerAccount>()).first)
         let list = TaskList(serverURL: "/one/", name: "Fixture", colorHex: "#007AFF")
         list.account = account; context.insert(list)
         let local = TaskItem(uid: "undo", title: "Before")
         local.taskList = list; local.remoteHref = "/one/undo.ics"; local.etag = "before"
-        local.isLocalOnly = false; local.isDeletedLocally = true
-        context.insert(local); try context.save()
-        let host = "undo-delete-" + UUID().uuidString.lowercased() + ".invalid"
+        local.isLocalOnly = false; local.isDeletedLocally = true; local.attachmentStateKnown = true
+        context.insert(local)
+        try VTODOOpaqueState.empty.store(taskID: local.id, in: context)
+        try SyncResourceFixture.prove(local, in: context)
+        try context.save()
         let gate = ScriptedDAVProtocol.Gate(); defer { gate.release() }
         let engine = SyncEngine(calDAVClient: CalDAVClient(configuration: ScriptedDAVProtocol.install(host: host,
             responses: DAVSyncScenario.discovery(paths: ["/one/"]) + [

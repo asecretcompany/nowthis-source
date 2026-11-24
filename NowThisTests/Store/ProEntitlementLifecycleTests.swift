@@ -8,18 +8,29 @@ struct ProEntitlementLifecycleTests {
     private let base = Date(timeIntervalSince1970: 1_790_899_200)
 
     @MainActor
+    private final class SigningKeys {
+        enum Failure: Error { case locked }
+        var available = true
+        func load() throws -> Data {
+            guard available else { throw Failure.locked }
+            return Data(repeating: 0x16, count: 32)
+        }
+    }
+
+    @MainActor
     private final class Fixture {
         let suite = "NowThis.ProLifecycle.\(UUID().uuidString)"
         let defaults: UserDefaults
         let cache: ProEntitlementCache
         let client = ProStoreTestClient()
+        let keys = SigningKeys()
         var now: Date
         lazy var entitlement = ProEntitlement(client: client, cache: cache, now: { [unowned self] in self.now },
                                               testerBuild: { false }, forcePaywall: { false })
         init(now: Date) {
             self.now = now
             defaults = UserDefaults(suiteName: suite)!
-            cache = ProEntitlementCache(defaults: defaults)
+            cache = ProEntitlementCache(defaults: defaults, keyProvider: { [keys] _ in try keys.load() })
         }
         func cleanUp() { defaults.removePersistentDomain(forName: suite) }
     }
@@ -42,6 +53,49 @@ struct ProEntitlementLifecycleTests {
         let end = ContinuousClock.now + .seconds(2)
         while !condition() && ContinuousClock.now < end { await Task.yield() }
         try #require(condition())
+    }
+
+    @Test func unsignedWellFormedLifetimeDoesNotUnlockBeforeVerifiedRefresh() async throws {
+        let f = Fixture(now: base)
+        defer { f.cleanUp() }
+        let forged = ProAccessSnapshot(access: .lifetime, earnedCollectionIDs: ["supporter-2026"])
+        let unsigned = try JSONEncoder().encode(forged)
+        f.defaults.set(unsigned, forKey: ProEntitlementCache.snapshotKey)
+        #expect(!f.entitlement.isUnlocked)
+        #expect(f.entitlement.ownedCollectionIDs.isEmpty)
+        #expect(f.cache.load() == nil)
+        f.client.evidenceError = .offline
+        await f.entitlement.refresh()
+        #expect(!f.entitlement.isUnlocked)
+        #expect(f.defaults.data(forKey: ProEntitlementCache.snapshotKey) == unsigned)
+        f.client.evidenceError = nil
+        f.client.evidence = lifetimeEvidence
+        await f.entitlement.refresh()
+        #expect(f.entitlement.isUnlocked)
+        #expect(f.cache.load()?.access == .lifetime)
+        #expect(f.defaults.data(forKey: ProEntitlementCache.snapshotKey) != unsigned)
+    }
+
+    @Test func startupRefreshesVerifiedEvidenceBeforeSlowProductLoad() async throws {
+        let f = Fixture(now: base)
+        defer { f.cleanUp() }
+        let gate = AsyncStream<Void>.makeStream()
+        defer { gate.continuation.finish() }
+        var loadingProducts = false
+        f.client.productLoader = {
+            loadingProducts = true
+            for await _ in gate.stream { break }
+            return [:]
+        }
+        f.client.evidence = lifetimeEvidence
+        let entitlement = ProEntitlement(client: f.client, cache: f.cache, now: { self.base },
+                                         testerBuild: { false }, forcePaywall: { false })
+        entitlement.start()
+        try await waitUntil { loadingProducts }
+        #expect(entitlement.isUnlocked)
+        #expect(f.cache.load()?.access == .lifetime)
+        gate.continuation.yield(())
+        try await waitUntil { f.client.evidenceLoads == 1 }
     }
 
     @Test func cacheRoundTripsPurchasedDeadlineAndEarnedArtwork() {
@@ -106,6 +160,56 @@ struct ProEntitlementLifecycleTests {
         f.client.evidenceError = .offline
         await f.entitlement.refresh()
         #expect(f.entitlement.isUnlocked)
+        #expect(f.cache.load()?.access == .lifetime)
+    }
+
+    @Test func signedSubscriptionReloadKeepsDeadlineAndArtworkOffline() async {
+        let f = Fixture(now: base.addingTimeInterval(100))
+        defer { f.cleanUp() }
+        f.client.evidence = monthlyEvidence
+        await f.entitlement.refresh()
+        f.client.evidenceError = .offline
+        let recovered = ProEntitlement(client: f.client, cache: f.cache, now: { f.now },
+                                       testerBuild: { false }, forcePaywall: { false })
+        #expect(recovered.isUnlocked)
+        #expect(recovered.snapshot.validUntil == base.addingTimeInterval(200))
+        await recovered.refresh()
+        f.now = base.addingTimeInterval(200)
+        recovered.reconcileDeadline()
+        #expect(!recovered.isUnlocked)
+        #expect(recovered.ownedCollectionIDs == ["supporter-2026"])
+    }
+
+    @Test func verifiedRefundWhileKeyIsLockedInvalidatesThePreviousSignedGrant() async {
+        let f = Fixture(now: base.addingTimeInterval(100))
+        defer { f.cleanUp() }
+        f.client.evidence = lifetimeEvidence
+        await f.entitlement.refresh()
+        #expect(f.cache.load()?.access == .lifetime)
+        f.keys.available = false
+        f.client.evidence = ProEvidence(transactions: [lifetime(revoked: true)])
+        await f.entitlement.refresh()
+        #expect(!f.entitlement.isUnlocked)
+        #expect(f.defaults.data(forKey: ProEntitlementCache.snapshotKey) == nil)
+        f.keys.available = true
+        let recovered = ProEntitlement(client: f.client, cache: f.cache, now: { self.base },
+                                       testerBuild: { false }, forcePaywall: { false })
+        #expect(!recovered.isUnlocked)
+        #expect(recovered.ownedCollectionIDs.isEmpty)
+        #expect(f.cache.load() == nil)
+    }
+
+    @Test func verifiedOwnershipWorksInMemoryWhenSigningFailsAndCanRecoverLater() async {
+        let f = Fixture(now: base)
+        defer { f.cleanUp() }
+        f.keys.available = false
+        f.client.evidence = lifetimeEvidence
+        await f.entitlement.refresh()
+        #expect(f.entitlement.isUnlocked)
+        #expect(f.cache.load() == nil)
+        f.keys.available = true
+        #expect(f.cache.load() == nil)
+        await f.entitlement.refresh()
         #expect(f.cache.load()?.access == .lifetime)
     }
 

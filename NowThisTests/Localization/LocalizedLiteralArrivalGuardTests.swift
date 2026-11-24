@@ -320,7 +320,7 @@ struct LocalizedLiteralArrivalGuardTests {
         #expect(Self.targets(compiling: "NowThis/Watch/WatchSmartList.swift", sources: sources)
                 == ["NowThis", "NowThisWatch", "NowThisWatchWidget"])
         #expect(Self.targets(compiling: "NowThis/Utilities/DueDateFormatter.swift", sources: sources)
-                == ["NowThis", "NowThisWatch", "NowThisWatchWidget"])
+                == ["NowThis", "NowThisWatch", "NowThisWatchWidget", "NowThisWidget"])
         // …and a file that is genuinely app-only.
         #expect(Self.targets(compiling: "NowThis/Views/Tasks/TaskListView.swift", sources: sources)
                 == ["NowThis"])

@@ -18,11 +18,11 @@
 > [!IMPORTANT]  
 > **NowThis is built natively in Swift, SwiftUI, and SwiftData.**
 
-NowThis is a powerful, local-first iOS task manager that seamlessly syncs with any CalDAV server (including Nextcloud). Manage your to-dos, set geofence reminders, link journal entries, and keep your data 100% yours.
+NowThis is a local-first iOS task manager with CalDAV sync, including Nextcloud. It supports tasks, geofence reminders, and linked journal entries.
 
 ## Feature Highlights
 
-* 🔒 **Local & Synced Modes:** Use Vault Mode for a purely offline experience, or connect to a CalDAV server (Nextcloud, etc.) to sync across devices.
+* 🔒 **Local & Synced Modes:** Use Vault Mode to store tasks on your device without an account, or connect to a CalDAV server such as Nextcloud to sync across devices.
 * 📷 **Task Photos:** Add up to five photos to a task. Optimized previews sync with everyone who can access the list and stay available offline, with optional full-resolution sharing through Nextcloud Files.
 * 🗣️ **Siri Voice Quick-Add:** Dictate one sentence — *"buy milk tomorrow at 5pm"* — and NowThis parses the title and due date/time. The same natural-language parser powers typed Quick Add.
 * ⚡ **Fast Task Entry:** Single-tap to add on any list, an inline quick-add field everywhere, and smart new-task defaults (app-wide and per-list default due date and time).
@@ -31,14 +31,14 @@ NowThis is a powerful, local-first iOS task manager that seamlessly syncs with a
 * ⌚ **Apple Watch:** Today's and overdue tasks pushed live from your iPhone, with complications for your watch face.
 * 🌍 **Six Languages:** English, German, Spanish, French, Italian, and Dutch across the app, widgets, and Apple Watch.
 * 📝 **Journal Links:** Attach journal entries to tasks for extended context.
-* ⚡ **Native Performance:** Built from the ground up with SwiftUI and SwiftData for lightning-fast responsiveness.
+* ⚡ **Native App:** Built with SwiftUI and SwiftData.
 
 ## Installation
 
 ### For Users
-The easiest way to get NowThis is on the [App Store](https://apps.apple.com/us/app/nowthis-tasks-for-nextcloud/id6772790227) — a one-time $4.99 purchase with every iPhone feature included. Current release: **26.10**.
+NowThis is available on the [App Store](https://apps.apple.com/us/app/nowthis-tasks-for-nextcloud/id6772790227) — a one-time $4.99 purchase with every iPhone feature included. Current release: **26.11** (build 24).
 
-Optional **NowThis Supporter** (monthly, annual, or lifetime) adds Apple Watch task completion and voice quick-add, plus Supporter app icons, and supports continued development. Browsing tasks and complications on the watch are always free. Earlier NowThis Pro purchases became Lifetime Supporter.
+Optional **NowThis Supporter** (monthly, annual, or lifetime) adds Apple Watch task completion and voice quick-add, plus Supporter app icons. Browsing tasks and complications on the watch are always free. Earlier NowThis Pro purchases became Lifetime Supporter.
 
 ### For Developers
 
@@ -68,7 +68,7 @@ NowThis uses [XcodeGen](https://github.com/yonaskolb/XcodeGen) to manage its pro
 
 ## Technical Details
 
-* **Architecture:** iOS client leveraging SwiftData for local persistence and an App Group container for widget/app target data sharing. There is no CloudKit or other cloud backend — your CalDAV server is the only place your data goes.
+* **Architecture:** The iOS client uses SwiftData for local persistence and an App Group container for widget/app data sharing. CalDAV sync connects directly to your chosen server. NowThis does not operate a sync service. Optional Apple Calendar sharing can also sync events through your calendar provider.
 * **Sync Engine:** Custom-built `CalDAVClient` using `os.Logger` for observability and actor-based concurrency for safe data handling.
 * **Security:** `KeychainManager` stores server credentials in the iOS Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so they are never synced off-device and stay unreadable until the first unlock after boot.
 
@@ -83,7 +83,7 @@ yy.mm[.v]     e.g. 26.8  →  August 2026
 
 * `yy.mm` — the year and month the release is cut. A new minor version ships each month.
 * `.v` — appended only for a mid-month patch release.
-* The build number (`CURRENT_PROJECT_VERSION`) restarts with each release version; TestFlight orders the builds within a version by it.
+* The build number (`CURRENT_PROJECT_VERSION`) is a single counter that increases across releases. TestFlight orders builds by it.
 
 `1.0.5` was the last release under the old sequential scheme; `26.8` is the first under calendar versioning. The jump is deliberate, not a mis-tagged release.
 
@@ -91,4 +91,4 @@ yy.mm[.v]     e.g. 26.8  →  August 2026
 
 We welcome contributions! Please check out our [GitHub Pages site](https://opensource.nowthis.app) for more detailed documentation.
 
-All code is licensed under the [GPLv3 License](LICENSE).
+NowThis code is licensed under the [GPLv3 License](LICENSE). The site stylesheet includes normalize.css under its [MIT license](assets/css/normalize.LICENSE.txt).

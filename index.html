@@ -27,7 +27,6 @@
       <h1 class="project-name">NowThis Developer Docs</h1>
       <h2 class="project-tagline">Privacy-first, self-hosted CalDAV task manager for iOS.</h2>
       <a href="https://github.com/asecretcompany/nowthis-source" class="btn">View on GitHub</a>
-      <a href="https://testflight.apple.com/join/WEVC7CCZ" class="btn">Join the Beta on TestFlight</a>
       <a href="https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE" class="btn">GPLv3 License</a>
     </header>
 
@@ -36,6 +35,19 @@
 
       <p>This site provides technical guidance for developers looking to build, fork, or
       contribute to the NowThis iOS client.</p>
+
+      <h2 id="whats-new-in-2611">What's New in 26.11</h2>
+
+      <p>Version 26.11 (build 24) adds task detail customization and improves dates,
+      sync, and task editing.</p>
+
+      <ul>
+        <li>Reorder task detail sections, expand notes, and edit tags without losing a draft.</li>
+        <li>All-day dates and recurring tasks are more consistent across views and widgets.</li>
+        <li>Sync better preserves pending edits and moves, and calendar updates protect unrelated events.</li>
+        <li>Apple Watch offers clearer delivery feedback; rejected additions remain in Drafts.</li>
+        <li>Supporters can choose 36 new holiday icons. On iOS 27, a portrait Home Screen widget adapts to text size.</li>
+      </ul>
 
       <h2 id="whats-new-in-2610">What's New in 26.10</h2>
 
@@ -249,10 +261,10 @@
 
       <h2 id="security--privacy">Security &amp; Privacy</h2>
 
-      <p>We take privacy seriously.</p>
-
       <ul>
         <li>No analytics SDKs or tracking frameworks are included.</li>
+        <li>Task sync connects directly to your chosen CalDAV server. If you send tasks to
+        Apple Calendar, your calendar provider may sync the resulting events.</li>
         <li>All credentials are stored in the iOS Keychain using
         <code>kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly</code>, which keeps them on this
         device only and unreadable until the first unlock after boot.</li>
@@ -262,10 +274,10 @@
 
       <h2 id="license">License</h2>
 
-      <p>NowThis is released under the <strong>GNU General Public License v3.0 (GPLv3)</strong>.
-      For more details, see the
-      <a href="https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE">LICENSE</a>
-      file in the repository.</p>
+      <p>NowThis code is released under the
+      <a href="https://github.com/asecretcompany/nowthis-source/blob/main/LICENSE">GNU General Public License v3.0 (GPLv3)</a>.
+      The site stylesheet includes normalize.css under its
+      <a href="/assets/css/normalize.LICENSE.txt">MIT license</a>.</p>
 
       <footer class="site-footer">
         <span class="site-footer-owner"><a href="https://github.com/asecretcompany/nowthis-source">nowthis-source</a> is maintained by <a href="https://github.com/asecretcompany">asecretcompany</a>.</span>

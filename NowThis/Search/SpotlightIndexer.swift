@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 /// construction and bounded Spotlight application run on isolated owners.
 @MainActor
 final class SpotlightIndexer {
+    private let preferences: SpotlightPreferences
     private let worker: SpotlightIndexWorker
     private let source: any SpotlightSnapshotSource
     private var projectionGeneration = 0
@@ -19,10 +20,12 @@ final class SpotlightIndexer {
     private weak var observedModelContext: ModelContext?
     private var observationGeneration: UInt64 = 0
     private var saveObserver: NSObjectProtocol?
+    private var preferencesObserver: NSObjectProtocol?
     private var pendingRefresh: Task<Void, Never>?
     private var coalescingWindow = Duration.milliseconds(300)
 
     init() {
+        preferences = SpotlightPreferences()
         worker = SpotlightIndexWorker(sink: CoreSpotlightSink(),
             store: SpotlightJournalStore(
                 baseline: SpotlightFileStateStore(legacy: SpotlightDefaultsStore()),
@@ -33,7 +36,9 @@ final class SpotlightIndexer {
         source = SpotlightSnapshotReader()
     }
 
-    init(worker: SpotlightIndexWorker, source: any SpotlightSnapshotSource) {
+    init(worker: SpotlightIndexWorker, source: any SpotlightSnapshotSource,
+         preferences: SpotlightPreferences = SpotlightPreferences()) {
+        self.preferences = preferences
         self.worker = worker
         self.source = source
     }
@@ -43,12 +48,26 @@ final class SpotlightIndexer {
     func startObserving(modelContext: ModelContext,
                         coalescingWindow: Duration = .milliseconds(300)) {
         if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) }
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
         pendingRefresh?.cancel()
         projectionGeneration += 1
         self.coalescingWindow = coalescingWindow
         observedModelContext = modelContext
         observationGeneration &+= 1
         let observation = observationGeneration
+        let suite = preferences.suiteName ?? "standard"
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: SpotlightPreferences.didChange, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard notification.userInfo?["suite"] as? String == suite else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.observationGeneration == observation,
+                      let modelContext = self.observedModelContext else { return }
+                // This invalidates a captured read as well as scheduling the full
+                // refresh needed to remove descriptions already in Spotlight.
+                self.requestReindex(modelContext: modelContext)
+            }
+        }
         // NotificationCenter filters by identity without reading any model attributes on the
         // posting thread. The work is scheduled after save() returns, on the context's owner.
         saveObserver = NotificationCenter.default.addObserver(
@@ -79,6 +98,7 @@ final class SpotlightIndexer {
     deinit {
         MainActor.assumeIsolated {
             if let saveObserver { NotificationCenter.default.removeObserver(saveObserver) }
+            if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
             pendingRefresh?.cancel()
         }
     }
@@ -95,7 +115,7 @@ final class SpotlightIndexer {
         }
         do {
             try Task.checkCancellation()
-            let pending = try Self.pendingChanges(in: modelContext)
+            let pending = try Self.pendingChanges(in: modelContext, includeNotes: preferences.includesNotes)
             let snapshots = try await source.read(container: modelContext.container, pending: pending)
             try Task.checkCancellation()
             guard generation == projectionGeneration else { return }
@@ -119,7 +139,7 @@ final class SpotlightIndexer {
     }
 
     func index(task: TaskItem) async {
-        guard let snapshot = Self.snapshot(from: task) else { return }
+        guard let snapshot = Self.snapshot(from: task, includeNotes: preferences.includesNotes) else { return }
         if activeReadGeneration != nil {
             readUpdates[snapshot.id] = snapshot
             readRemovals.remove(snapshot.id)
@@ -147,14 +167,14 @@ final class SpotlightIndexer {
         await worker.flush()
     }
 
-    static func snapshot(from task: TaskItem) -> SpotlightTaskSnapshot? {
+    static func snapshot(from task: TaskItem, includeNotes: Bool = SpotlightPreferences().includesNotes) -> SpotlightTaskSnapshot? {
         guard task.modelContext != nil else { return nil }
-        return SpotlightModelProjection.snapshot(from: task)
+        return SpotlightModelProjection.snapshot(from: task, includeNotes: includeNotes)
     }
 
     /// Identifier queries are bounded to pending saved models, never the full
     /// store. Pending inserts are known to this owner and may have temporary IDs.
-    static func pendingChanges(in context: ModelContext) throws -> SpotlightPendingChanges {
+    static func pendingChanges(in context: ModelContext, includeNotes: Bool = SpotlightPreferences().includesNotes) throws -> SpotlightPendingChanges {
         let inserts = context.insertedModelsArray
         let changes = context.changedModelsArray
         let deletions = context.deletedModelsArray
@@ -198,7 +218,7 @@ final class SpotlightIndexer {
             let id = task.persistentModelID
             guard task.modelContext != nil, !pending.deletedTaskIDs.contains(id),
                   insertedIDs.contains(id) || liveTaskIDs.contains(id) else { continue }
-            if let snapshot = SpotlightModelProjection.snapshot(from: task, pending: pending) {
+            if let snapshot = SpotlightModelProjection.snapshot(from: task, pending: pending, includeNotes: includeNotes) {
                 pending.tasks[id] = snapshot
             } else {
                 pending.deletedTaskIDs.insert(id)
@@ -228,33 +248,34 @@ private actor SpotlightDefaultsStore: SpotlightIndexStateStore {
     }
 }
 
-private actor CoreSpotlightSink: SpotlightIndexSink {
+actor CoreSpotlightSink: SpotlightIndexSink {
     private static let domainID = "com.asecretcompany.nowthis.task"
     private let index = CSSearchableIndex(name: "com.asecretcompany.nowthis.tasks")
 
     func index(_ snapshots: [SpotlightTaskSnapshot], expiresAt: Date) async throws {
         let interval = PerformanceTrace.begin("SpotlightIndex", count: snapshots.count)
         defer { PerformanceTrace.end("SpotlightIndex", interval) }
-        var items: [CSSearchableItem] = []
-        for snapshot in snapshots {
-            let attributes = CSSearchableItemAttributeSet(contentType: .content)
-            attributes.title = snapshot.title
-            attributes.contentDescription = snapshot.contentDescription
-            attributes.containerTitle = snapshot.containerTitle
-            attributes.keywords = snapshot.keywords
-            if let priority = snapshot.priorityDescription { attributes.alternateNames = [priority] }
-            if let dueDate = snapshot.dueDate {
-                attributes.dueDate = dueDate
-                attributes.completionDate = snapshot.completionDate
-            }
-            attributes.relatedUniqueIdentifier = snapshot.id
-            attributes.url = URL(string: "nowthis://task/\(snapshot.id)")
-            let item = CSSearchableItem(uniqueIdentifier: snapshot.id,
-                                       domainIdentifier: Self.domainID, attributeSet: attributes)
-            item.expirationDate = expiresAt
-            items.append(item)
-        }
+        let items = snapshots.map { Self.searchableItem(for: $0, expiresAt: expiresAt) }
         try await index.indexSearchableItems(items)
+    }
+
+    static func searchableItem(for snapshot: SpotlightTaskSnapshot, expiresAt: Date) -> CSSearchableItem {
+        let attributes = CSSearchableItemAttributeSet(contentType: .content)
+        attributes.title = snapshot.title
+        attributes.contentDescription = snapshot.contentDescription
+        attributes.containerTitle = snapshot.containerTitle
+        attributes.keywords = snapshot.keywords
+        if let priority = snapshot.priorityDescription { attributes.alternateNames = [priority] }
+        if let dueDate = snapshot.dueDate {
+            attributes.dueDate = dueDate
+            attributes.completionDate = snapshot.completionDate
+        }
+        attributes.url = URL(string: "nowthis://task/\(snapshot.id)")
+        SpotlightEntityLink.apply(taskID: snapshot.id, to: attributes)
+        let item = CSSearchableItem(uniqueIdentifier: snapshot.id,
+                                   domainIdentifier: Self.domainID, attributeSet: attributes)
+        item.expirationDate = expiresAt
+        return item
     }
 
     func remove(_ identifiers: [String]) async throws {

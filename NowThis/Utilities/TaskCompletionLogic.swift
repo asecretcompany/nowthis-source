@@ -4,44 +4,87 @@ import Foundation
 /// the Watch edit path. Recurring tasks advance to the next occurrence instead
 /// of completing; the sync push is driven by `isDirty`.
 ///
-/// This is a verbatim extraction of the mutation logic that was previously
-/// inlined in `TaskCompletionCoordinator.toggle(_:onStatusChanged:)` — the
-/// animation sequencing, intent donation, widget reload, and status-changed
-/// callback stay in the coordinator; only the field mutations moved here.
+/// Unsupported recurrence is rejected before any field changes. Animation,
+/// intent donation, saving, and reminder effects remain with the callers.
 enum TaskCompletionLogic {
+    enum Completion {
+        case finished
+        case advance(due: Date, start: Date?)
+    }
+
+    enum CompletionError: LocalizedError, CustomLocalizedStringResourceConvertible {
+        case unsupportedRecurrence
+
+        var localizedStringResource: LocalizedStringResource {
+            "NowThis cannot complete tasks with this repeat rule. The task has not been changed."
+        }
+
+        var errorDescription: String? { String(localized: localizedStringResource) }
+    }
+
     /// Marks a task completed, unless it is recurring — in which case it is
     /// advanced to its next occurrence instead.
     ///
     /// - Returns: `true` when the task was recurring and advanced instead of
     ///   completing; `false` when it was marked completed.
     @discardableResult
-    static func markCompleted(_ task: TaskItem, now: Date = Date()) -> Bool {
-        // Check for recurring task — advance to next occurrence
-        if let rrule = task.recurrenceRule,
-           let rule = RecurrenceRule.parse(rrule),
-           let currentDue = task.dueDate,
-           let nextDue = rule.nextDate(after: currentDue) {
-            // Reset to next occurrence instead of completing
-            task.dueDate = nextDue
+    static func markCompleted(_ task: TaskItem, now: Date = Date()) throws -> Bool {
+        apply(try completion(for: task), to: task, now: now)
+    }
+
+    static func completion(for task: TaskItem) throws -> Completion {
+        if let raw = task.recurrenceRule, !raw.isEmpty {
+            guard let rule = RecurrenceRule.parse(raw), rule.count == nil else {
+                // COUNT needs lifetime occurrence history, which this task does
+                // not store. Preserve the imported rule and all fields instead
+                // of repeatedly advancing with completionCount == 0.
+                throw CompletionError.unsupportedRecurrence
+            }
+            if let currentDue = task.dueDate {
+                if let context = task.modelContext {
+                    do {
+                        let state = try VTODOOpaqueState.load(taskID: task.id, in: context)
+                        let modifiers: Set<String> = ["EXDATE", "RDATE", "EXRULE", "RECURRENCE-ID"]
+                        if state?.opaqueProperties.contains(where: { modifiers.contains(ICalendarParser.splitProperty($0).name) }) == true {
+                            throw CompletionError.unsupportedRecurrence
+                        }
+                    } catch { throw CompletionError.unsupportedRecurrence }
+                }
+                // VALUE=DATE is stored at UTC midnight; local-zone arithmetic would
+                // treat it as the previous weekday west of UTC and advance the wrong day.
+                var calendar = Calendar.current
+                if task.isDueDateOnly { calendar.timeZone = TimeZone(secondsFromGMT: 0)! }
+                let result = rule.nextOccurrence(after: currentDue, calendar: calendar)
+                if result == .unsupported { throw CompletionError.unsupportedRecurrence }
+                if case .date(let nextDue) = result {
+                    let offset = nextDue.timeIntervalSince(currentDue)
+                    return .advance(due: nextDue, start: task.startDate?.addingTimeInterval(offset))
+                }
+            }
+        }
+        return .finished
+    }
+
+    @discardableResult
+    static func apply(_ completion: Completion, to task: TaskItem, now: Date) -> Bool {
+        let advanced: Bool
+        switch completion {
+        case .finished:
+            task.status = .completed
+            task.completedDate = now
+            task.percentComplete = 100
+            advanced = false
+        case .advance(let due, let start):
+            task.dueDate = due
             task.status = .needsAction
             task.completedDate = nil
             task.percentComplete = 0
-            if let startDate = task.startDate {
-                let offset = nextDue.timeIntervalSince(currentDue)
-                task.startDate = startDate.addingTimeInterval(offset)
-            }
-            task.lastModifiedDate = now
-            task.isDirty = true
-            return true
+            if let start { task.startDate = start }
+            advanced = true
         }
-
-        // Non-recurring: mark complete normally
-        task.status = .completed
-        task.completedDate = now
-        task.percentComplete = 100
         task.lastModifiedDate = now
         task.isDirty = true
-        return false
+        return advanced
     }
 
     /// Applies an arbitrary status change, the way dragging a card between the
@@ -59,10 +102,16 @@ enum TaskCompletionLogic {
     ///   reminders should therefore be cancelled. A recurring task that advanced
     ///   to its next occurrence returns `false`: it still wants them.
     @discardableResult
-    static func apply(_ newStatus: TaskStatus, to task: TaskItem, now: Date = Date()) -> Bool {
+    static func apply(_ newStatus: TaskStatus, to task: TaskItem, now: Date = Date()) throws -> Bool {
+        if newStatus == .completed { return try !markCompleted(task, now: now) }
+        applyNoncompletion(newStatus, to: task, now: now)
+        return false
+    }
+
+    static func applyNoncompletion(_ newStatus: TaskStatus, to task: TaskItem, now: Date) {
         switch newStatus {
         case .completed:
-            return !markCompleted(task, now: now)
+            return
         case .needsAction:
             markUncompleted(task, now: now)
         case .inProcess:
@@ -83,7 +132,6 @@ enum TaskCompletionLogic {
             task.lastModifiedDate = now
             task.isDirty = true
         }
-        return false
     }
 
     /// Reverts a task's completion fields to the not-completed state.

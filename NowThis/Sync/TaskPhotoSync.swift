@@ -31,8 +31,12 @@ extension TaskPhotoFilesTransport {
 actor TaskPhotoSync {
     private let files: any TaskPhotoFilesTransport
     private let cache: TaskPhotoCache
-    init(files: any TaskPhotoFilesTransport = NextcloudPhotoClient(), cache: TaskPhotoCache = TaskPhotoOriginals.cache) {
-        self.files = files; self.cache = cache
+    private let keychainManager: KeychainManager
+    init(files: any TaskPhotoFilesTransport = NextcloudPhotoClient(), cache: TaskPhotoCache = TaskPhotoOriginals.cache,
+         keychainManager: KeychainManager = KeychainManager()) {
+        self.files = files
+        self.cache = cache
+        self.keychainManager = keychainManager
     }
 
     struct Photo: Sendable {
@@ -43,22 +47,34 @@ actor TaskPhotoSync {
         let folderFileID: String?
         let contentType: String?
         let previousFolderID: String?
-        let previousCalendarHref: String?
         let previousFileID: String?
-        let previousAccountID: String?
+        let retainedSource: TaskPhotoOwnership.Binding?
+        let accountID: String
+        let serverBaseURL: String
+        let username: String
+        let calendarHref: String
     }
     struct List: Sendable {
         let href: String
         let accountID: String
         let readOnly: Bool
         let knownFolderID: String?
+        let serverBaseURL: String
+        let username: String
         let photos: [Photo]
     }
 
-    func synchronize(listID: String, access: PhotoServerAccess, container: ModelContainer, uploadOriginals: Bool = true, deadline: Date? = nil) async throws -> Set<String> {
-        guard let list = try await Self.snapshot(listID: listID, container: container) else { return [] }
+    struct Outcome: Sendable {
+        var changedTaskIDs: Set<String> = []
+        var credentialsDeferred = false
+    }
+
+    func synchronize(listID: String, access: PhotoServerAccess, container: ModelContainer,
+                     uploadOriginals: Bool = true, deadline: Date? = nil) async throws -> Outcome {
+        var outcome = Outcome()
+        guard let list = try await Self.snapshot(listID: listID, container: container) else { return outcome }
+        guard list.serverBaseURL == access.baseURL, list.username == access.username else { throw TaskPhotoOwnership.Failure.missingOwner }
         await files.setRunDeadline(deadline ?? Date().addingTimeInterval(uploadOriginals ? 300 : 15))
-        var changed = Set<String>()
         let folder: PhotoFolder
         do {
             let membership = try await files.inspectCalendar(calendarHref: list.href, access: access)
@@ -70,19 +86,21 @@ actor TaskPhotoSync {
             } else {
                 for photo in list.photos {
                     if let id = try await Self.commit(photo, listID: listID, folderID: nil, originalID: nil,
-                        status: "waiting", container: container) { changed.insert(id) }
+                        status: "waiting", container: container) { outcome.changedTaskIDs.insert(id) }
                 }
-                return changed
+                return outcome
             }
+        } catch let deferral as RetryDeferredError {
+            throw deferral
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             for photo in list.photos {
                 if let id = try await Self.commit(photo, listID: listID, folderID: nil, originalID: nil,
-                    status: "unavailable", container: container) { changed.insert(id) }
+                    status: "unavailable", container: container) { outcome.changedTaskIDs.insert(id) }
             }
-            return changed
+            return outcome
         }
-        guard uploadOriginals else { return changed }
+        guard uploadOriginals else { return outcome }
         for photo in list.photos {
             try Task.checkCancellation()
             // Never copy an arbitrary remote link into a newly shared folder. Copies
@@ -91,18 +109,37 @@ actor TaskPhotoSync {
             guard !list.readOnly else { continue }
             do {
                 var bytes = try await cache.load(photoID: photo.id)
-                if bytes == nil, let sourceID = photo.previousFileID {
-                    guard let sourceFolder = photo.previousFolderID, let sourceHref = photo.previousCalendarHref,
-                          let sourceAccount = photo.previousAccountID else { throw TaskPhotoOriginalError.unavailable }
-                    let source = try await Self.sourceAccess(accountID: sourceAccount, fallback: access, container: container)
-                    bytes = try await files.download(fileID: sourceID, folderFileID: sourceFolder,
-                        calendarHref: sourceHref, access: source)
-                    if let bytes { try await cache.store(bytes, photoID: photo.id) }
+                if photo.previousFileID != nil, photo.retainedSource == nil {
+                    throw AccountCredentialDeferral.staleAccount
+                }
+                if bytes == nil, let binding = photo.retainedSource {
+                    guard let sourceFolder = binding.folderID else { throw TaskPhotoOriginalError.unavailable }
+                    let sourceAccount = binding.accountID
+                    let admission = ServerRetryAdmission.current?.forAccount(sourceAccount)
+                    do {
+                        try await admission?.check()
+                        let source = try await sourceAccess(accountID: sourceAccount, expected: binding.credentialScope,
+                                                            container: container)
+                        try await Self.requireRetainedSource(binding, photoID: photo.id, container: container)
+                        bytes = try await ServerRetryAdmission.$current.withValue(admission) {
+                            try await files.download(fileID: binding.fileID, folderFileID: sourceFolder,
+                                calendarHref: binding.collectionPath, access: source)
+                        }
+                    } catch is RetryDeferredError where sourceAccount != list.accountID {
+                        try Task.checkCancellation()
+                        // The source account will be retried separately. Keep the
+                        // original pending and allow other destination work.
+                        continue
+                    }
+                    if let bytes {
+                        try await Self.requireRetainedSource(binding, photoID: photo.id, container: container)
+                        try await cache.store(bytes, photoID: photo.id)
+                    }
                 }
                 guard let bytes else {
                     // This owner can provision a recipient's pending request even without its bytes.
                     if let id = try await Self.commit(photo, listID: listID, folderID: folder.fileID,
-                        originalID: nil, status: "pending", container: container) { changed.insert(id) }
+                        originalID: nil, status: "pending", container: container) { outcome.changedTaskIDs.insert(id) }
                     continue
                 }
                 let contentType: String
@@ -113,17 +150,25 @@ actor TaskPhotoSync {
                     }
                     contentType = type
                 }
+                if let binding = photo.retainedSource {
+                    try await Self.requireRetainedSource(binding, photoID: photo.id, container: container)
+                }
                 let fileID = try await files.upload(data: bytes, contentType: contentType,
                     photoID: photo.photoID, folder: folder, access: access)
                 if let id = try await Self.commit(photo, listID: listID, folderID: folder.fileID,
-                    originalID: fileID, status: "pending", container: container) { changed.insert(id) }
+                    originalID: fileID, status: "pending", container: container) { outcome.changedTaskIDs.insert(id) }
+            } catch is AccountCredentialDeferral {
+                try Task.checkCancellation()
+                outcome.credentialsDeferred = true
+            } catch let deferral as RetryDeferredError {
+                throw deferral
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
                 if let id = try await Self.commit(photo, listID: listID, folderID: nil, originalID: nil,
-                    status: "unavailable", container: container) { changed.insert(id) }
+                    status: "unavailable", container: container) { outcome.changedTaskIDs.insert(id) }
             }
         }
-        return changed
+        return outcome
     }
 
     @MainActor
@@ -137,7 +182,7 @@ actor TaskPhotoSync {
         // The default optimized-only path should not walk large lists just to find no originals.
         if try context.fetchCount(originals) == 0 {
             guard known != nil else { return nil }
-            return List(href: list.serverURL, accountID: account.id, readOnly: list.isReadOnly, knownFolderID: known, photos: [])
+            return List(href: list.serverURL, accountID: account.id, readOnly: list.isReadOnly, knownFolderID: known, serverBaseURL: account.serverBaseURL, username: account.username, photos: [])
         }
         // Avoid nested optional predicates unsupported by older SwiftData runtimes.
         var tasks = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.taskList?.id == listID })
@@ -148,12 +193,34 @@ actor TaskPhotoSync {
             return Photo(id: photo.id, photoID: photo.photoID, taskID: task.id,
                 originalFileID: photo.originalFileID, folderFileID: photo.folderFileID,
                 contentType: photo.originalContentType, previousFolderID: photo.previousOriginalFolderID,
-                previousCalendarHref: photo.previousOriginalListID.flatMap { sourceID in
-                    (try? context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == sourceID })).first)?.serverURL
-                }, previousFileID: photo.previousOriginalFileID, previousAccountID: photo.previousOriginalAccountID)
+                previousFileID: photo.previousOriginalFileID, retainedSource: retainedSource(for: photo, in: context),
+                accountID: account.id, serverBaseURL: account.serverBaseURL, username: account.username, calendarHref: list.serverURL)
         }
         guard !photos.isEmpty || known != nil else { return nil }
-        return List(href: list.serverURL, accountID: account.id, readOnly: list.isReadOnly, knownFolderID: known, photos: photos)
+        return List(href: list.serverURL, accountID: account.id, readOnly: list.isReadOnly, knownFolderID: known, serverBaseURL: account.serverBaseURL, username: account.username, photos: photos)
+    }
+
+    @MainActor
+    private static func retainedSource(for photo: TaskPhoto, in context: ModelContext) -> TaskPhotoOwnership.Binding? {
+        guard photo.originalFileID == nil, photo.previousOriginalFileID != nil else { return nil }
+        return try? TaskPhotoOwnership.read(photo, in: context).state.retained.first
+    }
+
+    @MainActor
+    private static func requireRetainedSource(
+        _ expected: TaskPhotoOwnership.Binding, photoID: String, container: ModelContainer
+    ) throws {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let sourceID = expected.listID
+        guard let photo = try context.fetch(FetchDescriptor<TaskPhoto>(predicate: #Predicate { $0.id == photoID })).first,
+              photo.pendingOperation != "remove", photo.task?.isDeletedLocally == false,
+              retainedSource(for: photo, in: context) == expected,
+              let list = try context.fetch(FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == sourceID })).first,
+              let account = list.account, AccountCredentialScope(account) == expected.credentialScope,
+              list.serverURL.utf8.elementsEqual(expected.collectionPath.utf8) else {
+            throw AccountCredentialDeferral.staleAccount
+        }
     }
 
     @MainActor
@@ -163,22 +230,24 @@ actor TaskPhotoSync {
         let predicate = #Predicate<TaskPhoto> { $0.id == id }
         guard let current = try container.mainContext.fetch(FetchDescriptor(predicate: predicate)).first,
               let task = current.task, task.modelContext != nil, !task.isDeletedLocally,
-              task.taskList?.id == listID, current.pendingOperation != "remove",
+              task.taskList?.id == listID, task.taskList?.account?.id == photo.accountID,
+              task.taskList?.account?.serverBaseURL == photo.serverBaseURL, task.taskList?.account?.username == photo.username,
+              task.taskList?.serverURL == photo.calendarHref, current.pendingOperation != "remove",
               current.originalFileID == photo.originalFileID,
               current.previousOriginalFileID == photo.previousFileID,
               current.previousOriginalFolderID == photo.previousFolderID,
               !SyncPushAcknowledgement.hasPendingChange(task, in: container.mainContext) else { return nil }
         let context = ModelContext(container); context.autosaveEnabled = false
         guard let stored = try context.fetch(FetchDescriptor(predicate: predicate)).first,
-              let storedTask = stored.task, storedTask.taskList?.id == listID,
+              let storedTask = stored.task, let list = storedTask.taskList, list.id == listID,
+              list.account?.id == photo.accountID, list.account?.serverBaseURL == photo.serverBaseURL,
+              list.account?.username == photo.username, list.serverURL == photo.calendarHref,
               stored.originalFileID == photo.originalFileID, stored.pendingOperation != "remove" else { return nil }
         var payloadChanged = false
         if let originalID, originalID != stored.originalFileID {
-            if stored.previousOriginalFileID == nil, let previous = stored.originalFileID {
-                stored.previousOriginalFileID = previous
-                stored.previousOriginalAccountID = storedTask.taskList?.account?.id
-                stored.previousOriginalListID = listID
-            }
+            let update = try TaskPhotoOwnership.accepted(stored, fileID: originalID, folderID: folderID,
+                list: list, in: context)
+            update.apply(in: context, normalize: true)
             stored.originalFileID = originalID; payloadChanged = true
         }
         if let folderID, folderID != stored.folderFileID, stored.originalFileID == nil || originalID != nil {
@@ -207,15 +276,24 @@ actor TaskPhotoSync {
 
     private static func folderKey(accountID: String, listID: String) -> String { "taskPhotoFolder:" + accountID + ":" + listID }
 
-    static func sourceAccess(accountID: String, fallback: PhotoServerAccess, container: ModelContainer) async throws -> PhotoServerAccess {
-        let value = try await MainActor.run { () throws -> (String, String)? in
-            let context = ModelContext(container)
-            guard let account = try context.fetch(FetchDescriptor<ServerAccount>(predicate: #Predicate { $0.id == accountID })).first else { return nil }
-            return (account.serverBaseURL, account.username)
+    func sourceAccess(
+        accountID: String, expected: AccountCredentialScope, container: ModelContainer
+    ) async throws -> PhotoServerAccess {
+        switch try await AccountManager.admitCredentials(accountID: accountID, expected: expected,
+                                                        container: container, keychainManager: keychainManager) {
+        case .available(let credentials):
+            return PhotoServerAccess(baseURL: credentials.scope.serverBaseURL,
+                                     username: credentials.scope.username, password: credentials.password)
+        case .missing:
+            throw TaskPhotoOriginalError.unavailable
+        case .deferred(let reason):
+            throw reason
         }
-        guard let value else { throw TaskPhotoOriginalError.unavailable }
-        if value.0 == fallback.baseURL && value.1 == fallback.username { return fallback }
-        guard let password = try await KeychainManager().retrieve(for: accountID) else { throw TaskPhotoOriginalError.unavailable }
-        return PhotoServerAccess(baseURL: value.0, username: value.1, password: password)
+    }
+}
+
+private extension TaskPhotoOwnership.Binding {
+    var credentialScope: AccountCredentialScope {
+        AccountCredentialScope(id: accountID, serverBaseURL: serverBaseURL, username: username)
     }
 }

@@ -51,11 +51,8 @@ final class TaskList {
         set { ctag = newValue }
     }
 
-    /// When the last *full* inbound pull of this collection completed.
-    /// Bounds the CTag skip optimization (see `SyncEngine.shouldSkipPull`): even
-    /// when the server CTag still matches, a full pull is forced once this is
-    /// stale, so a cached/stale `getctag` can never silently suppress server
-    /// changes indefinitely. `nil` until the first full pull.
+    /// Timestamp of the last foreground inbound pull. The scoped import
+    /// checkpoint separately tracks the last complete integrity scan.
     var lastFullPullDate: Date?
 
     /// Path component used for constructing CalDAV request URLs.
@@ -63,12 +60,9 @@ final class TaskList {
 
     // MARK: - Configuration
 
-    /// Whether the server lets this user change the list's tasks — false for a list
-    /// shared with them read-only. Set from `current-user-privilege-set` at discovery;
-    /// always false for a server that does not report privileges, and for local lists.
-    ///
-    /// Only the move picker reads it today, to refuse a destination the PUT would be
-    /// refused by. The rest of the app's editing controls do not consult it yet.
+    /// True when discovery reports that the user cannot change this list's tasks.
+    /// The app uses `current-user-privilege-set` when the server provides it.
+    /// Local lists and servers that omit privileges keep the default false value.
     var isReadOnly: Bool = false
 
     /// Confirmed loss of server access hides cached shared photos until a fresh pull.

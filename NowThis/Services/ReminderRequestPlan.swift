@@ -37,6 +37,7 @@ extension ReminderNotificationPlanner {
         allDayReminderMinutes: Int = TaskDefaultsPreferences.allDayReminderMinutes,
         calendar: Calendar = .current
     ) -> ReminderRequestPlan {
+        PerformanceTrace.record(.reminderPlan, rows: tasks.count)
         let active = tasks.filter { $0.hasActiveStatus && !$0.isDeletedLocally }
         let timeline = badgesEnabled
             ? BadgeTimeline(inputs: active, allDayReminderMinutes: allDayReminderMinutes, calendar: calendar)

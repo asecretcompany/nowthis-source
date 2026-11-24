@@ -171,14 +171,13 @@ struct TranslationDisclosureCopyTests {
             ofKey: "disclosure.translation.body", entry: try #require(all["disclosure.translation.body"]))
             .lowercased()
 
-        // Substance, not bytes: reword it freely, but the three claims TRANSLATION.md §9 makes
-        // binding must all survive.
+        // Substance, not bytes: reword it freely, but the disclosure's three claims must all
+        // survive.
         //
         // Note the substrings. A bare `contains("ai")` is a false-positive magnet — "available",
         // "again", "detail", "explain" all contain it — so this matches "by ai" and "ai service".
-        // The first draft of this guard tested for "automatic"/"machine", which was written
-        // against an earlier English body and silently stopped meaning anything the moment §9's
-        // wording landed. It is only a pin if it fails when the claim goes.
+        // Match the explicit wording rather than a generic adjective, so this fails when the
+        // disclosure's claim disappears.
         #expect(body.contains("translat"), "The body no longer mentions translation at all: \(body)")
 
         #expect(body.contains("by ai") || body.contains("ai service"), """
@@ -186,8 +185,8 @@ struct TranslationDisclosureCopyTests {
 
               \(body)
 
-            TRANSLATION.md §9 makes this the fact the sheet exists to convey. Softening it into
-            "translated automatically" or "carefully localized" makes the disclosure untrue.
+            This is the fact the sheet exists to convey. Softening it into "translated
+            automatically" or "carefully localized" makes the disclosure untrue.
             """)
 
         #expect(body.contains("building the app") || body.contains("development"), """

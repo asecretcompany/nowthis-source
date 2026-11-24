@@ -30,7 +30,7 @@ actor WatchSnapshotWorker {
             lists: savedLists.map { WatchListInput($0) }
         )
         let defaultListID = resolveDefaultListID(request.savedDefaultListID, lists: rows.lists)
-        let snapshot = WatchSnapshotValueBuilder.build(
+        var snapshot = WatchSnapshotValueBuilder.build(
             tasks: rows.tasks,
             lists: rows.lists,
             isProUnlocked: request.isProUnlocked,
@@ -42,7 +42,10 @@ actor WatchSnapshotWorker {
         )
 
         do {
-            return WatchEncodedSnapshot(contextDictionary: try snapshot.contextDictionary())
+            snapshot.receipts = try WatchReceiptStore.recent(in: context, now: request.now)
+            return WatchEncodedSnapshot(contextDictionary: try WatchSnapshotBudget.context(
+                snapshot, completionFailureID: request.completionFailureID,
+                completionFailureUID: request.completionFailureUID))
         } catch {
             Self.log.error("Snapshot encoding failed: \(error)")
             return nil

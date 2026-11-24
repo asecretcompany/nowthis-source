@@ -78,4 +78,41 @@ struct TaskListLivenessTests {
         #expect(live.count == 3)
         #expect(live.map(\.persistentModelID) == tasks.map(\.persistentModelID))
     }
+
+    @Test("A child deleted after projection cannot shift another child's drag offsets")
+    func deletedSiblingAbortsPendingMove() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let parent = TaskItem(title: "Parent")
+        context.insert(parent)
+        for (index, title) in ["A", "B", "C"].enumerated() {
+            let child = TaskItem(title: title)
+            child.manualSortOrder = 100 * (index + 1)
+            child.isDirty = false
+            child.parentTask = parent
+            context.insert(child)
+        }
+        try context.save()
+        let children = TaskListHelpers.orderedSubtasksIfLive(of: parent, by: .manually, ascending: true)
+        let projection = TaskListHierarchyProjection(roots: [parent], isVisible: { _ in true },
+            id: { $0.id }, orderedChildren: { $0 === parent ? children : [] })
+        let move = try #require(projection.move(from: IndexSet(integer: 3), to: 1))
+        let parentID = try #require(move.parentID)
+        let siblings = try #require(move.siblings)
+
+        let background = ModelContext(container)
+        let deleted = try #require(background.model(for: children[1].persistentModelID) as? TaskItem)
+        background.delete(deleted)
+        try background.save()
+
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate {
+            !$0.isDeletedLocally && $0.parentTask?.id == parentID
+        })
+        #expect(!TaskListHelpers.saveManualMove(siblings, from: move.source, to: move.destination,
+            ascending: true, in: context, matching: descriptor))
+        let reload = ModelContext(container)
+        let persisted = try reload.fetch(descriptor)
+        #expect(persisted.map(\.manualSortOrder).sorted() == [100, 300])
+        #expect(persisted.allSatisfy { !$0.isDirty })
+    }
 }

@@ -1,8 +1,25 @@
 import Foundation
 import SwiftData
+import SwiftUI
 
 /// Helpers for task list display filtering.
 enum TaskListHelpers {
+
+    /// Search precedes UID deduplication: another copy of a task may be the
+    /// one whose title or metadata matches the user's query.
+    static func searchAndDeduplicate(_ sortedTasks: [TaskItem], query: String) -> [TaskItem] {
+        let matching = query.isEmpty ? sortedTasks : sortedTasks.filter { matchesSearch($0, query: query) }
+        return deduplicateByUID(matching)
+    }
+
+    static func matchesSearch(_ task: TaskItem, query: String) -> Bool {
+        // Preserve locale-aware case/diacritic folding and metadata matches.
+        task.title.localizedStandardContains(query)
+            || (task.descriptionText?.localizedStandardContains(query) ?? false)
+            || (task.locationName?.localizedStandardContains(query) ?? false)
+            || task.tags.contains { $0.name.localizedStandardContains(query) }
+    }
+
 
     /// Removes duplicate tasks by UID, keeping the first occurrence.
     ///
@@ -146,18 +163,33 @@ enum TaskListHelpers {
     ///   the row that offers the delete only ever knew about one of them.
     @discardableResult
     static func markDeleted(_ task: TaskItem, now: Date = Date()) -> [String] {
-        var stack = [task]
-        var seen: Set<String> = []
-        var marked: [String] = []
-        while let current = stack.popLast() {
-            guard seen.insert(current.id).inserted else { continue }
+        markDeleted(deletionSubtree(of: task), now: now)
+    }
+
+    /// Marks an already-admitted exact write set without walking the relationship tree again.
+    @discardableResult
+    static func markDeleted(_ admitted: [TaskItem], now: Date = Date()) -> [String] {
+        for current in admitted {
             current.isDeletedLocally = true
             current.isDirty = true
             current.lastModifiedDate = now
-            marked.append(current.id)
+        }
+        return admitted.map(\.id)
+    }
+
+    /// The deletion walk includes deleted intermediate nodes: their active descendants
+    /// still need tombstones before server cleanup can cascade through the branch.
+    /// Keep the original ID-based seen set, order, and never-inserted fixture support.
+    static func deletionSubtree(of task: TaskItem) -> [TaskItem] {
+        var stack = [task]
+        var seen: Set<String> = []
+        var subtree: [TaskItem] = []
+        while let current = stack.popLast() {
+            guard seen.insert(current.id).inserted else { continue }
+            subtree.append(current)
             stack.append(contentsOf: current.subtasks)
         }
-        return marked
+        return subtree
     }
 
     /// Records that a task's tags were edited on this device.
@@ -211,29 +243,201 @@ enum TaskListHelpers {
         Int(createdDate.timeIntervalSinceReferenceDate)
     }
 
-    /// Returns a `manualSortOrder` value that places a newly inserted task above
-    /// every existing task (lower values sort first), staying on Nextcloud's sort
-    /// scale. Returns `0` when the list is empty, so the task keeps its seeded value.
-    static func topSortOrder(forInsertingInto tasks: [TaskItem]) -> Int {
-        guard let minimum = tasks.map(\.effectiveSortOrder).min() else { return 0 }
-        return minimum - 1
+    /// Offsets a rank in the usable integer sequence, which skips the legacy
+    /// unset value 0. The wider result lets callers check bounds before storing it.
+    static func manualRank(offset: Int128, from anchor: Int) -> Int128 {
+        let rank = Int128(anchor) + offset
+        if anchor < 0 && rank >= 0 { return rank + 1 }
+        if anchor > 0 && rank <= 0 { return rank - 1 }
+        return rank
     }
 
-    /// Renumbers `manualSortOrder` to match the given display order, keeping the
-    /// values on Nextcloud's `X-APPLE-SORT-ORDER` scale: the list is anchored at
-    /// its smallest existing (effective) value and each subsequent task is spaced
-    /// by `manualSortSpacing`. Any task whose value changes is marked dirty so the
-    /// new order is pushed; tasks already in position are left untouched to avoid
-    /// needless sync churn.
-    static func assignManualOrder(_ orderedTasks: [TaskItem]) {
-        guard let anchor = orderedTasks.map(\.effectiveSortOrder).min() else { return }
-        for (index, task) in orderedTasks.enumerated() {
-            let newValue = anchor + index * manualSortSpacing
-            guard task.manualSortOrder != newValue else { continue }
-            task.manualSortOrder = newValue
-            task.isDirty = true
-            task.lastModifiedDate = Date()
+    /// Returns a lower rank than the current roots, or nil when they exhaust the lower
+    /// bound. A legacy row can have different displayed (raw) and synced ranks.
+    /// Return 0 for an empty scope so the new task uses its creation-date rank.
+    static func topSortOrder(forInsertingInto tasks: [TaskItem]) -> Int? {
+        guard let minimum = tasks.lazy.map({ min($0.manualSortOrder, $0.effectiveSortOrder) }).min() else { return 0 }
+        return Int(exactly: manualRank(offset: -1, from: minimum))
+    }
+
+    @MainActor
+    static func saveInlineTask(_ task: TaskItem, withLowerRankThan liveRoots: [TaskItem],
+                               manualAscending: Bool, in context: ModelContext,
+                               errorState: ErrorState? = nil, save: (() throws -> Void)? = nil) -> Bool {
+        let ranks: (assignments: [(task: TaskItem, rank: Int)], normalizing: Bool)
+        do {
+            ranks = try inlineRankAssignments(task, liveRoots: liveRoots,
+                manualAscending: manualAscending, in: context)
+            let eligibility = TaskWriteEligibility(writingIn: context)
+            let destination = task.taskList.map {
+                TaskWriteEligibility.CreationDestination.list(id: $0.id, expectedPersistentID: $0.persistentModelID)
+            } ?? .unbound
+            _ = try eligibility.destination(destination)
+            try eligibility.tasks(ranks.assignments.map(\.task).filter { $0 !== task })
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState, creating: true)
+            return false
         }
+
+        let snapshots = ranks.assignments.map(\.task).filter { $0 !== task }.map {
+            (task: $0, rank: $0.manualSortOrder, dirty: $0.isDirty, modified: $0.lastModifiedDate)
+        }
+        let existingTickets = Set(context.insertedModelsArray.compactMap { ($0 as? SyncMetadata)?.id })
+        let now = Date()
+        for assignment in ranks.assignments {
+            if assignment.task === task && !ranks.normalizing {
+                task.manualSortOrder = assignment.rank
+            } else {
+                setManualRank(assignment.rank, on: assignment.task, now: now)
+            }
+        }
+        task.isDirty = true
+        context.insert(task)
+        do {
+            // Keep old mirror hints until the shared commit is durable, so a
+            // failed insertion only owns appended journal rows.
+            try ReminderSchedulingJournal.saveTaskChanges(in: context,
+                retireCalendarAdvisory: false, save: save)
+            return true
+        } catch {
+            let id = task.id
+            if context.insertedModelsArray.contains(where: { $0 === task }) {
+                let tickets = context.insertedModelsArray.compactMap { $0 as? SyncMetadata }.filter {
+                    !existingTickets.contains($0.id) && ($0.id.hasPrefix(ReminderSchedulingJournal.ticketPrefix)
+                        || $0.id.hasPrefix(CalendarMirrorState.prefix))
+                }
+                context.delete(task)
+                for ticket in tickets { context.delete(ticket) }
+            } else {
+                var descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })
+                descriptor.includePendingChanges = false
+                descriptor.fetchLimit = 1
+                if let committed = try? ModelContext(context.container).fetch(descriptor).first,
+                   committed.persistentModelID == task.persistentModelID {
+                    CalendarMirrorState.publishCommit(in: context.container, includesTaskChanges: true)
+                    return true
+                }
+            }
+            for snapshot in snapshots {
+                snapshot.task.manualSortOrder = snapshot.rank
+                snapshot.task.isDirty = snapshot.dirty
+                snapshot.task.lastModifiedDate = snapshot.modified
+            }
+            ViewPersistence.report(error, to: errorState)
+            return false
+        }
+    }
+
+    private static func inlineRankAssignments(_ task: TaskItem, liveRoots: [TaskItem],
+                                              manualAscending: Bool, in context: ModelContext)
+        throws -> (assignments: [(task: TaskItem, rank: Int)], normalizing: Bool) {
+        let draftID = task.persistentModelID
+        if let rank = topSortOrder(forInsertingInto: liveRoots.filter { $0.persistentModelID != draftID }) {
+            return ([(task, rank)], false)
+        }
+        // All Tasks can contain other lists' extreme ranks. Only the list
+        // receiving this task can be renumbered to make room for it.
+        let listID = task.taskList?.id
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate {
+            !$0.isDeletedLocally && $0.parentTask == nil && $0.taskList?.id == listID
+        }, sortBy: [SortDescriptor(\.createdDate), SortDescriptor(\.id)])
+        let roots = try context.fetch(descriptor).filter { $0.persistentModelID != draftID }
+        if let rank = topSortOrder(forInsertingInto: roots) { return ([(task, rank)], false) }
+
+        // Keep the query's tie order, then append roots absent from the snapshot.
+        var byID = Dictionary(uniqueKeysWithValues: roots.map { ($0.persistentModelID, $0) })
+        let known = liveRoots.compactMap { byID.removeValue(forKey: $0.persistentModelID) }
+        let newToSnapshot = roots.filter { byID[$0.persistentModelID] != nil }
+        let ordered = (known + newToSnapshot).sorted(
+            by: TaskSortOption.manually.comparator(ascending: manualAscending))
+        return (manualOrderAssignments(manualAscending ? [task] + ordered : ordered + [task],
+                                       ascending: manualAscending), true)
+    }
+
+    /// Assigns spaced ranks in the requested display direction. Prefer the
+    /// existing minimum when the sequence fits with space at both ends.
+    static func assignManualOrder(_ orderedTasks: [TaskItem], ascending: Bool) {
+        let now = Date()
+        for assignment in manualOrderAssignments(orderedTasks, ascending: ascending) {
+            setManualRank(assignment.rank, on: assignment.task, now: now)
+        }
+    }
+
+    static func manualOrderAssignments(_ orderedTasks: [TaskItem], ascending: Bool) -> [(task: TaskItem, rank: Int)] {
+        guard let first = orderedTasks.first,
+              let minimum = orderedTasks.lazy.map(\.effectiveSortOrder).min() else { return [] }
+        let preferredSpacing = Int128(manualSortSpacing)
+        let intervals = Int128(orderedTasks.count - 1)
+        let range = Int128(Int.max) - Int128(Int.min) - 1 // Exclude zero.
+        let spacing = (intervals + 2) * preferredSpacing <= range ? preferredSpacing : 1
+        let lastOffset = intervals * spacing
+
+        let preferredAnchor = minimum == 0 ? 1 : minimum
+        let anchor: Int
+        if Int(exactly: manualRank(offset: -spacing, from: preferredAnchor)) != nil,
+           Int(exactly: manualRank(offset: lastOffset + spacing, from: preferredAnchor)) != nil {
+            anchor = preferredAnchor
+        } else {
+            let seed = max(defaultSortOrder(for: first.createdDate), 1)
+            anchor = Int(exactly: manualRank(offset: lastOffset + spacing, from: seed)) != nil
+                ? seed : Int.min + Int(spacing)
+        }
+
+        return orderedTasks.enumerated().compactMap { index, task in
+            let position = ascending ? index : orderedTasks.count - 1 - index
+            let rank = Int(manualRank(offset: Int128(position) * spacing, from: anchor))
+            return task.manualSortOrder == rank ? nil : (task, rank)
+        }
+    }
+
+    static func setManualRank(_ rank: Int, on task: TaskItem, now: Date) {
+        guard task.manualSortOrder != rank else { return }
+        task.manualSortOrder = rank
+        task.isDirty = true
+        task.lastModifiedDate = now
+    }
+
+    @MainActor
+    static func saveManualMove(_ displayed: [TaskItem], from source: IndexSet, to destination: Int,
+                               ascending: Bool, in context: ModelContext,
+                               matching descriptor: FetchDescriptor<TaskItem>,
+                               errorState: ErrorState? = nil) -> Bool {
+        guard !source.isEmpty, source.allSatisfy({ displayed.indices.contains($0) }),
+              (0...displayed.count).contains(destination) else { return false }
+        var scope = descriptor
+        scope.includePendingChanges = true
+        let live: Set<PersistentIdentifier>
+        do {
+            live = Set(try context.fetchIdentifiers(scope))
+        } catch {
+            ViewPersistence.report(error, to: errorState)
+            return false
+        }
+        // A missing row invalidates the displayed offsets. Verify IDs before
+        // reading any model attributes, which can fault after a sync deletion.
+        guard displayed.allSatisfy({ live.contains($0.persistentModelID) }),
+              displayed.allSatisfy({ $0.modelContext != nil && !$0.isDeletedLocally }) else { return false }
+        var reordered = displayed
+        reordered.move(fromOffsets: source, toOffset: destination)
+        var assignments: [(task: TaskItem, rank: Int)] = []
+        for completed in [false, true] {
+            let before = displayed.filter { ($0.status == .completed) == completed }
+            let after = reordered.filter { ($0.status == .completed) == completed }
+            guard !before.elementsEqual(after, by: { $0 === $1 }) else { continue }
+            assignments.append(contentsOf: manualOrderAssignments(after, ascending: ascending))
+        }
+        guard !assignments.isEmpty else { return false }
+        do {
+            try TaskWriteEligibility(writingIn: context).tasks(assignments.map(\.task))
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return false
+        }
+        let now = Date()
+        for assignment in assignments {
+            setManualRank(assignment.rank, on: assignment.task, now: now)
+        }
+        return ViewPersistence.saveOrReport(in: context, errorState: errorState)
     }
 
     /// Keeps the DELETEs that moves into `list` still owe, before `list` is deleted.
@@ -246,19 +450,36 @@ enum TaskListHelpers {
     /// deletion push flushes. The moved task itself still goes with the list.
     ///
     /// The caller deletes the list and saves.
-    static func settlePendingMoves(beforeDeleting list: TaskList, in modelContext: ModelContext) {
+    static func settlePendingMoves(beforeDeleting list: TaskList, in modelContext: ModelContext,
+                                   sourceLookup: ((String) throws -> TaskList?)? = nil) throws {
         let listID = list.id
-        let moved = (try? modelContext.fetch(FetchDescriptor<TaskItem>(
+        let moved = try modelContext.fetch(FetchDescriptor<TaskItem>(
             predicate: #Predicate { $0.taskList?.id == listID && $0.pendingMoveFromHref != nil }
-        ))) ?? []
-        for task in moved {
-            guard let href = task.pendingMoveFromHref, let sourceID = task.pendingMoveFromListID else { continue }
+        ))
+        let lookup = sourceLookup ?? { sourceID in
             var descriptor = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == sourceID })
             descriptor.fetchLimit = 1
-            guard let source = try? modelContext.fetch(descriptor).first else { continue }
-            // No etag: the move discarded the source copy's, and the DELETE is owed regardless.
-            TaskMover.insertTombstone(for: task, href: href, etag: nil, in: source, context: modelContext)
+            return try modelContext.fetch(descriptor).first
         }
+        // Finish every fallible read before staging cleanup: a later source fetch
+        // failure must not leave an earlier tombstone available to autosave/sync.
+        let cleanup: [(task: TaskItem, href: String, source: TaskList)] = try moved.compactMap { task in
+            guard let href = task.pendingMoveFromHref, let sourceID = task.pendingMoveFromListID,
+                  let source = try lookup(sourceID) else { return nil }
+            return (task, href, source)
+        }
+        let plans = try cleanup.map { entry in
+            // Prepare photo ownership before staging any tombstone.
+            try TaskMover.tombstonePlan(for: entry.task, href: entry.href, etag: nil,
+                in: entry.source, context: modelContext)
+        }
+        let releaseCaptures = try cleanup.flatMap { entry in
+            try [SyncResourceState.CaptureKind.moveSource, .currentResource].map {
+                try SyncResourceState.prepareRemoveCapture(taskID: entry.task.id, kind: $0, in: modelContext)
+            }
+        }
+        for plan in plans { plan() }
+        for release in releaseCaptures { release() }
     }
 
     /// Removes duplicate TaskItems from the data store, keeping the newest per UID.
@@ -274,26 +495,22 @@ enum TaskListHelpers {
     ///     collection it just pulled instead of walking every account on the device.
     /// - Returns: The number of duplicate TaskItems removed.
     @discardableResult
-    static func cleanupDuplicateUIDs(in modelContext: ModelContext, listID: String? = nil) -> Int {
+    static func cleanupDuplicateUIDs(in modelContext: ModelContext, listID: String? = nil) throws -> Int {
         let allTasks: [TaskItem]
-        do {
-            // Scoped when the caller names a list. Sync passes the collection it just
-            // pulled, so one account's sync stops walking every other account's tasks —
-            // and a duplicate can only arise within the collection that carries the UID.
-            let descriptor: FetchDescriptor<TaskItem>
-            if let listID {
-                descriptor = FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { !$0.isDeletedLocally && $0.taskList?.id == listID }
-                )
-            } else {
-                descriptor = FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { !$0.isDeletedLocally }
-                )
-            }
-            allTasks = try modelContext.fetch(descriptor)
-        } catch {
-            return 0
+        // Scoped when the caller names a list. Sync passes the collection it just
+        // pulled, so one account's sync stops walking every other account's tasks —
+        // and a duplicate can only arise within the collection that carries the UID.
+        let descriptor: FetchDescriptor<TaskItem>
+        if let listID {
+            descriptor = FetchDescriptor<TaskItem>(
+                predicate: #Predicate { !$0.isDeletedLocally && $0.taskList?.id == listID }
+            )
+        } else {
+            descriptor = FetchDescriptor<TaskItem>(
+                predicate: #Predicate { !$0.isDeletedLocally }
+            )
         }
+        allTasks = try modelContext.fetch(descriptor)
 
         // Group by UID
         var uidGroups: [String: [TaskItem]] = [:]
@@ -301,19 +518,21 @@ enum TaskListHelpers {
             uidGroups[task.uid, default: []].append(task)
         }
 
-        var removedCount = 0
+        var duplicates: [TaskItem] = []
         for (_, group) in uidGroups where group.count > 1 {
             // Sort by lastModifiedDate descending — keep the first (newest)
             let sorted = group.sorted {
                 ($0.lastModifiedDate ?? .distantPast) > ($1.lastModifiedDate ?? .distantPast)
             }
             for duplicate in sorted.dropFirst() {
-                modelContext.delete(duplicate)
-                removedCount += 1
+                duplicates.append(duplicate)
             }
         }
 
-        return removedCount
+        try VTODOOpaqueState.remove(tasks: duplicates, in: modelContext)
+        try CalendarMirrorState.stagePurge(duplicates, in: modelContext)
+        for duplicate in duplicates { modelContext.delete(duplicate) }
+        return duplicates.count
     }
 
     /// The occurrences the Upcoming / Overdue smart lists show for an

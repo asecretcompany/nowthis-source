@@ -32,6 +32,25 @@ struct RetryAfterTests {
         #expect(await recorder.sleeps.isEmpty)
     }
 
+    @Test("The final transport attempt preserves the service unavailable deadline")
+    func lastAttemptRetainsServiceUnavailableWait() async {
+        let recorder = RetryAfterRecorder()
+        do {
+            _ = try await withRetry(policy: .init(maxAttempts: 2, baseDelay: 1), now: { instant },
+                sleep: { await recorder.record($0) }) { () -> String in
+                if await recorder.attempt() == 1 { throw CalDAVError.serverError(statusCode: 503) }
+                throw HTTPRetryError(statusCode: 503, retryAfter: 1800)
+            }
+            Issue.record("Expected the final response's server deadline")
+        } catch let error as RetryDeferredError {
+            #expect(error.deadline == instant.addingTimeInterval(1800))
+        } catch {
+            Issue.record("Expected the final response's server deadline, received \(type(of: error))")
+        }
+        #expect(await recorder.attempts == 2)
+        #expect(await recorder.sleeps == [1])
+    }
+
     @Test("Server delays bypass jitter while client backoff can be jittered")
     func serverWaitNeverShortened() async throws {
         let recorder = RetryAfterRecorder()
@@ -61,9 +80,16 @@ struct RetryAfterTests {
     @Test("All write operations respect service unavailable Retry After", arguments: ["put", "delete", "patch", "create"])
     func writeRetryAfter(operation: String) async throws {
         let host = UUID().uuidString.lowercased() + ".invalid"
+        let accepted: ScriptedDAVProtocol.Response
+        switch operation {
+        case "create": accepted = .init(status: 201, body: "")
+        case "patch":
+            let properties = "<d:displayname/><x:calendar-color xmlns:x=\"http://apple.com/ns/ical/\"/>"
+            accepted = .init(body: DAVSyncScenario.multistatus(DAVSyncScenario.prop("/tasks/", properties)))
+        default: accepted = .init(status: 204, body: "")
+        }
         let config = ScriptedDAVProtocol.install(host: host, responses: [
-            .init(status: 503, body: "", headers: ["Retry-After": "60"]),
-            .init(status: operation == "create" ? 201 : 204, body: "")
+            .init(status: 503, body: "", headers: ["Retry-After": "60"]), accepted
         ])
         let recorder = RetryAfterRecorder()
         let client = CalDAVClient(configuration: config, retryPolicy: .init(maxAttempts: 2, baseDelay: 0), now: { instant }, sleep: { await recorder.record($0) })
@@ -73,7 +99,7 @@ struct RetryAfterTests {
         case "put": _ = try await client.putTask(baseURL: base, taskPath: "/tasks/a.ics", icsData: "BEGIN:VCALENDAR", etag: nil, credentials: credentials)
         case "delete": try await client.deleteTask(baseURL: base, taskPath: "/tasks/a.ics", etag: nil, credentials: credentials)
         case "patch": try await client.updateCalendarProperties(baseURL: base, calendarPath: "/tasks/", name: "Tasks", colorHex: "FF0000", credentials: credentials)
-        default: _ = try await client.createCalendar(baseURL: base, calendarHomePath: "/home/", name: "Tasks", color: nil, credentials: credentials)
+        default: _ = try await client.createCalendar(baseURL: base, calendarHomePath: "/home/", listID: "fixture", name: "Tasks", color: nil, credentials: credentials)
         }
         #expect(await recorder.sleeps == [60])
     }

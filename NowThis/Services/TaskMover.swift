@@ -19,8 +19,8 @@ enum TaskMover {
     /// Moves `task` and every live descendant to `destination`.
     ///
     /// A task moved without its parent is promoted to top level: both
-    /// `parentTask` and `parentUID` are cleared, because `resolveParentRelationships`
-    /// re-reads `parentUID` on every sync and would otherwise re-link it.
+    /// `parentTask` and `parentUID` are cleared so later server pulls cannot
+    /// restore the moved task's old parent relationship.
     ///
     /// - Returns: The nodes moved, deepest first — the order a DELETE of the old
     ///   copies must follow, since a server-side delete of a parent can cascade.
@@ -30,20 +30,54 @@ enum TaskMover {
         _ task: TaskItem,
         to destination: TaskList,
         in context: ModelContext,
-        now: Date = Date()
+        now: Date = Date(),
+        ownershipReads: TaskPhotoOwnership.Reads = .init(),
+        onShapeHold: ((SyncResourceState.Hold) -> Void)? = nil
     ) -> [TaskItem] {
         guard task.taskList?.id != destination.id else { return [] }
 
+        let nodes = subtree(of: task)
+            .sorted { TaskListHelpers.depth(of: $0) > TaskListHelpers.depth(of: $1) }
+        do {
+            for node in nodes { try SyncResourceState.requireWritable(node, allowRetainedRevision: false, in: context) }
+        } catch let hold as SyncResourceState.Hold { onShapeHold?(hold); return [] }
+        catch { onShapeHold?(.needsRevalidation); return [] }
+        let plans: [(TaskPhotoSyncStore.MovePlan, (() -> Void)?)]
+        do {
+            plans = try nodes.map { node in
+                let returning = node.pendingMoveFromHref != nil && node.pendingMoveFromListID == destination.id
+                let photos = try TaskPhotoSyncStore.movePlan(node, restoring: returning ? destination : nil,
+                    in: context, reads: ownershipReads)
+                let tombstone: (() -> Void)?
+                if node.pendingMoveFromHref != nil, let href = node.remoteHref, !href.isEmpty, let list = node.taskList {
+                    tombstone = try tombstonePlan(for: node, href: href, etag: node.etag, in: list, context: context)
+                } else { tombstone = nil }
+                return (photos, tombstone)
+            }
+        } catch { return [] }
+        let sourceCaptures: [() -> Void]
+        let finishedCaptures: [() -> Void]
+        do {
+            finishedCaptures = try nodes.filter { $0.pendingMoveFromListID == destination.id }.map {
+                try SyncResourceState.prepareRemoveCapture(taskID: $0.id, in: context)
+            }
+            sourceCaptures = try nodes.filter { $0.pendingMoveFromHref == nil }.compactMap { node in
+                if let href = node.remoteHref, !href.isEmpty {
+                    let proof = try SyncResourceState.proof(list: node.taskList, href: href, etag: node.etag, taskID: node.id, uid: node.uid, allowRetainedRevision: false, in: context)
+                    return try proof.prepareStore(in: context, key: SyncResourceState.movePrefix + node.id)
+                }
+                return nil
+            }
+        } catch { onShapeHold?(.needsRevalidation); return [] }
+        sourceCaptures.forEach { $0() }
+        finishedCaptures.forEach { $0() }
         if let parent = task.parentTask, parent.taskList?.id != destination.id {
             task.parentTask = nil
             task.parentUID = nil
         }
-
-        let nodes = subtree(of: task)
-            .sorted { TaskListHelpers.depth(of: $0) > TaskListHelpers.depth(of: $1) }
-
-        for node in nodes {
-            moveNode(node, to: destination, in: context)
+        for (index, node) in nodes.enumerated() {
+            plans[index].1?()
+            moveNode(node, to: destination, in: context, photos: plans[index].0)
             node.lastModifiedDate = now
             node.isDirty = true
         }
@@ -53,30 +87,22 @@ enum TaskMover {
     /// The task and its live descendants. A descendant already awaiting its
     /// DELETE stays where it is: that DELETE targets its current href, which a
     /// move would clear.
-    private static func subtree(of root: TaskItem) -> [TaskItem] {
+    static func subtree(of root: TaskItem) -> [TaskItem] {
         var result: [TaskItem] = []
         var seen: Set<String> = []
         var frontier = [root]
         while let node = frontier.popLast() {
-            guard seen.insert(node.id).inserted, !node.isDeletedLocally else { continue }
+            guard node.modelContext != nil, seen.insert(node.id).inserted, !node.isDeletedLocally else { continue }
             result.append(node)
             frontier.append(contentsOf: node.subtasks)
         }
         return result
     }
 
-    private static func moveNode(_ node: TaskItem, to destination: TaskList, in context: ModelContext) {
+    private static func moveNode(_ node: TaskItem, to destination: TaskList, in context: ModelContext,
+                                 photos: TaskPhotoSyncStore.MovePlan) {
         let currentHref = node.remoteHref.flatMap { $0.isEmpty ? nil : $0 }
-        let returnsToSource = node.pendingMoveFromHref != nil && node.pendingMoveFromListID == destination.id
-
         if let pendingHref = node.pendingMoveFromHref {
-            // Already mid-move. The original copy is still owed its DELETE.
-            if let currentHref, let currentList = node.taskList {
-                // The PUT into the intermediate list landed, so that list holds a
-                // second copy. The deletion push already knows how to remove a
-                // copy it has a tombstone for.
-                insertTombstone(for: node, href: currentHref, etag: node.etag, in: currentList, context: context)
-            }
             if node.pendingMoveFromListID == destination.id {
                 // Back where the original copy lives: cancel instead of deleting it.
                 node.remoteHref = pendingHref
@@ -94,11 +120,7 @@ enum TaskMover {
         }
         // A task never pushed owes no server anything; it is a plain reassignment.
 
-        if returnsToSource {
-            TaskPhotoSyncStore.restoreMove(node, source: destination, in: context)
-        } else {
-            TaskPhotoSyncStore.prepareMove(node)
-        }
+        photos.apply(in: context)
         node.taskList = destination
     }
 
@@ -116,7 +138,10 @@ enum TaskMover {
     @discardableResult
     static func rollBackRefusedPut(_ task: TaskItem, in context: ModelContext) -> Bool {
         guard let source = pendingSource(of: task, in: context) else { return false }
-        restore(task, to: source, in: context)
+        guard let plan = try? TaskPhotoSyncStore.movePlan(task, restoring: source, in: context),
+              let finishCapture = try? SyncResourceState.prepareRemoveCapture(taskID: task.id, in: context) else { return false }
+        finishCapture()
+        restore(task, to: source, in: context, photos: plan)
         return true
     }
 
@@ -129,11 +154,19 @@ enum TaskMover {
     @discardableResult
     static func rollBackRefusedDelete(_ task: TaskItem, in context: ModelContext) -> Bool {
         guard let source = pendingSource(of: task, in: context) else { return false }
-        if let destinationHref = task.remoteHref, !destinationHref.isEmpty,
-           let destination = task.taskList {
-            insertTombstone(for: task, href: destinationHref, etag: task.etag, in: destination, context: context)
-        }
-        restore(task, to: source, in: context)
+        let plan: TaskPhotoSyncStore.MovePlan
+        let tombstone: (() -> Void)?
+        let finishCapture: () -> Void
+        do {
+            finishCapture = try SyncResourceState.prepareRemoveCapture(taskID: task.id, in: context)
+            plan = try TaskPhotoSyncStore.movePlan(task, restoring: source, in: context)
+            if let href = task.remoteHref, !href.isEmpty, let destination = task.taskList {
+                tombstone = try tombstonePlan(for: task, href: href, etag: task.etag, in: destination, context: context)
+            } else { tombstone = nil }
+        } catch { return false }
+        tombstone?()
+        finishCapture()
+        restore(task, to: source, in: context, photos: plan)
         return true
     }
 
@@ -144,8 +177,9 @@ enum TaskMover {
         return try? context.fetch(descriptor).first
     }
 
-    private static func restore(_ task: TaskItem, to source: TaskList, in context: ModelContext) {
-        TaskPhotoSyncStore.restoreMove(task, source: source, in: context)
+    private static func restore(_ task: TaskItem, to source: TaskList, in context: ModelContext,
+                                photos: TaskPhotoSyncStore.MovePlan) {
+        photos.apply(in: context)
         task.taskList = source
         task.remoteHref = task.pendingMoveFromHref
         task.etag = nil
@@ -156,25 +190,52 @@ enum TaskMover {
 
     /// Inserts a row whose only job is to carry a DELETE for `href` through the
     /// existing deletion push, which sends it and then removes the row.
-    static func insertTombstone(
+    static func insertTombstone(for node: TaskItem, href: String, etag: String?, in list: TaskList,
+                                context: ModelContext) throws {
+        try tombstonePlan(for: node, href: href, etag: etag, in: list, context: context)()
+    }
+
+    static func tombstonePlan(
         for node: TaskItem,
         href: String,
         etag: String?,
         in list: TaskList,
         context: ModelContext
-    ) {
+    ) throws -> () -> Void {
+        let records = try TaskPhotoOwnership.records(node, in: context)
         let tombstone = TaskItem(uid: node.uid, title: node.title)
-        tombstone.taskList = list
         tombstone.remoteHref = href
-        tombstone.etag = etag
+        let sourceCapture: SyncResourceState?
+        if node.pendingMoveFromListID == list.id, node.pendingMoveFromHref == href,
+           let scope = TaskPhotoOwnership.Scope(list: list) {
+            sourceCapture = try SyncResourceState.capture(taskID: node.id, scope: scope, href: href, in: context)
+        } else if etag?.isEmpty == false {
+            sourceCapture = try SyncResourceState.proof(list: list, href: href, etag: etag,
+                taskID: node.id, uid: node.uid, in: context)
+        } else { sourceCapture = nil }
+        tombstone.etag = sourceCapture?.etag ?? etag
+        let storeCapture = try sourceCapture?.prepareStore(in: context, key: SyncResourceState.cleanupPrefix + tombstone.id)
         tombstone.isLocalOnly = false
         tombstone.isDeletedLocally = true
-        context.insert(tombstone)
-        // Cleanup of an intermediate destination follows its acknowledged task DELETE.
-        for source in node.photos where source.originalFileID != nil {
+        var updates: [TaskPhotoOwnership.Update] = []
+        for record in records {
+            let bindings = ([record.state.current].compactMap { $0 } + record.state.retained).filter { $0.matches(list) }
+            guard !bindings.isEmpty else { continue }
+            let source = record.photo
             let photo = TaskPhoto(photoID: source.photoID, previewData: source.previewData)
-            photo.originalFileID = source.originalFileID; photo.folderFileID = source.folderFileID
-            context.insert(photo); photo.task = tombstone
+            photo.task = tombstone
+            let state = TaskPhotoOwnership(taskID: tombstone.id, photoID: photo.id,
+                current: bindings.first, retained: Array(bindings.dropFirst()))
+            updates.append(try TaskPhotoOwnership.Record(photo: photo, row: nil, state: state).update(state))
+        }
+        return {
+            context.insert(tombstone)
+            tombstone.taskList = list
+            storeCapture?()
+            for update in updates {
+                context.insert(update.photo)
+                update.apply(in: context, normalize: true)
+            }
         }
     }
 }

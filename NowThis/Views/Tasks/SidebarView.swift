@@ -154,9 +154,11 @@ enum SidebarSection: String, Codable, CaseIterable, Identifiable {
 struct SidebarView: View {
 
     @State private var taskLists: [TaskList] = []
-    @Query(sort: \SavedFilter.sortOrder) private var savedFilters: [SavedFilter]
+    let savedFilters: [SavedFilterSnapshot]
+    let retrySavedFilters: (() -> Void)?
     @Binding var selection: SidebarSelection?
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @State private var showingNewListSheet = false
     @State private var showingFilterBuilder = false
     @AppStorage("sidebarSectionOrder") private var sectionOrderJSON = ""
@@ -201,6 +203,7 @@ struct SidebarView: View {
         case .filters:
             SavedFiltersSection(
                 filters: savedFilters,
+                onRetry: retrySavedFilters,
                 onDelete: deleteFilter,
                 onAddNew: { showingFilterBuilder = true }
             )
@@ -231,24 +234,29 @@ struct SidebarView: View {
     /// index into `visibleTaskLists` can point at a different list once a row
     /// whose model was already invalidated has been dropped.
     private func deleteList(_ doomed: [TaskList]) {
-        for list in doomed {
-            TaskListHelpers.settlePendingMoves(beforeDeleting: list, in: modelContext)
-            if let accountID = list.account?.id {
-                do { try SyncImportCheckpoint.removeList(accountID: accountID, listID: list.id, in: modelContext) }
-                catch { return }
+        do {
+            for list in doomed {
+                try TaskListHelpers.settlePendingMoves(beforeDeleting: list, in: modelContext)
+                if let accountID = list.account?.id {
+                    try SyncImportCheckpoint.removeList(accountID: accountID, listID: list.id, in: modelContext)
+                }
             }
-            modelContext.delete(list)
+            try VTODOOpaqueState.remove(tasks: doomed.flatMap(\.tasks), in: modelContext)
+            try CalendarMirrorState.stagePurge(doomed.flatMap(\.tasks), in: modelContext)
+            for list in doomed { modelContext.delete(list) }
+        } catch {
+            ViewPersistence.report(error, to: errorState)
+            return
         }
-        do { try ReminderSchedulingJournal.saveTaskChanges(in: modelContext, needsRecovery: true) }
-        catch { return }
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
+        ViewPersistence.savePendingDeletion(in: modelContext, errorState: errorState, needsRecovery: true) {
+            ReminderScheduler.requestReconcile(modelContext: modelContext, onSaveFailure: {
+                ViewPersistence.report($0, to: errorState)
+            })
+        }
     }
 
-    private func deleteFilter(_ doomed: [SavedFilter]) {
-        for filter in doomed {
-            modelContext.delete(filter)
-        }
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+    private func deleteFilter(_ originals: [SavedFilterSnapshot]) {
+        SavedFilterStore.delete(originals, in: modelContext.container, errorState: errorState)
     }
 }
 
@@ -299,74 +307,63 @@ private struct SmartListsSection: View {
 
 /// An immutable snapshot of the fields a saved-filter row renders.
 ///
-/// Swiping the row deletes the `SavedFilter` on the **main** context; the row is
-/// still realized while the delete animation runs, and reading `filter.name` (or
-/// `filter.logic`, a computed getter over the stored `logicOperator`) on the
-/// invalidated model trips SwiftData's `BackingData` assertion.
+/// The row is rendered from an immutable snapshot because deletion uses an owned
+/// writer and the row can remain visible during its delete animation.
 struct SavedFilterRowData: Equatable, Identifiable {
     let id: String
     let name: String
     let icon: String
     let colorHex: String
     /// Resolved here, while the model is alive — `logic` reads a stored attribute.
-    let logicDisplayName: String
+    let logicDisplayName: String?
 
     init?(filter: SavedFilter) {
         guard filter.modelContext != nil else { return nil }
-        self.id = filter.id
-        self.name = filter.name
-        self.icon = filter.icon
-        self.colorHex = filter.colorHex
-        self.logicDisplayName = filter.logic.displayName
+        self.init(snapshot: filter.snapshot)
     }
-}
 
-/// A snapshot paired with the live filter, which swipe-to-delete still needs.
-private struct SavedFilterEntry: Identifiable {
-    let data: SavedFilterRowData
-    let filter: SavedFilter
-
-    var id: String { data.id }
-
-    init?(filter: SavedFilter) {
-        guard let data = SavedFilterRowData(filter: filter) else { return nil }
-        self.data = data
-        self.filter = filter
+    init(snapshot: SavedFilterSnapshot) {
+        id = snapshot.id
+        name = snapshot.name
+        icon = snapshot.icon
+        colorHex = snapshot.colorHex
+        logicDisplayName = snapshot.logic?.displayName
     }
 }
 
 private struct SavedFiltersSection: View {
-    let filters: [SavedFilter]
-    let onDelete: ([SavedFilter]) -> Void
+    let filters: [SavedFilterSnapshot]
+    let onRetry: (() -> Void)?
+    let onDelete: ([SavedFilterSnapshot]) -> Void
     let onAddNew: () -> Void
 
     var body: some View {
-        if !filters.isEmpty || true {
-            // Snapshot at the array boundary: `ForEach` reads each element's `id`
-            // before any row body runs, so a guard inside the row is too late.
-            let entries = filters.compactMap(SavedFilterEntry.init(filter:))
-            Section("Filters") {
-                ForEach(entries) { entry in
-                    NavigationLink(value: SidebarSelection.savedFilter(entry.data.id)) {
-                        HStack {
-                            Label(entry.data.name, systemImage: entry.data.icon)
-                                .foregroundStyle(Color(hex: entry.data.colorHex) ?? .gray)
-                            Spacer()
-                            Text(verbatim: entry.data.logicDisplayName)
+        Section("Filters") {
+            if let onRetry {
+                Text(FilterRepairCopy.loadFailed)
+                Button("Retry", action: onRetry)
+            }
+            ForEach(filters) { snapshot in
+                let filter = SavedFilterRowData(snapshot: snapshot)
+                NavigationLink(value: SidebarSelection.savedFilter(filter.id)) {
+                    HStack {
+                        Label(filter.name, systemImage: filter.icon)
+                            .foregroundStyle(Color(hex: filter.colorHex) ?? .gray)
+                        Spacer()
+                        if let logic = filter.logicDisplayName {
+                            Text(verbatim: logic)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    .accessibilityLabel("\(entry.data.name), custom filter")
                 }
-                // Resolve offsets against the same array the rows came from —
-                // the compactMap can drop an entry the caller's array still has.
-                .onDelete { offsets in onDelete(offsets.map { entries[$0].filter }) }
+                .accessibilityLabel("\(filter.name), custom filter")
+            }
+            .onDelete { offsets in onDelete(offsets.map { filters[$0] }) }
 
-                Button(action: onAddNew) {
-                    Label("New Filter", systemImage: "plus.circle.fill")
-                        .foregroundStyle(.purple)
-                }
+            Button(action: onAddNew) {
+                Label("New Filter", systemImage: "plus.circle.fill")
+                    .foregroundStyle(.purple)
             }
         }
     }
@@ -444,6 +441,7 @@ private struct TagEntry: Identifiable {
 private struct TagsSidebarSection: View {
     @State private var tags: [Tag] = []
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.saveErrorState) private var errorState
     @State private var showingNewTagSheet = false
 
     var body: some View {
@@ -485,10 +483,41 @@ private struct TagsSidebarSection: View {
     }
 
     private func delete(_ doomed: [Tag]) {
+        guard !doomed.isEmpty else { return }
+        do {
+            let reader = ModelContext(modelContext.container)
+            let expected = Set(doomed.map(\.persistentModelID))
+            var saved: [Tag] = []
+            for batch in TaskWriteEligibility.batches(expected) {
+                var descriptor = FetchDescriptor<Tag>(predicate: #Predicate { batch.contains($0.persistentModelID) })
+                descriptor.includePendingChanges = false
+                descriptor.relationshipKeyPathsForPrefetching = [\.tasks]
+                saved += try reader.fetch(descriptor)
+            }
+            guard Set(saved.map(\.persistentModelID)) == expected,
+                  doomed.allSatisfy({ $0.modelContext === modelContext }) else {
+                throw TaskWriteEligibility.Refusal.targetChanged
+            }
+            let committedTasks = Set(saved.flatMap(\.tasks).filter { !$0.isDeletedLocally }.map(\.persistentModelID))
+            let rows = committedTasks.union(doomed.flatMap(\.tasks).map(\.persistentModelID))
+            var attached: [TaskItem] = []
+            for batch in TaskWriteEligibility.batches(rows) {
+                attached += try modelContext.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate {
+                    batch.contains($0.persistentModelID) && !$0.isDeletedLocally
+                }))
+            }
+            guard committedTasks.isSubset(of: Set(attached.map(\.persistentModelID))) else {
+                throw TaskWriteEligibility.Refusal.targetChanged
+            }
+            try TaskWriteEligibility(writingIn: modelContext).tasks(attached)
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState)
+            return
+        }
         for tag in doomed {
             modelContext.delete(tag)
         }
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        ViewPersistence.savePendingDeletion(in: modelContext, errorState: errorState)
     }
 }
 
@@ -496,7 +525,9 @@ private struct TagsSidebarSection: View {
 
 private struct NewTagSheet: View {
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingTag: Tag?
     @State private var tagName = ""
     @State private var selectedColor = "#AF52DE"
 
@@ -525,6 +556,8 @@ private struct NewTagSheet: View {
                     .padding(.vertical, 8)
                 }
             }
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationTitle("New Tag")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -544,9 +577,12 @@ private struct NewTagSheet: View {
     private func createTag() {
         let trimmed = tagName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        let tag = Tag(name: trimmed, color: selectedColor)
+        let tag = pendingTag.flatMap { $0.modelContext != nil ? $0 : nil } ?? Tag(name: trimmed, color: selectedColor)
+        tag.name = trimmed
+        tag.color = selectedColor
+        pendingTag = tag
         modelContext.insert(tag)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        guard ViewPersistence.saveOrReport(in: modelContext, errorState: errorState) else { return }
         HapticManager.success()
         dismiss()
     }
@@ -647,7 +683,9 @@ private struct UserListsSection: View {
 
 private struct NewListSheet: View {
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingList: TaskList?
     @State private var listName = ""
     @State private var selectedColor = "#007AFF"
 
@@ -673,6 +711,8 @@ private struct NewListSheet: View {
                     .padding(.vertical, 8)
                 }
             }
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationTitle("New List")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -693,14 +733,17 @@ private struct NewListSheet: View {
         let trimmed = listName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
-        let list = TaskList(serverURL: "", name: trimmed, colorHex: selectedColor)
+        let list = pendingList.flatMap { $0.modelContext != nil ? $0 : nil } ?? TaskList(serverURL: "", name: trimmed, colorHex: selectedColor)
+        list.name = trimmed
+        list.colorHex = selectedColor
+        pendingList = list
 
         // Attach to first account
         let accounts = (try? modelContext.fetch(FetchDescriptor<ServerAccount>())) ?? []
         list.account = accounts.first
 
         modelContext.insert(list)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        guard ViewPersistence.saveOrReport(in: modelContext, errorState: errorState) else { return }
         HapticManager.success()
         dismiss()
     }
@@ -711,6 +754,7 @@ private struct NewListSheet: View {
 private struct EditListSheet: View {
     @Bindable var list: TaskList
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
     @State private var listName: String
     @State private var selectedColor: String
@@ -782,6 +826,8 @@ private struct EditListSheet: View {
                     Text("Overrides the app-wide defaults for tasks added to this list.")
                 }
             }
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationTitle("Edit List")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -811,7 +857,7 @@ private struct EditListSheet: View {
         list.colorHex = selectedColor
         list.defaultDueDateRuleRaw = dueDateRuleRaw.isEmpty ? nil : dueDateRuleRaw
         list.defaultReminderModeRaw = reminderModeRaw.isEmpty ? nil : reminderModeRaw
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        guard ViewPersistence.saveOrReport(in: modelContext, errorState: errorState) else { return }
         HapticManager.success()
         dismiss()
     }

@@ -12,10 +12,11 @@ import SwiftData
 /// already has*, not insertions — so these tests walk that path in the three
 /// places it can break:
 ///
-/// 1. the field mapping (`applyTodoData` → `TaskItem`),
-/// 2. the inbound gate (`applyRemoteTask`: dirty / etag / LAST-MODIFIED),
-/// 3. cross-context visibility (sync writes on a background `ModelContext`;
-///    the UI reads the main context).
+/// 1. the field mapping and dirty/ETag/LAST-MODIFIED gate through the retained
+///    helper test seam, and
+/// 2. cross-context visibility through committed reads.
+/// Production pulls use `SyncInboundBatchWriter` and `SyncImportStore`; the
+/// live-path integration suites cover that wiring separately.
 @Suite("Inbound server-side update propagation")
 struct SyncInboundUpdatePropagationTests {
 

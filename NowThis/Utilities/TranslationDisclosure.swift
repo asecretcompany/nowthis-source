@@ -34,9 +34,6 @@ enum TranslationDisclosure {
     static let storageKey = "translationDisclosureAcknowledgedLanguages"
 
     /// Where "report a translation problem" goes.
-    ///
-    /// Pinned in one place on purpose — it ships inside five translations, and B4 in the
-    /// localization plan has not yet confirmed it. One constant to change if it is wrong.
     static let reportURLString = "https://asc.is/support/"
 
     static var reportURL: URL? { URL(string: reportURLString) }

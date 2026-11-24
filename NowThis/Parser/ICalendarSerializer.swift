@@ -22,7 +22,7 @@ struct ICalendarSerializer {
     ///   - completedDate: VTODO COMPLETED (optional).
     ///   - createdDate: VTODO CREATED.
     ///   - lastModifiedDate: VTODO LAST-MODIFIED.
-    ///   - categories: VTODO CATEGORIES (array).
+    ///   - categories: VTODO CATEGORIES. Pass `[]` to clear all tags or `nil` to omit the property.
     ///   - location: VTODO LOCATION (optional).
     ///   - latitude: GEO latitude component (optional).
     ///   - longitude: GEO longitude component (optional).
@@ -42,7 +42,7 @@ struct ICalendarSerializer {
         completedDate: Date? = nil,
         createdDate: Date = Date(),
         lastModifiedDate: Date = Date(),
-        categories: [String] = [],
+        categories: [String]? = nil,
         location: String? = nil,
         latitude: Double? = nil,
         longitude: Double? = nil,
@@ -55,7 +55,8 @@ struct ICalendarSerializer {
         manualSortOrder: Int? = nil,
         dtStamp: Date = Date(),
         photos: [TaskPhotoAttachment] = [],
-        opaqueAttachments: [String] = []
+        opaqueAttachments: [String] = [],
+        opaqueState: VTODOOpaqueState = .empty
     ) -> String {
         var lines: [String] = []
 
@@ -108,7 +109,7 @@ struct ICalendarSerializer {
             lines.append("COMPLETED:\(formatDate(completed))")
         }
 
-        if !categories.isEmpty {
+        if let categories {
             let escaped = categories.map { escapeText($0) }
             lines.append("CATEGORIES:\(escaped.joined(separator: ","))")
         }
@@ -140,13 +141,9 @@ struct ICalendarSerializer {
             lines.append("X-APPLE-SORT-ORDER:\(manualSortOrder)")
         }
 
-        if let alarm = alarmTriggerSeconds {
-            lines.append("BEGIN:VALARM")
-            lines.append("TRIGGER;VALUE=DURATION:\(formatDuration(seconds: alarm))")
-            lines.append("ACTION:DISPLAY")
-            lines.append("DESCRIPTION:Reminder")
-            lines.append("END:VALARM")
-        }
+        let emitted = emittedOpaqueState(opaqueState, alarmTriggerSeconds: alarmTriggerSeconds)
+        lines.append(contentsOf: emitted.opaqueProperties.filter(VTODOOpaqueState.safeProperty))
+        lines.append(contentsOf: emitted.alarmBlocks.filter(VTODOOpaqueState.safeAlarm).flatMap { $0 })
 
         lines.append(contentsOf: photos.compactMap(\.contentLine))
         lines.append(contentsOf: opaqueAttachments.filter(TaskPhotoAttachment.safeOpaque))
@@ -157,6 +154,19 @@ struct ICalendarSerializer {
         // Apply line folding (RFC-5545 §3.1): lines > 75 octets
         let folded = lines.map { foldLine($0) }
         return folded.joined(separator: "\r\n") + "\r\n"
+    }
+
+    /// The exact opaque state represented by a write, shared with its acknowledgement.
+    /// Once a reminder edit is accepted, later edits must not resurrect the replaced alarms.
+    static func emittedOpaqueState(_ state: VTODOOpaqueState, alarmTriggerSeconds: Int?) -> VTODOOpaqueState {
+        if !state.alarmBlocks.isEmpty, alarmTriggerSeconds == state.baselineReminderOffset { return state }
+        var emitted = state
+        emitted.baselineReminderOffset = alarmTriggerSeconds
+        emitted.alarmBlocks = alarmTriggerSeconds.map { seconds in
+            [["BEGIN:VALARM", "TRIGGER;VALUE=DURATION:\(formatDuration(seconds: seconds))",
+              "ACTION:DISPLAY", "DESCRIPTION:Reminder", "END:VALARM"]]
+        } ?? []
+        return emitted
     }
 
     // MARK: - Date Formatting
@@ -175,6 +185,8 @@ struct ICalendarSerializer {
     /// - Comma → `\,`
     /// - Newline → `\n`
     static func escapeText(_ text: String) -> String {
+        // Order matters: escape backslashes first, then semicolons, commas and
+        // newlines, then strip CR so CRLF text cannot create a new property.
         var result = text
         result = result.replacingOccurrences(of: "\\", with: "\\\\")
         result = result.replacingOccurrences(of: ";", with: "\\;")

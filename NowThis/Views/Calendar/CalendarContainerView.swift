@@ -4,7 +4,7 @@ import SwiftData
 /// Container view that coordinates month/week calendar views.
 ///
 /// Provides a toolbar toggle between month and week views,
-/// a list scope picker, and navigation to day detail and task detail.
+/// a list scope menu, and navigation to day detail and task detail.
 struct CalendarContainerView: View {
 
     enum ViewMode: String, CaseIterable {
@@ -35,9 +35,11 @@ struct CalendarContainerView: View {
 
     @State private var selectedDate = Date()
     @State private var displayedMonth = Date()
+    @State private var monthTodayRequest = 0
     @State private var viewMode: ViewMode = .month
     @State private var selectedListID: String?
-    @State private var showDayDetail = false
+    @State private var addSelection: QuickAddView.CalendarSelection?
+    @AppStorage("showCompletedTasks") private var showCompleted = false
     @Environment(\.modelContext) private var modelContext
     @Environment(\.syncCommands) private var syncCommands
 
@@ -54,18 +56,38 @@ struct CalendarContainerView: View {
     var body: some View {
         NavigationStack {
             CalendarScopedTasks(listID: selectedList?.id) { tasks in
-                let projection = CalendarTaskProjection(rows: tasks.glanceRows())
+                let projection = CalendarTaskProjection(rows: tasks.glanceRows(), showCompleted: showCompleted)
                 VStack(spacing: 0) {
+                    // Keep the list and date controls reachable when the navigation bar gets crowded.
+                    HStack(spacing: 12) {
+                        listScope
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        todayButton
+                    }
+                    .padding(.horizontal, 16)
+
                     // Calendar view
                     Group {
                         switch viewMode {
                         case .month:
-                            CalendarMonthView(
+                            let month = CalendarMonthView(
                                 tasks: tasks,
                                 selectedDate: $selectedDate,
                                 displayedMonth: $displayedMonth,
                                 projection: projection
                             )
+                            // A tall grid can push the controls above the safe area in landscape.
+                            ViewThatFits(in: .vertical) {
+                                month
+                                ScrollViewReader { scroll in
+                                    ScrollView { month }
+                                        .onChange(of: monthTodayRequest) {
+                                            withAnimation {
+                                                scroll.scrollTo(Calendar.current.startOfDay(for: selectedDate))
+                                            }
+                                        }
+                                }
+                            }
                         case .week:
                             CalendarWeekView(
                                 tasks: tasks,
@@ -83,7 +105,6 @@ struct CalendarContainerView: View {
                     // Day detail inline
                     CalendarDayDetailView(
                         date: selectedDate,
-                        tasks: tasks,
                         projection: projection
                     )
                 }
@@ -92,6 +113,9 @@ struct CalendarContainerView: View {
             .navigationTitle("Calendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
+            .sheet(item: $addSelection) { selection in
+                QuickAddView(defaultList: nil, calendarSelection: selection)
+            }
             .refreshable {
                 await syncCommands.syncNow(modelContext)
             }
@@ -116,63 +140,92 @@ struct CalendarContainerView: View {
             }
         }
 
-        ToolbarItem(placement: .principal) {
-            if liveLists.count > 1 {
-                Menu {
-                    ForEach(liveLists) { list in
-                        Button {
-                            selectedListID = list.id
-                        } label: {
-                            HStack {
-                                Text(list.name)
-                                if list.id == selectedListID {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(selectedList?.name ?? String(localized: "calendar.title.allLists", defaultValue: "All Lists", comment: "Toolbar title shown where a selected list's name would otherwise appear, used when no specific list is selected (effectively all lists); previously said Calendar in English here, changed to respect the glossary since Calendar is reserved for the separate Apple/EventKit calendar feature in Settings and a CalDAV collection is called a List"))
-                            .font(.headline)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .accessibilityLabel("Select list")
-            } else {
-                Text(selectedList?.name ?? String(localized: "calendar.title.allLists", defaultValue: "All Lists", comment: "Toolbar title shown where a selected list's name would otherwise appear, used when no specific list is selected (effectively all lists); previously said Calendar in English here, changed to respect the glossary since Calendar is reserved for the separate Apple/EventKit calendar feature in Settings and a CalDAV collection is called a List"))
-                    .font(.headline)
-            }
-        }
-
         ToolbarItem(placement: .topBarTrailing) {
             Picker("View", selection: $viewMode) {
                 ForEach(ViewMode.allCases, id: \.self) { mode in
                     Text(mode.displayName).tag(mode)
                 }
             }
-            .pickerStyle(.segmented)
+            .contentModePickerStyle()
             .frame(width: 140)
             .accessibilityLabel("Calendar view mode")
         }
 
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItem(placement: .primaryAction) {
             Button {
-                withAnimation {
-                    selectedDate = Date()
-                    displayedMonth = Date()
-                }
+                addSelection = QuickAddView.CalendarSelection(
+                    date: selectedDate, destination: selectedList.map(QuickAddView.Destination.init)
+                )
             } label: {
-                Text("Today")
-                    .font(.subheadline)
+                Image(systemName: "plus")
             }
-            .accessibilityLabel("Go to today")
+            .accessibilityLabel("Add task due on this date")
         }
     }
 
-    /// The scoped reader guards tasks; the toolbar also guards lists. An account delete cascades
+    private var todayButton: some View {
+        Button {
+            let today = Date()
+            withAnimation {
+                selectedDate = today
+                displayedMonth = today
+                // The selected day may already be today, with its row scrolled away.
+                if viewMode == .month {
+                    monthTodayRequest += 1
+                }
+            }
+        } label: {
+            Text("Today")
+                .font(.subheadline)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Go to today")
+    }
+
+    @ViewBuilder
+    private var listScope: some View {
+        let lists = liveLists
+        let listName = selectedList?.name ?? String(localized: "calendar.title.allLists", defaultValue: "All Lists",
+            comment: "Title shown when the calendar is not scoped to a particular list.")
+        if lists.count > 1 {
+            Menu {
+                ForEach(lists) { list in
+                    Button {
+                        selectedListID = list.id
+                    } label: {
+                        HStack {
+                            Text(list.name)
+                            if list.id == selectedListID {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(listName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Select list")
+            .accessibilityValue(listName)
+        } else {
+            Text(listName)
+                .font(.headline)
+                .lineLimit(1)
+                .frame(minHeight: 44)
+        }
+    }
+
+    /// The scoped reader guards tasks; the list selector also guards lists. An account delete cascades
     /// `ServerAccount` -> `TaskList` on the main context while this view is still
     /// on screen. Reading `$0.id` or `list.name` on one of those traps.
     private var liveLists: [TaskList] {

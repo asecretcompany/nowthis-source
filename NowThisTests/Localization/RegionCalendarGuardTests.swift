@@ -242,6 +242,8 @@ struct RegionCalendarGuardTests {
         "NowThis/Sync/CalDAVClient.swift": "HTTP header names and DAV element names.",
         "NowThis/Sync/CalDAVReportValues.swift": "URL scheme and host protocol identity; never user text.",
         "NowThis/Utilities/ServerURLValidator.swift": "URL scheme comparison.",
+        "NowThis/Utilities/NextcloudServerAddress.swift": "URL scheme and host protocol identity; paths remain case-sensitive.",
+        "NowThis/Auth/LoginFlowClient.swift": "URL scheme and host protocol identity; paths remain case-sensitive.",
         "NowThis/Models/SavedFilter.swift": "The stored string \"true\"/\"false\" of a boolean rule.",
         "NowThis/Utilities/NaturalLanguageParser.swift":
             "English parser keywords. A locked decision keeps this parser English-only.",
@@ -264,6 +266,9 @@ struct RegionCalendarGuardTests {
             "UUID filenames are filesystem identifiers, not reader text.",
         "NowThis/Sync/NextcloudPhotoClient.swift":
             "UUID filenames plus URL scheme/host and HTTP Link tokens are protocol identity.",
+        "NowThis/Calendar/NextcloudCalendarReceipts.swift":
+            "UUIDs spell wire collection names and event UIDs. Case folding of reserved collection slugs only detects holds "
+            + "and never changes the URL used for a write.",
     ]
 
     // Three entries were written here from memory and removed on the first run:

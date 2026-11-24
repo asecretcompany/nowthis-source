@@ -11,29 +11,78 @@ import SwiftData
 ///
 /// Matched tokens appear as preview chips below the text field.
 struct QuickAddView: View {
+    struct Destination: Equatable {
+        let id: String
+        let name: String
+        let persistentID: PersistentIdentifier
+
+        init(_ list: TaskList) {
+            id = list.id
+            name = list.name
+            persistentID = list.persistentModelID
+        }
+
+        var target: TaskWriteEligibility.CreationDestination {
+            .list(id: id, expectedPersistentID: persistentID)
+        }
+    }
+
+    struct CalendarSelection: Identifiable {
+        let id = UUID()
+        let date: Date
+        let destination: Destination?
+    }
+
+    struct CalendarDestination {
+        let display: Destination
+        let reminderEnabled: Bool
+    }
 
     @Environment(\.modelContext) private var modelContext
+    @State private var errorState = ErrorState()
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var syncScheduler: SyncScheduler
+    @State private var creationDraft = TaskCreationDraft()
     @State private var taskTitle = ""
     @State private var selectedPriority: TaskPriority = .none
     @State private var dueDate: Date?
     @State private var hasDueDate = false
     @State private var recurrenceRule: String?
     @State private var parseResult = NaturalLanguageParser.ParseResult()
+    @State private var displayedDestination: Destination?
     @FocusState private var isFocused: Bool
-    let defaultList: TaskList?
-    var defaultSmartList: SmartList?
+    enum DefaultDestination {
+        case explicit(Destination)
+        case explicitID(String)
+        case preview(Destination)
+        case unresolved
+    }
 
-    init(defaultList: TaskList?, defaultSmartList: SmartList? = nil) {
-        self.defaultList = defaultList
+    private let defaultDestination: DefaultDestination
+    var defaultSmartList: SmartList?
+    let calendarSelection: CalendarSelection?
+
+    init(defaultList: TaskList?, defaultSmartList: SmartList? = nil, calendarSelection: CalendarSelection? = nil,
+         explicitListID: String? = nil) {
+        if let explicitListID {
+            if let defaultList, defaultList.id == explicitListID {
+                defaultDestination = .explicit(Destination(defaultList))
+            } else {
+                defaultDestination = .explicitID(explicitListID)
+            }
+        } else if let defaultList {
+            defaultDestination = .preview(Destination(defaultList))
+        } else {
+            defaultDestination = .unresolved
+        }
         self.defaultSmartList = defaultSmartList
+        self.calendarSelection = calendarSelection
+        self._displayedDestination = State(initialValue: calendarSelection?.destination)
         // Pre-fill the due date from the resolved contextual/per-list/global
         // default so Quick Add matches the inline add bar. The resolver already
         // bakes the default due time onto the date, so surface it directly in the
         // picker as a timed value.
-        let resolved = NewTaskDefaults.resolve(smartList: defaultSmartList, list: defaultList)
-        if let due = resolved.dueDate {
+        if let due = calendarSelection?.date ?? NewTaskDefaults.resolve(smartList: defaultSmartList, list: defaultList).dueDate {
             self._hasDueDate = State(initialValue: true)
             self._dueDate = State(initialValue: due)
         }
@@ -41,27 +90,43 @@ struct QuickAddView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                TaskTitleField(title: $taskTitle, isFocused: $isFocused)
-                    .onChange(of: taskTitle) { _, newValue in
-                        parseResult = NaturalLanguageParser.parse(newValue)
+            ScrollView {
+                VStack(spacing: 20) {
+                    TaskTitleField(title: $taskTitle, isFocused: $isFocused)
+                        .onChange(of: taskTitle) { _, newValue in
+                            parseResult = (try? TaskTextValidation.quickAdd(newValue)) ?? NaturalLanguageParser.ParseResult()
+                        }
+
+                    if hasTokens {
+                        ParsePreviewChips(result: parseResult)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                if hasTokens {
-                    ParsePreviewChips(result: parseResult)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                    if calendarSelection != nil {
+                        HStack {
+                            Label("List", systemImage: "list.bullet")
+                            Spacer()
+                            if let destination = displayedDestination {
+                                Text(verbatim: destination.name)
+                            } else {
+                                Text("No Lists")
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
 
-                QuickOptionsBar(
-                    priority: $selectedPriority,
-                    hasDueDate: $hasDueDate,
-                    dueDate: $dueDate,
-                    recurrenceRule: $recurrenceRule
-                )
-                Spacer()
+                    QuickOptionsBar(
+                        priority: $selectedPriority,
+                        hasDueDate: $hasDueDate,
+                        dueDate: $dueDate,
+                        recurrenceRule: $recurrenceRule
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .environment(\.saveErrorState, errorState)
+            .errorBanner(errorState)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Drawn as a principal item rather than `.navigationTitle` so it can
@@ -76,19 +141,30 @@ struct QuickAddView: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        creationDraft.discardOwnedChanges()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { createTask() }
                         .fontWeight(.semibold)
-                        .disabled(effectiveTitle.isEmpty)
+                        .disabled(effectiveTitle.isEmpty || (calendarSelection != nil && displayedDestination == nil))
                 }
             }
             .onAppear { isFocused = true }
+            .onChange(of: parseResult.listName, initial: true) { refreshCalendarDestination() }
+            .onChange(of: syncScheduler.dataRefreshToken) {
+                // A list can arrive after an empty draft opens. A listed destination
+                // still goes through the review check on Add if it later changes.
+                if displayedDestination == nil { refreshCalendarDestination() }
+            }
             .animation(.easeInOut(duration: 0.2), value: hasTokens)
         }
         .presentationDetents([.medium])
         .interactiveDismissDisabled(!taskTitle.isEmpty)
+        .onDisappear { creationDraft.discardOwnedChanges() }
+        .blocksTaskLinks()
     }
 
     /// True if the parser found any tokens.
@@ -106,93 +182,266 @@ struct QuickAddView: View {
     }
 
     private func createTask() {
+        do { parseResult = try TaskTextValidation.quickAdd(taskTitle) }
+        catch { errorState.show(error); return }
         let trimmed = effectiveTitle
         guard !trimmed.isEmpty else { return }
+
+        Self.commitCreation(title: trimmed, parseResult: parseResult, selectedPriority: selectedPriority,
+            pickerDate: hasDueDate ? (dueDate ?? Date()) : nil, recurrenceRule: recurrenceRule,
+            defaultList: nil, capturedDefault: defaultDestination, calendarSelection: calendarSelection,
+            displayedDestination: displayedDestination,
+            creationDraft: creationDraft, modelContext: modelContext, errorState: errorState,
+            reportCalendarDestinationChange: reportCalendarDestinationChange
+        ) { task, draftContext, donationList in
+            finishCreation(task, in: draftContext, title: trimmed, donationList: donationList)
+        }
+    }
+
+    @MainActor
+    static func commitCreation(title trimmed: String, parseResult: NaturalLanguageParser.ParseResult,
+                               selectedPriority: TaskPriority, pickerDate: Date?, recurrenceRule: String?,
+                               defaultList: TaskList?, capturedDefault: DefaultDestination? = nil,
+                               calendarSelection: CalendarSelection?,
+                               displayedDestination: Destination?, creationDraft: TaskCreationDraft,
+                               modelContext: ModelContext, errorState: ErrorState,
+                               save: (() throws -> Void)? = nil,
+                               reportCalendarDestinationChange: (Destination?) -> Void,
+                               didCommit: (TaskItem, ModelContext, TaskListEntity?) -> Void) {
+        let defaultDestination = capturedDefault ?? defaultList.map { .explicit(Destination($0)) } ?? .unresolved
+        let calendarDestination: CalendarDestination?
+        if let calendarSelection {
+            // A draft retry can still hold its original models. Read the committed list
+            // in a fresh context before comparing it with the user's displayed choice.
+            let current = Self.committedCalendarDestination(selection: calendarSelection, listName: parseResult.listName,
+                                                            in: modelContext.container)
+            guard let current, current.display == displayedDestination else {
+                reportCalendarDestinationChange(current?.display)
+                return
+            }
+            calendarDestination = current
+        } else {
+            calendarDestination = nil
+        }
+
+        let draftContext = creationDraft.context(in: modelContext.container)
+        let list: TaskList?
+        let preferenceChange: NewTaskDefaults.PreferenceChange?
+        do {
+            let destination: TaskWriteEligibility.CreationDestination
+            if let calendarDestination {
+                destination = calendarDestination.display.target
+                preferenceChange = nil
+            } else {
+                (destination, preferenceChange) = try ordinaryDestination(defaultDestination,
+                    token: parseResult.listName, in: ModelContext(modelContext.container))
+            }
+            list = try TaskWriteEligibility(writingIn: draftContext).destination(destination)
+        } catch let refusal as TaskWriteEligibility.Refusal where refusal != .readOnly && calendarSelection != nil {
+            if let calendarSelection {
+                reportCalendarDestinationChange(Self.committedCalendarDestination(selection: calendarSelection,
+                    listName: parseResult.listName, in: modelContext.container)?.display)
+            }
+            return
+        } catch {
+            ViewPersistence.reportTaskWriteRefusal(error, to: errorState, creating: true)
+            return
+        }
 
         // Resolve priority: parsed token overrides manual picker
         let priority = parseResult.priority ?? selectedPriority
 
-        let task = TaskItem(title: trimmed, priority: priority)
-
-        // Due date: parsed token overrides manual picker
-        if let parsedDate = parseResult.dueDate {
-            task.dueDate = parsedDate
-        } else {
-            task.dueDate = hasDueDate ? (dueDate ?? Date()) : nil
+        let task: TaskItem
+        do {
+            task = try Self.taskForCreation(title: trimmed, priority: priority, tagNames: parseResult.tagNames,
+                                            draft: creationDraft, in: draftContext)
+        } catch let error as TaskTextValidation.Failure {
+            errorState.show(error)
+            return
+        } catch {
+            ViewPersistence.report(error, to: errorState)
+            return
         }
+
+        Self.applyDueDate(parseResult, pickerDate: pickerDate, to: task)
 
         task.recurrenceRule = recurrenceRule
 
-        // Resolve list: parsed #list name, else the list this sheet was opened from,
-        // else the user's default. `defaultList` was captured when the sheet was
-        // presented and sync may have deleted it since, so it is liveness-checked
-        // before use — a dead list here would otherwise be assigned to the new task.
-        let liveDefault = defaultList.flatMap { $0.modelContext != nil ? $0 : nil }
-        let tokenList = parseResult.listName.flatMap { resolveTaskList(named: $0) }
-        task.taskList = NewTaskDefaults.resolveListAdopting(
-            explicit: tokenList ?? liveDefault, in: modelContext
-        )
+        task.taskList = list
 
-        // Resolve tags: create-or-find for each @tag
-        for tagName in parseResult.tagNames {
-            let tag = resolveOrCreateTag(named: tagName)
-            task.tags.append(tag)
-        }
-
-        // Apply a default reminder (opt-in, per-list/global) when the task has a
-        // due date and none was otherwise set. Offset 0 fires at the due time.
-        if task.dueDate != nil,
-           task.reminderOffset == nil,
-           NewTaskDefaults.effectiveReminderEnabled(for: task.taskList) {
-            task.reminderOffset = 0
-        }
+        Self.applyDefaultReminder(to: task, calendarReminderEnabled: calendarDestination?.reminderEnabled)
 
         task.isDirty = true
-        modelContext.insert(task)
-        try? ReminderSchedulingJournal.saveTaskChanges(in: modelContext)
+        draftContext.insert(task)
+        // Snapshot stable list identity before persistence and subsequent side effects.
+        let donationList = task.taskList.map { TaskListEntity(list: $0) }
+        guard creationDraft.saveOwnedChanges(errorState: errorState, save: save) else { return }
+        preferenceChange?.commit()
+        didCommit(task, draftContext, donationList)
+    }
+
+    private static func ordinaryDestination(_ capturedDefault: DefaultDestination, token: String?,
+                                            in reader: ModelContext) throws ->
+        (TaskWriteEligibility.CreationDestination, NewTaskDefaults.PreferenceChange?) {
+        if let token, let tokenList = try matchingTaskLists(named: token, in: reader).first {
+            return (Destination(tokenList).target, nil)
+        }
+        switch capturedDefault {
+        case .explicit(let captured):
+            return (captured.target, nil)
+        case .explicitID(let id):
+            return (.list(id: id, expectedPersistentID: nil), nil)
+        case .preview(let captured) where try list(withID: captured.id, in: reader) != nil:
+            let preference = TaskDefaultsPreferences.ListPreference()
+            let migration = preference.legacyID == captured.id && preference.currentID == nil
+                ? NewTaskDefaults.PreferenceChange(listID: captured.id, observed: preference) : nil
+            return (captured.target, migration)
+        case .preview, .unresolved:
+            let choice = try NewTaskDefaults.creationList(explicit: nil, in: reader)
+            return (choice.list.map { Destination($0).target } ?? .unbound, choice.preferenceChange)
+        }
+    }
+
+    private func finishCreation(_ task: TaskItem, in draftContext: ModelContext, title: String,
+                                donationList: TaskListEntity?) {
         if task.reminderOffset != nil {
             ReminderScheduler.requestPermissionIfNeeded()
         }
         // Unconditional: a task with a due date and no reminder still needs its "now overdue"
         // notification, and that notification is the only thing that moves the app icon badge
         // while the app is closed.
-        ReminderScheduler.requestReconcile(modelContext: modelContext)
+        ViewPersistence.recoverRemindersAfterCommit {
+            try ReminderScheduler.requestReconcileOrThrow(modelContext: draftContext)
+        }
+        syncScheduler.publishLocalTaskCommit()
         syncScheduler.syncAfterChange(modelContext: modelContext)
 
-        // Auto-sync to calendar if enabled
-        let accounts = (try? modelContext.fetch(FetchDescriptor<ServerAccount>())) ?? []
-        Task {
-            await CalendarAutoSync.syncTaskIfEnabled(task, accounts: accounts)
+        // Keep automatic mirror creation scoped to the existing Quick Add entry point.
+        if calendarSelection == nil {
+            let accounts = (try? modelContext.fetch(FetchDescriptor<ServerAccount>())) ?? []
+            CalendarAutoSync.syncTaskIfEnabled(task, accounts: accounts, onCommit: {
+                syncScheduler.publishLocalTaskCommit()
+            })
         }
 
         HapticManager.success()
-        IntentDonationManager.donateCreateTask(title: trimmed, listName: task.taskList?.name)
+        IntentDonationManager.donateCreateTask(title: title, list: donationList)
         dismiss()
-
     }
 
-    /// Finds a TaskList by name (case-insensitive).
-    private func resolveTaskList(named name: String) -> TaskList? {
-        let allLists = (try? modelContext.fetch(FetchDescriptor<TaskList>())) ?? []
-        return allLists.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+    private func refreshCalendarDestination() {
+        guard let calendarSelection else { return }
+        let context = ModelContext(modelContext.container)
+        // Token edits can deliberately change the displayed list. A removed scoped list
+        // is handled on Add, so the fallback is never committed without a fresh review.
+        displayedDestination = Self.calendarDestination(selection: calendarSelection, listName: parseResult.listName,
+                                                        in: context, useFallbackForMissingScope: displayedDestination == nil)
+            .map(Destination.init) ?? displayedDestination
     }
 
-    /// Finds an existing Tag by name or creates a new one.
-    private func resolveOrCreateTag(named name: String) -> Tag {
-        let allTags = (try? modelContext.fetch(FetchDescriptor<Tag>())) ?? []
-        if let existing = allTags.first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
-            return existing
+    private func reportCalendarDestinationChange(_ destination: Destination?) {
+        displayedDestination = destination
+        errorState.show(String(localized: "quickAdd.calendar.destinationChanged",
+            defaultValue: "The destination list changed. Review the list before adding the task.",
+            comment: "Alert when the list shown in the calendar's new-task sheet no longer matches the live destination at save time."))
+    }
+
+    static func calendarDestination(selection: CalendarSelection, listName: String?, in context: ModelContext,
+                                    useFallbackForMissingScope: Bool = true) -> TaskList? {
+        try? resolveCalendarDestination(selection: selection, listName: listName, in: context,
+            useFallbackForMissingScope: useFallbackForMissingScope)
+    }
+
+    private static func resolveCalendarDestination(selection: CalendarSelection, listName: String?, in context: ModelContext,
+                                                   useFallbackForMissingScope: Bool) throws -> TaskList? {
+        // A name shared by several accounts cannot identify a destination. Keep the
+        // scoped list or the displayed default unless the token resolves uniquely.
+        if let listName {
+            let matches = try matchingTaskLists(named: listName, in: context)
+            if matches.count == 1 { return matches.first }
         }
-        let tag = Tag(name: name)
-        modelContext.insert(tag)
-        return tag
+        if let listID = selection.destination?.id {
+            if let scopedList = try Self.list(withID: listID, in: context),
+               scopedList.persistentModelID == selection.destination?.persistentID { return scopedList }
+            guard useFallbackForMissingScope else { return nil }
+        }
+        return try NewTaskDefaults.creationList(explicit: nil, in: context).list
+    }
+
+    static func committedCalendarDestination(selection: CalendarSelection, listName: String?,
+                                             in container: ModelContainer) -> CalendarDestination? {
+        let context = ModelContext(container)
+        guard let list = calendarDestination(selection: selection, listName: listName, in: context) else { return nil }
+        return CalendarDestination(display: Destination(list), reminderEnabled: NewTaskDefaults.effectiveReminderEnabled(for: list))
+    }
+
+    private static func list(withID id: String, in context: ModelContext) throws -> TaskList? {
+        var descriptor = FetchDescriptor<TaskList>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    static func applyDueDate(_ result: NaturalLanguageParser.ParseResult, pickerDate: Date?, to task: TaskItem) {
+        // Parsed dates win. A picker or default date has a time, including on a draft retry.
+        task.dueDate = result.dueDate ?? pickerDate
+        task.isDueDateOnly = result.dueDate != nil && !result.dueHasTime
+    }
+
+    static func applyDefaultReminder(to task: TaskItem, calendarReminderEnabled: Bool?) {
+        // Offset 0 fires at the due time.
+        if let calendarReminderEnabled {
+            // The editor does not offer a manual reminder. On retry the pending
+            // task may still carry an offset set by a previous date or destination.
+            task.reminderOffset = task.dueDate != nil && calendarReminderEnabled ? 0 : nil
+        } else if task.dueDate != nil,
+                  task.reminderOffset == nil,
+                  NewTaskDefaults.effectiveReminderEnabled(for: task.taskList) {
+            task.reminderOffset = 0
+        }
+    }
+
+    private static func matchingTaskLists(named name: String, in context: ModelContext) throws -> [TaskList] {
+        let allLists = try context.fetch(FetchDescriptor<TaskList>())
+        return allLists.filter { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    static func taskForCreation(title: String, priority: TaskPriority = .none, tagNames: [String],
+                                draft: TaskCreationDraft, in context: ModelContext,
+                                fetchTags: (ModelContext) throws -> [Tag] = Tag.fetchAll(in:)) throws -> TaskItem {
+        let title = try TaskTextValidation.title(title)
+        let tags = try Tag.resolve(tagNames, in: context, fetch: fetchTags)
+        let task = try draft.task(title: title, priority: priority)
+        let removedIDs = Set(task.tags.map(\.id)).subtracting(tags.map(\.id))
+        task.tags = tags
+        // An owned draft can reuse staged tags after a failed save. Discard only
+        // removed tags inserted in this context, so the retry cannot leave orphans.
+        for case let tag as Tag in context.insertedModelsArray where removedIDs.contains(tag.id) {
+            context.delete(tag)
+        }
+        return task
     }
 }
 
 // MARK: - Parse Preview Chips
 
-private struct ParsePreviewChips: View {
+struct ParsePreviewChips: View {
     let result: NaturalLanguageParser.ParseResult
+    let tagNames: [String]
+
+    init(result: NaturalLanguageParser.ParseResult) {
+        self.result = result
+        tagNames = Tag.uniqueNames(result.tagNames)
+    }
+
+    static func dueDateLabels(for result: NaturalLanguageParser.ParseResult,
+                              timeZone: TimeZone = .current) -> (visible: String, spoken: String)? {
+        guard let date = result.dueDate else { return nil }
+        let isDateOnly = !result.dueHasTime
+        return (
+            DueDateFormatter.format(date, isDateOnly: isDateOnly, timeZone: timeZone),
+            DueDateFormatter.accessibilityLabel(date, isDateOnly: isDateOnly, timeZone: timeZone)
+        )
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -209,16 +458,17 @@ private struct ParsePreviewChips: View {
                     TokenChip(label: listName, icon: "list.bullet", tint: .blue)
                 }
 
-                ForEach(result.tagNames, id: \.self) { tag in
+                ForEach(tagNames, id: \.self) { tag in
                     TokenChip(label: tag, icon: "tag.fill", tint: .purple)
                 }
 
-                if let date = result.dueDate {
+                if let dueDateLabels = Self.dueDateLabels(for: result) {
                     TokenChip(
-                        label: date.formatted(.dateTime.month(.abbreviated).day()),
+                        label: dueDateLabels.visible,
                         icon: "calendar",
                         tint: .orange
                     )
+                    .accessibilityLabel(dueDateLabels.spoken)
                 }
             }
         }

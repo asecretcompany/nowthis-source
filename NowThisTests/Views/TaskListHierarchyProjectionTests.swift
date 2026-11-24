@@ -198,6 +198,47 @@ struct TaskListHierarchyProjectionTests {
         #expect(state.projection?.rows.map(\.id) == [0, 2])
     }
 
+    @Test("A delayed observer from an old direction cannot replace the current sibling order")
+    func supersededObservationCannotReplaceCurrentOrder() {
+        var state = TaskListRootHierarchyState<Int, Int>()
+        var ranks = [1: 1, 2: 2, 3: 3]
+        func build(ascending: Bool) -> TaskListHierarchyProjection<Int, Int> {
+            let ordered = [1, 2, 3].sorted {
+                let lhs = ranks[$0, default: 0]
+                let rhs = ranks[$1, default: 0]
+                return ascending ? lhs < rhs : lhs > rhs
+            }
+            return project(children: [0: ordered])
+        }
+        func deliverObservation(_ generation: UInt64, ascending: Bool) {
+            guard state.invalidate(fromObservation: generation) else { return }
+            state.activate { build(ascending: ascending) }
+        }
+
+        let oldDirection = state.observationGeneration
+        state.activate { build(ascending: false) }
+        #expect(state.projection?.rows.map(\.id) == [0, 3, 2, 1])
+
+        state.invalidate()
+        state.activate { build(ascending: true) }
+        #expect(state.projection?.rows.map(\.id) == [0, 1, 2, 3])
+
+        // A successful drag saved 3, 1, 2 and explicitly refreshed the owner.
+        ranks = [1: 2, 2: 3, 3: 1]
+        state.invalidate()
+        state.activate { build(ascending: true) }
+        let currentDirection = state.observationGeneration
+        deliverObservation(oldDirection, ascending: false)
+        #expect(state.projection?.rows.map(\.id) == [0, 3, 1, 2])
+
+        // The installed observer still refreshes for a later rank change.
+        ranks = [1: 3, 2: 1, 3: 2]
+        deliverObservation(currentDirection, ascending: true)
+        #expect(state.projection?.rows.map(\.id) == [0, 2, 3, 1])
+        deliverObservation(oldDirection, ascending: false)
+        #expect(state.projection?.rows.map(\.id) == [0, 2, 3, 1])
+    }
+
     @Test("Deep rows keep readable widths while retaining their real hierarchy depth")
     func indentationIsBounded() {
         #expect(TaskListHierarchyLayout.visualDepth(0) == 0)

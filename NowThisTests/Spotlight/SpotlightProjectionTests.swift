@@ -18,10 +18,10 @@ struct SpotlightProjectionTests {
         task.dueDate = Date(timeIntervalSince1970: 1_800_000_000)
         task.priority = .high
 
-        let snapshot = try #require(SpotlightIndexer.snapshot(from: task))
+        let snapshot = try #require(SpotlightIndexer.snapshot(from: task, includeNotes: false))
 
         #expect(snapshot.title == "Pending title")
-        #expect(snapshot.contentDescription == "Pending description")
+        #expect(snapshot.contentDescription == nil)
         #expect(snapshot.dueDate == task.dueDate)
         #expect(snapshot.priorityDescription == "high priority")
         withExtendedLifetime(container) {}

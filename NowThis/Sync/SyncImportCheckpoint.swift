@@ -30,6 +30,7 @@ enum SyncImportCheckpoint {
         let rows = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate {
             $0.id.starts(with: prefix) && !$0.id.starts(with: retained)
         }))
+        PerformanceTrace.record(.otherScopePrune, rows: rows.count)
         rows.forEach(context.delete)
         if context.hasChanges { try context.save() }
     }
@@ -54,7 +55,9 @@ enum SyncImportCheckpoint {
 
     static func read(id: String, scope: SyncCollectionPuller.Scope, in context: ModelContext) throws -> SyncCollectionPuller.Checkpoint? {
         let key = id
-        guard let metadata = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { $0.id == key })).first else { return nil }
+        let rows = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { $0.id == key }))
+        PerformanceTrace.record(.checkpointRead, rows: rows.count, keys: 1)
+        guard let metadata = rows.first else { return nil }
         return SyncCollectionPuller.Checkpoint(scope: scope, token: metadata.syncToken,
             ctag: metadata.lastCTag, lastIntegrity: metadata.lastFullSync,
             hasCompletedBaseline: metadata.lastFullSync != nil)
@@ -66,19 +69,70 @@ enum SyncImportCheckpoint {
         let context = ModelContext(container)
         let prefix = id + ":resource:"
         let rows = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { $0.id.starts(with: prefix) }))
+        PerformanceTrace.record(.receiptInventory, rows: rows.count)
         return Dictionary(rows.compactMap { row in row.lastCTag.map { (row.collectionPath, $0) } }, uniquingKeysWith: { _, last in last })
+    }
+
+    static func accountedETags(id: String, hrefs: [String], in context: ModelContext) throws -> [String: String] {
+        guard !hrefs.isEmpty else { return [:] }
+        let hrefsByID = Dictionary(hrefs.map { (receiptID(scope: id, href: $0), $0) },
+                                   uniquingKeysWith: { first, _ in first })
+        let keys = Array(hrefsByID.keys)
+        let rows = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { keys.contains($0.id) }))
+        PerformanceTrace.record(.matchingReceiptLookup, rows: rows.count, keys: keys.count)
+        return Dictionary(rows.compactMap { row in
+            guard let href = hrefsByID[row.id], row.collectionPath == href, let etag = row.lastCTag else { return nil }
+            return (href, etag)
+        }, uniquingKeysWith: { first, _ in first })
     }
     static func markAccounted(_ resources: [CalDAVClient.RemoteTask], id: String, container: ModelContainer) throws {
         let context = ModelContext(container); context.autosaveEnabled = false
-        for resource in resources {
-            let key = receiptID(scope: id, href: resource.href)
-            let row = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { $0.id == key })).first
-                ?? SyncMetadata(id: key, collectionPath: resource.href)
-            if row.modelContext == nil { context.insert(row) }
-            row.lastCTag = resource.etag
-        }
+        try updateReceiptRows(
+            resources,
+            receiptID: { (resource: CalDAVClient.RemoteTask) -> String in
+                receiptID(scope: id, href: resource.href)
+            },
+            fetchExisting: { (ids: [String]) throws -> [String: SyncMetadata] in
+                let rows = try context.fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { ids.contains($0.id) }))
+                PerformanceTrace.record(.receiptWriteLookup, rows: rows.count, keys: ids.count)
+                return Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            },
+            makeRow: { (resource: CalDAVClient.RemoteTask, key: String) -> SyncMetadata in
+                let row = SyncMetadata(id: key, collectionPath: resource.href)
+                context.insert(row)
+                return row
+            },
+            updateRow: { (row: SyncMetadata, resource: CalDAVClient.RemoteTask) in row.lastCTag = resource.etag }
+        )
         if context.hasChanges { try context.save() }
     }
+
+    /// Applies receipt updates after looking up the IDs needed by one bounded resource batch.
+    /// Keeping the fetch boundary injectable lets tests count actual batch lookups without
+    /// adding instrumentation that is only used by tests.
+    static func updateReceiptRows<Resource, Row>(
+        _ resources: [Resource],
+        receiptID: (Resource) -> String,
+        fetchExisting: ([String]) throws -> [String: Row],
+        makeRow: (Resource, String) -> Row,
+        updateRow: (Row, Resource) -> Void
+    ) throws {
+        guard !resources.isEmpty else { return }
+        let ids = Array(Set(resources.map(receiptID))).sorted()
+        var rowsByID = try fetchExisting(ids)
+        for resource in resources {
+            let key = receiptID(resource)
+            let row: Row
+            if let existing = rowsByID[key] {
+                row = existing
+            } else {
+                row = makeRow(resource, key)
+                rowsByID[key] = row
+            }
+            updateRow(row, resource)
+        }
+    }
+
     static func removeAccounted(_ hrefs: [String], id: String, container: ModelContainer) throws {
         let context = ModelContext(container); context.autosaveEnabled = false
         for href in hrefs {
@@ -104,5 +158,6 @@ enum SyncImportCheckpoint {
         metadata.lastCTag = checkpoint.ctag
         metadata.lastFullSync = checkpoint.lastIntegrity
         try context.save()
+        PerformanceTrace.record(.checkpointCommit, rows: 1, keys: 1)
     }
 }

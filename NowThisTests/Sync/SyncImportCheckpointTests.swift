@@ -3,6 +3,24 @@ import SwiftData
 import Testing
 @testable import NowThis
 
+private struct ReceiptResourceFixture {
+    let href: String
+    let receiptID: String
+    let etag: String
+}
+
+private final class ReceiptRowFixture {
+    let id: String
+    let href: String
+    var etag: String
+
+    init(id: String, href: String, etag: String) {
+        self.id = id
+        self.href = href
+        self.etag = etag
+    }
+}
+
 @Suite("Scoped durable sync checkpoints")
 @MainActor
 struct SyncImportCheckpointTests {
@@ -34,6 +52,70 @@ struct SyncImportCheckpointTests {
         try SyncImportCheckpoint.removeAccounted([body.href], id: "scope-a", container: container)
         #expect(try SyncImportCheckpoint.accountedETags(id: "scope-a", container: container).isEmpty)
         withExtendedLifetime(container) {}
+    }
+
+    @Test("Replaying a duplicate href updates one durable receipt and keeps its original path")
+    func duplicateHrefReplayUpdatesExistingReceipt() throws {
+        let container = try DAVSyncScenario.container()
+        let first = CalDAVClient.RemoteTask(href: "/one/replayed.ics", etag: "e1", icsData: "first")
+        let replay = CalDAVClient.RemoteTask(href: "/one/replayed.ics", etag: "e2", icsData: "replay")
+        let finalReplay = CalDAVClient.RemoteTask(href: "/one/replayed.ics", etag: "e3", icsData: "final")
+
+        try SyncImportCheckpoint.markAccounted([first], id: "scope-replay", container: container)
+        try SyncImportCheckpoint.markAccounted([replay, finalReplay], id: "scope-replay", container: container)
+
+        let prefix = "scope-replay:resource:"
+        let rows = try ModelContext(container).fetch(FetchDescriptor<SyncMetadata>(predicate: #Predicate { $0.id.starts(with: prefix) }))
+        #expect(rows.count == 1)
+        #expect(rows.first?.collectionPath == "/one/replayed.ics")
+        #expect(rows.first?.lastCTag == "e3")
+        #expect(try SyncImportCheckpoint.accountedETags(id: "scope-replay", container: container) == ["/one/replayed.ics": "e3"])
+        withExtendedLifetime(container) {}
+    }
+
+    @Test("A bounded receipt batch prefetches distinct IDs once and reuses collision rows")
+    func receiptBatchPrefetchesOnceAndPreservesReceiptIDCollisions() throws {
+        let existing = ReceiptRowFixture(id: "receipt-existing", href: "/old.ics", etag: "old")
+        let resources = [
+            ReceiptResourceFixture(href: "/old.ics", receiptID: "receipt-existing", etag: "updated"),
+            ReceiptResourceFixture(href: "/first.ics", receiptID: "receipt-collision", etag: "first"),
+            ReceiptResourceFixture(href: "/second.ics", receiptID: "receipt-collision", etag: "last")
+        ]
+        var fetches: [[String]] = []
+        var rows = [existing.id: existing]
+        var inserted: [ReceiptRowFixture] = []
+
+        try SyncImportCheckpoint.updateReceiptRows(
+            resources,
+            receiptID: \.receiptID,
+            fetchExisting: { ids in
+                fetches.append(ids)
+                return rows.filter { ids.contains($0.key) }
+            },
+            makeRow: { resource, id in
+                let row = ReceiptRowFixture(id: id, href: resource.href, etag: "")
+                inserted.append(row)
+                rows[id] = row
+                return row
+            },
+            updateRow: { row, resource in row.etag = resource.etag }
+        )
+        try SyncImportCheckpoint.updateReceiptRows(
+            [ReceiptResourceFixture](),
+            receiptID: \.receiptID,
+            fetchExisting: { ids in
+                fetches.append(ids)
+                return [:]
+            },
+            makeRow: { resource, id in ReceiptRowFixture(id: id, href: resource.href, etag: resource.etag) },
+            updateRow: { row, resource in row.etag = resource.etag }
+        )
+
+        #expect(fetches == [["receipt-collision", "receipt-existing"]])
+        #expect(existing.etag == "updated")
+        #expect(inserted.count == 1)
+        #expect(inserted.first?.href == "/first.ics")
+        #expect(inserted.first?.etag == "last")
     }
 
     @Test("Changing history scope prunes old receipts and account removal clears only its metadata")
